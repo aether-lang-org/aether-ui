@@ -195,6 +195,34 @@ main() {
 }
 ```
 
+## Function Contracts (`requires` / `ensures`)
+
+Aether supports Eiffel-style runtime contracts — pre/postconditions you attach directly to a function declaration. They document intent at the boundary, fire as `aether_panic` on violation (which prints the failed predicate by name), and elide entirely when the predicate is provably constant-true at compile time.
+
+```aether
+add(a: int, b: int) -> int
+    requires a >= 0
+    requires b >= 0
+    ensures result >= a
+    ensures result >= b
+{
+    return a + b
+}
+
+safe_div(a: int, b: int) -> int
+    requires b != 0
+{
+    return a / b
+}
+```
+
+- `requires <expr>` runs at function entry, with parameters in scope.
+- `ensures <expr>` runs before each `return`, with `result` bound to the value about to be returned.
+- Multiple clauses, freely interleaved — each is checked independently so the panic message names the specific failed predicate.
+- `aetherc --no-contracts` (analog of `-DNDEBUG`) drops every check at codegen for release builds.
+
+See [Function contracts](language-reference.md#function-contracts-requires--ensures-issue-348) for the full semantics, the const-fold elision rules, and v1 limitations.
+
 ## Interactive REPL
 
 Experiment with Aether interactively:

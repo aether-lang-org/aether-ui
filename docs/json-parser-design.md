@@ -330,6 +330,41 @@ otherwise. The fast string loop calls `p_advance` in every iteration
 (not just on the escape branch), which costs a little throughput but
 keeps error messages like "expected `:` at 3:17" correct.
 
+### Structured-error pilot (issue #392)
+
+The base parser surfaces errors via `err_set` (human string) plus the
+`g_json_err_buf` thread-local. The structured-error pilot adds a
+parallel surface that callers can switch on programmatically without
+parsing English:
+
+- `g_json_err_kind` — one of `AETHER_JSON_KIND_*` (`OK`, `PARSE_ERROR`,
+  `OUT_OF_MEMORY`, `INVALID_INPUT`). Set alongside `g_json_err_buf` in
+  every `err_set` call. OOM detection is a single-site
+  `strstr(msg, "out of memory")` check inside `err_set`, so the
+  dozens of existing `err_set("out of memory ...")` sites need no
+  change.
+- `g_json_err_line` / `_col` — the same 1-based position the human
+  message reports, but as integers for callers that want to point at
+  source.
+- `json_last_error_kind()` / `_line()` / `_col()` — public C accessors
+  for the three thread-locals. Aether-side wrappers in
+  `std/json/module.ae` re-export them.
+- `parse_strict(json_str) -> (ptr, int, string)` — Aether wrapper that
+  returns `(value, kind, message)` per call. The kind is read from
+  the thread-local immediately after parse so concurrent callers from
+  different threads each see their own; the tuple shape is the
+  canonical structured-error shape from the std.fs pilot.
+
+KIND values (`AETHER_JSON_KIND_*` macros + `std.json.KIND_*` int
+exports) are intentionally a subset that overlaps `std.fs.KIND_*`
+where the meanings align (`OK`, `OUT_OF_MEMORY`, `INVALID_INPUT`),
+so callers mixing fs and json calls can switch on either surface in
+the same `if` chain.
+
+The existing `parse(json_str) -> (ptr, string)` surface is unchanged
+and remains the recommended path for callers that just need
+"succeeded / failed with this string." `parse_strict` is opt-in.
+
 ## Depth limit
 
 Hard cap at `JSON_MAX_DEPTH = 256`. Enforced on every container entry
