@@ -1,0 +1,20 @@
+// Sample script for the `--emit=lib` symbol-catalog metadata
+// integration test (issue #403). Three exports of varying shape:
+// a @c_callback, a primitive-typed function, a string-typed
+// function. The integration test compiles this with `--emit=lib`,
+// dlopens the artifact, walks `aether_lib_meta()`, and asserts
+// every field line up.
+
+import std.string
+
+@c_callback aether_script_handle(req: ptr, res: ptr, ud: ptr) {
+    return
+}
+
+double_int(x: int) -> int {
+    return x * 2
+}
+
+greet(name: string) -> string {
+    return string.concat("hi ", name)
+}

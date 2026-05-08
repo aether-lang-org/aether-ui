@@ -95,6 +95,7 @@ const char* type_to_string(Type* type) {
         case TYPE_BYTE: return "byte";
         case TYPE_STRING: return "string";
         case TYPE_VOID: return "void";
+        case TYPE_PTR: return "ptr";
         case TYPE_MESSAGE: return "Message";
         case TYPE_STRUCT: {
             static char buffer[256];

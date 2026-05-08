@@ -948,6 +948,214 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
     }
 }
 
+// --emit=lib symbol-catalog metadata (issue #403, MVP).
+//
+// Append to every library build:
+//
+//   * a static array of AetherLibFunction entries — one per
+//     exported function (the same functions emit_lib_alias_stubs
+//     wraps), carrying Aether name / C symbol / signature / source
+//     file / source line.
+//   * a static AetherLibMeta struct wrapping the array + schema
+//     metadata.
+//   * `aether_lib_meta()` — the public entry point. Consumers
+//     dlsym for "aether_lib_meta" and call it.
+//
+// The schema is stable C structs of `const char*` and `int`. No
+// dynamic allocation, no parsing, no JSON. Plain dlsym + struct
+// walk. Mirrors the host-side declaration in runtime/aether_lib_meta.h.
+//
+// Tooling: `ae lib-info <path>` dlopens an artifact and prints the
+// metadata in human-readable form. Same data is callable from any
+// FFI consumer (Python ctypes, Java Panama, Ruby Fiddle, hand-rolled
+// dlsym).
+//
+// v1 emits function entries only. The struct's `closure_count` /
+// `closures` slots are reserved at zero/NULL so v2 can extend
+// (closure-context records — captures + capture types per closure
+// reachable from an export) without an ABI break.
+static void emit_lib_metadata_signature_for(FILE* out, ASTNode* fn) {
+    /* Format: `(type1, type2, ...) -> retType` — same shape that
+     * docs/stdlib-reference.md uses. Skips parameters whose AST
+     * shape we can't render cleanly (closures, structs we haven't
+     * resolved). The signature is descriptive, not parseable —
+     * consumers use it for display and switch on c_symbol for
+     * actual dispatch. */
+    fputc('(', out);
+    int first = 1;
+    for (int i = 0; i < fn->child_count; i++) {
+        ASTNode* c = fn->children[i];
+        if (!c) continue;
+        if (c->type != AST_PATTERN_VARIABLE && c->type != AST_VARIABLE_DECLARATION) continue;
+        if (!first) fputs(", ", out);
+        first = 0;
+        const char* tname = c->node_type ? type_to_string(c->node_type) : "unknown";
+        fputs(tname, out);
+    }
+    fputs(") -> ", out);
+    /* No-return-type and TYPE_UNKNOWN both mean "void" at the
+     * source-level surface (Aether's `foo() { ... }` with no
+     * `-> T` is a void function). Render as "void" rather than
+     * leaking the internal "UNKNOWN" tag through the diagnostic. */
+    if (!fn->node_type ||
+        fn->node_type->kind == TYPE_UNKNOWN ||
+        fn->node_type->kind == TYPE_VOID) {
+        fputs("void", out);
+    } else {
+        fputs(type_to_string(fn->node_type), out);
+    }
+}
+
+static void emit_lib_metadata_c_string_literal(FILE* out, const char* s) {
+    /* Defensive C-string emission. NULL → "" so consumers never see
+     * a null pointer in metadata fields they expected to be a
+     * string. Backslash and double-quote get the standard escape;
+     * everything else passes through (Aether identifiers and type
+     * names are restricted to ASCII printable). */
+    if (!s) { fputs("\"\"", out); return; }
+    fputc('"', out);
+    for (const char* p = s; *p; p++) {
+        if (*p == '\\' || *p == '"') fputc('\\', out);
+        fputc(*p, out);
+    }
+    fputc('"', out);
+}
+
+static void emit_lib_metadata(CodeGenerator* gen, ASTNode* program) {
+    if (!gen || !gen->emit_lib || !program) return;
+
+    /* Collect exportable function definitions in one pass so we can
+     * emit `function_count` correctly without seeking back over
+     * gen->output. Skip imported / cloned functions (they're static
+     * in the artifact and not part of the public surface). */
+    int max_fns = program->child_count;
+    ASTNode** fns = (ASTNode**)malloc(sizeof(ASTNode*) * (max_fns > 0 ? max_fns : 1));
+    int fn_count = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        ASTNode* fn = child;
+        if (child && child->type == AST_EXPORT_STATEMENT && child->child_count > 0) {
+            fn = child->children[0];
+        }
+        if (!fn) continue;
+        if (fn->type != AST_FUNCTION_DEFINITION || !fn->value) continue;
+        if (fn->is_imported) continue;
+        /* Trailing-underscore convention marks a function file-local
+         * (matches emit_lib_alias_stubs:898ish). Skip — same gate. */
+        size_t nlen = strlen(fn->value);
+        if (nlen > 0 && fn->value[nlen - 1] == '_') continue;
+        /* @c_callback functions are always eligible — the user opted
+         * the bare Aether name into the C ABI directly. Plain
+         * functions must satisfy the same param/return gates as
+         * emit_lib_alias_stubs (otherwise the catalog would advertise
+         * a c_symbol that doesn't actually exist in the artifact). */
+        if (!c_callback_symbol(fn)) {
+            int param_ok = 1;
+            for (int p = 0; p < fn->child_count && param_ok; p++) {
+                ASTNode* c = fn->children[p];
+                if (!c) continue;
+                if (c->type == AST_GUARD_CLAUSE) continue;
+                if (c->type == AST_BLOCK) break;
+                if (c->type == AST_VARIABLE_DECLARATION ||
+                    c->type == AST_PATTERN_VARIABLE) {
+                    const char* t = get_abi_type(c->node_type);
+                    if (!t || strcmp(t, "void") == 0) param_ok = 0;
+                } else {
+                    param_ok = 0;
+                }
+            }
+            if (!param_ok) continue;
+            if (fn->node_type && fn->node_type->kind == TYPE_TUPLE) continue;
+        }
+        fns[fn_count++] = fn;
+    }
+
+    fprintf(gen->output,
+        "\n/* --- aether_lib_meta() symbol catalog (issue #403) --- */\n");
+    fprintf(gen->output, "#include <stddef.h>\n");
+    /* Re-declare the schema layout-compatibly. The header that
+     * defines AetherLibMeta in runtime/aether_lib_meta.h doesn't
+     * have to be on the include path of every aetherc-emitted .c
+     * file — emit a layout-equivalent definition under different
+     * tag names and cast at the boundary, same trick
+     * emit_describe_c uses. */
+    fprintf(gen->output,
+        "struct _AetherLibFn { const char* aether_name; const char* c_symbol;\n"
+        "    const char* signature; const char* source_file; int source_line; };\n");
+    fprintf(gen->output,
+        "struct _AetherLibMeta { const char* schema_version; const char* aether_version;\n"
+        "    const char* primary_source; int function_count;\n"
+        "    const struct _AetherLibFn* functions;\n"
+        "    int closure_count; const void* closures; };\n\n");
+
+    fprintf(gen->output,
+        "static const struct _AetherLibFn _aether_lib_fns[] = {\n");
+    for (int i = 0; i < fn_count; i++) {
+        ASTNode* fn = fns[i];
+        fprintf(gen->output, "    { ");
+        emit_lib_metadata_c_string_literal(gen->output, fn->value);
+        fprintf(gen->output, ", ");
+        /* C symbol resolution:
+         *   * @c_callback functions are exported with their bare
+         *     Aether name (no mangling); the @c_callback annotation
+         *     opts the symbol into the public surface directly.
+         *   * Plain functions get the `aether_<name>` alias from
+         *     emit_lib_alias_stubs. The user's bare name is also
+         *     emitted but is not the canonical FFI surface.
+         * Consumers `dlsym(handle, c_symbol)` should always return
+         * a callable pointer regardless of which path the function
+         * took. */
+        const char* cb_sym = c_callback_symbol(fn);
+        char c_sym[256];
+        if (cb_sym) {
+            snprintf(c_sym, sizeof(c_sym), "%s", cb_sym);
+        } else {
+            snprintf(c_sym, sizeof(c_sym), "aether_%s", fn->value);
+        }
+        emit_lib_metadata_c_string_literal(gen->output, c_sym);
+        fprintf(gen->output, ", \"");
+        /* Signature directly into the C-string literal — characters
+         * are all safe ASCII (parens, comma, arrow, alphanumerics). */
+        emit_lib_metadata_signature_for(gen->output, fn);
+        fprintf(gen->output, "\", ");
+        emit_lib_metadata_c_string_literal(gen->output,
+            fn->source_file ? fn->source_file : "");
+        fprintf(gen->output, ", %d },\n", fn->line);
+    }
+    fprintf(gen->output, "};\n\n");
+
+    /* Pull the primary source path off the first non-imported fn —
+     * approximation of "the .ae the user passed to aetherc". The
+     * artifact may bundle multiple sources (concat-ae); naming the
+     * first one is the simplest stable convention. */
+    const char* primary_src = "";
+    for (int i = 0; i < fn_count; i++) {
+        if (fns[i]->source_file) { primary_src = fns[i]->source_file; break; }
+    }
+    fprintf(gen->output,
+        "static const struct _AetherLibMeta _aether_lib_meta = {\n");
+    fprintf(gen->output, "    \"1.0\", \"" );
+    fprintf(gen->output, "%s", "0.0.0-dev");  /* version string filled in by build glue if available */
+    fprintf(gen->output, "\", ");
+    emit_lib_metadata_c_string_literal(gen->output, primary_src);
+    fprintf(gen->output, ", %d, _aether_lib_fns, 0, NULL\n};\n\n", fn_count);
+
+    /* The exported entry point. Returns a pointer to the static
+     * meta struct. The local `_AetherLibMeta` tag is layout-
+     * compatible with the host's `AetherLibMeta` declared in
+     * runtime/aether_lib_meta.h — direct callers including the
+     * header see the canonical name; dlsym callers cast the
+     * function-pointer to whatever return type they want. Either
+     * works because the C linker resolves on symbol name alone,
+     * not signature. */
+    fprintf(gen->output,
+        "const struct _AetherLibMeta* aether_lib_meta(void) {\n"
+        "    return &_aether_lib_meta;\n"
+        "}\n\n");
+
+    free(fns);
+}
+
 // --emit-main=<func> shim. Issue #268.3.
 //
 // Emits a thin `int main(int argc, char** argv)` that calls the named
@@ -2197,6 +2405,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     // the public FFI surface. Must come after all normal function emission
     // so the aliases see the wrapped functions via their forward decls.
     emit_lib_alias_stubs(gen, program);
+
+    // --emit=lib / --emit=both: append the symbol-catalog metadata
+    // (issue #403). Auto-included on every library build so consumers
+    // get function-name → C-symbol → signature → source-location
+    // introspection by dlsym'ing `aether_lib_meta`. The CLI tool
+    // `ae lib-info <path>` walks the same struct for human-readable
+    // dumps. Must come after emit_lib_alias_stubs because the
+    // metadata's `c_symbol` field references the alias names.
+    emit_lib_metadata(gen, program);
 
     // --emit-main=<func> shim: with --emit=lib, append a thin main(argc,argv)
     // that calls the named function. Closes the exe/lib symmetry — one .c

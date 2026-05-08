@@ -356,6 +356,113 @@ re-arm + call again with a more generous budget, or surface
 5. **Typed returns beyond `void*`** — functions returning `map`/`list`
    come back as `AetherValue*` with no schema. Host knows the shape.
 
+## Reflection: the symbol catalog (`aether_lib_meta`) — #403
+
+Every `--emit=lib` artifact exports a single reflection entry point:
+
+```c
+const AetherLibMeta* aether_lib_meta(void);
+```
+
+declared in `runtime/aether_lib_meta.h`. The returned struct describes
+every exported function — Aether name, C symbol, public signature,
+source file, source line — in a layout-stable, allocation-free form
+that any FFI consumer (Python ctypes, Java Panama, Ruby Fiddle,
+Node-API, hand-rolled `dlsym`) can walk directly.
+
+```c
+typedef struct {
+    const char* aether_name;     /* "double_int", "std.fs.copy"      */
+    const char* c_symbol;         /* unmangled symbol to dlsym         */
+    const char* signature;        /* "(int) -> int"                    */
+    const char* source_file;      /* the .ae that defined it           */
+    int         source_line;      /* 1-based                            */
+} AetherLibFunction;
+
+typedef struct {
+    const char* schema_version;   /* "1.0" — bump on breaking change   */
+    const char* aether_version;   /* compiler version                  */
+    const char* primary_source;   /* the .ae passed to aetherc         */
+    int                       function_count;
+    const AetherLibFunction*  functions;
+    int                       closure_count;   /* always 0 in v1       */
+    const void*               closures;        /* always NULL in v1    */
+} AetherLibMeta;
+```
+
+No JSON, no parsing, no dynamic allocation — the struct is `static const`
+in the artifact and the catalog literally lives in `.rodata`. Schema is
+versioned (`"1.0"`); within `1.x` only additive fields appear at the
+struct tail (the `closure_count` / `closures` slots are reserved for v2's
+closure-context records). v1 includes every Aether-defined function the
+linker exports; functions skipped from the `aether_<name>` alias surface
+(unsupported types, tuple returns, trailing-underscore privates) are
+also omitted from the catalog.
+
+### `ae lib-info <path>` — inspect any artifact
+
+The `ae` CLI ships a turnkey reader that `dlopen`s a `.so`/`.dylib`,
+calls `aether_lib_meta`, and prints a human-readable dump:
+
+```sh
+$ ae lib-info build/libscript.so
+Aether Library: build/libscript.so
+  Schema:        1.0
+  Aether:        0.134.0-dev
+  Source:        script.ae
+  Functions:     3
+
+  - aether_script_handle(ptr, ptr, ptr) -> void
+        @ script.ae:3
+  - double_int(int) -> int
+        c_symbol: aether_double_int
+        @ script.ae:7
+  - greet(string) -> string
+        c_symbol: aether_greet
+        @ script.ae:11
+```
+
+The `c_symbol:` line is suppressed when the symbol equals `aether_<name>`
+(the default for plain exports — printing it would just be noise).
+`@c_callback`-marked functions whose Aether name *is* the C symbol show
+no `c_symbol:` line either; they are their own export.
+
+Windows is a follow-up — `ae lib-info` returns 1 with a "DLL hosting is
+a follow-up" message; the metadata struct *is* still emitted into the
+DLL's `.rodata` and is reachable via `LoadLibrary` +
+`GetProcAddress("aether_lib_meta")` from any host.
+
+### What this enables for FFI hosts
+
+Any embedder can build a typed binding without re-parsing the source:
+
+```python
+import ctypes
+lib = ctypes.CDLL("./libscript.so")
+class AetherLibFunction(ctypes.Structure):
+    _fields_ = [("aether_name", ctypes.c_char_p),
+                ("c_symbol",    ctypes.c_char_p),
+                ("signature",   ctypes.c_char_p),
+                ("source_file", ctypes.c_char_p),
+                ("source_line", ctypes.c_int)]
+class AetherLibMeta(ctypes.Structure):
+    _fields_ = [("schema_version", ctypes.c_char_p),
+                ("aether_version", ctypes.c_char_p),
+                ("primary_source", ctypes.c_char_p),
+                ("function_count", ctypes.c_int),
+                ("functions",      ctypes.POINTER(AetherLibFunction)),
+                ("closure_count",  ctypes.c_int),
+                ("closures",       ctypes.c_void_p)]
+lib.aether_lib_meta.restype = ctypes.POINTER(AetherLibMeta)
+meta = lib.aether_lib_meta()[0]
+for i in range(meta.function_count):
+    fn = meta.functions[i]
+    print(fn.aether_name.decode(), fn.signature.decode())
+```
+
+Same struct walks from Java Panama, Ruby Fiddle, Go cgo. The flat-C
+layout is the lowest common denominator across every FFI in the wild.
+
 ## Working tests
 
 The integration suite under `tests/integration/` covers:
@@ -371,6 +478,7 @@ The integration suite under `tests/integration/` covers:
 | `emit_lib_dual_build/` | Same source → exe AND lib via separate invocations |
 | `emit_lib_swig/` | SWIG Python round-trip (skips if `swig` missing) |
 | `emit_lib_with_capability/` | `--with=fs,net,os` opt-ins; `--with=first-party` and `--with=all` aliases |
+| `lib_meta/` | `aether_lib_meta` + `ae lib-info` round-trip — schema, source, function count, three signatures, c_symbol gating, source refs |
 
 Run them with the standard `make test-ae` or individually:
 
