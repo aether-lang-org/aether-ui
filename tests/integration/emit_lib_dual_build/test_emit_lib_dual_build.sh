@@ -1,8 +1,9 @@
 #!/bin/sh
 # Verifies:
-#   (a) `ae build --emit=both` is rejected with a helpful message (v1 scope)
-#   (b) Same source can be built twice — once as exe, once as lib — and
-#       both artifacts work independently.
+#   (a) `ae build --emit=both` succeeds, producing BOTH a runnable
+#       executable AND a shared library from one source invocation
+#   (b) The same source can also still be built twice independently
+#       — once as exe, once as lib — and both artifacts work
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -19,18 +20,45 @@ esac
 TMPDIR="$(mktemp -d)"; trap 'rm -rf "$TMPDIR"' EXIT
 pass=0; fail=0
 
-# (a) --emit=both should fail cleanly.
+# (a) --emit=both should produce both artifacts in a single invocation.
 cd "$SCRIPT_DIR"
-if AETHER_HOME="" "$ROOT/build/ae" build --emit=both config.ae -o "$TMPDIR/both_out" >"$TMPDIR/both.log" 2>&1; then
-    echo "  [FAIL] --emit=both should be rejected but succeeded"
-    fail=$((fail + 1))
-elif grep -q "not yet implemented" "$TMPDIR/both.log"; then
-    echo "  [PASS] --emit=both rejected with helpful message"
-    pass=$((pass + 1))
-else
-    echo "  [FAIL] --emit=both was rejected but without the expected message"
+if ! AETHER_HOME="" "$ROOT/build/ae" build --emit=both config.ae -o "$TMPDIR/both_out" >"$TMPDIR/both.log" 2>&1; then
+    echo "  [FAIL] --emit=both build failed"
     cat "$TMPDIR/both.log"
     fail=$((fail + 1))
+else
+    # The exe lands at the -o path verbatim (no extension on POSIX).
+    BOTH_EXE="$TMPDIR/both_out"
+    # The lib lands at lib<base><ext> in the same directory the -o
+    # points at — the lib-mode default-naming logic in ae build.
+    BOTH_LIB=""
+    for c in "$TMPDIR/libboth_out${LIB_EXT}" "$TMPDIR/both_out${LIB_EXT}" "$TMPDIR/both_out"; do
+        [ -f "$c" ] && [ "$c" != "$BOTH_EXE" ] && { BOTH_LIB="$c"; break; }
+    done
+    if [ ! -x "$BOTH_EXE" ]; then
+        echo "  [FAIL] --emit=both produced no executable at $BOTH_EXE"
+        ls -la "$TMPDIR" | head -10
+        fail=$((fail + 1))
+    elif out=$("$BOTH_EXE" 2>/dev/null) && echo "$out" | grep -q "ran as exe"; then
+        echo "  [PASS] --emit=both produced runnable exe"
+        pass=$((pass + 1))
+    else
+        echo "  [FAIL] --emit=both exe didn't print 'ran as exe'"
+        echo "       got: $out"
+        fail=$((fail + 1))
+    fi
+    if [ -z "$BOTH_LIB" ] || [ ! -f "$BOTH_LIB" ]; then
+        echo "  [FAIL] --emit=both produced no shared library"
+        ls -la "$TMPDIR" | head -10
+        fail=$((fail + 1))
+    elif nm -g "$BOTH_LIB" 2>/dev/null | grep -qE " T _?aether_greet$"; then
+        echo "  [PASS] --emit=both lib exports aether_greet"
+        pass=$((pass + 1))
+    else
+        echo "  [FAIL] --emit=both lib missing aether_greet symbol"
+        nm -g "$BOTH_LIB" 2>/dev/null | head -20
+        fail=$((fail + 1))
+    fi
 fi
 
 # (b1) Build as exe — should run and print "ran as exe".

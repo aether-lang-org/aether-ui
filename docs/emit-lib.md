@@ -57,7 +57,7 @@ int main(void) {
 |---|---|
 | `--emit=exe` *(default)* | Current behaviour — produces an executable. |
 | `--emit=lib` | No `main()` in the output; every top-level Aether function gets an `aether_<name>()` C-ABI alias; built with `-fPIC -shared`. |
-| `--emit=both` | Accepted by `aetherc` (emits both symbols into the `.c` file) but **not yet wired up in `ae build`** — run `ae build --emit=exe` and `ae build --emit=lib` separately when you need both artifacts from one source. |
+| `--emit=both` | Produces both an executable AND a shared library from one source. `ae build --emit=both foo.ae -o foo` writes `foo` (the exe) and `foo.dylib` / `foo.so` (the lib) side by side. With no `-o`, defaults are `<base>` (exe) and `lib<base>.<ext>` (lib). Internally dispatches `cmd_build` twice (once per emit mode); the lib pass appends the platform lib extension to the user's `-o` so the second pass doesn't overwrite the first. |
 
 ## Naming
 
@@ -344,16 +344,23 @@ re-arm + call again with a more generous budget, or surface
    have it retained. If you want this (the ARexx / rules-engine model),
    track the "Shape B" design note in
    [aether-embedded-in-host-applications.md](aether-embedded-in-host-applications.md).
-2. **`--emit=both` for `ae build`** — use two invocations.
-3. **Per-function capability grants** — `--with=` flags are coarse
+2. **Per-function capability grants** — `--with=` flags are coarse
    (fs / net / os). Fine-grained gates like "allow file_open but not
    dir_delete" don't match any concrete threat model for the
    default-deny shape, and every additional flag is API surface.
-4. **Deep-recursive `aether_config_free`** — the v1 free only releases
-   the root map/list; nested containers leak unless the caller walks
-   the tree. In practice scripts build one tree and it's all released
-   when the host is done.
-5. **Typed returns beyond `void*`** — functions returning `map`/`list`
+3. **Deep-recursive `aether_config_free`** — the runtime can't
+   discriminate map / list / scalar from a stored `void*` alone.
+   Aether's collections are deliberately untyped at the storage
+   level: a script writing `map_put(m, "port", 8080)` stores
+   `(void*)(intptr_t)8080`, which is *not a valid pointer to deref*.
+   Probing for a magic header would crash on every such intptr-cast
+   scalar. The host owns the schema; the host walks the tree. In
+   practice scripts build one tree and the whole thing is released
+   when the host is done, so this rarely matters; for hosts that
+   need recursive cleanup of a known-shape tree, walk it explicitly
+   using `aether_config_get_map` / `_get_list` / `_list_get` and
+   call `aether_config_free` on each container in post-order.
+4. **Typed returns beyond `void*`** — functions returning `map`/`list`
    come back as `AetherValue*` with no schema. Host knows the shape.
 
 ## Reflection: the symbol catalog (`aether_lib_meta`) — #403

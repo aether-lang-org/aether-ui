@@ -3620,14 +3620,69 @@ static int cmd_build(int argc, char** argv) {
                 g_emit_exe = false;
                 g_emit_lib = true;
             } else if (strcmp(val, "both") == 0) {
-                // v1 scope: `ae build --emit=both` is not supported because
-                // producing both a .so and an executable from one gcc call
-                // needs either two invocations or a two-pass build. Users
-                // who need both artifacts today should run `ae build --emit=exe`
-                // and `ae build --emit=lib -o ...` separately.
-                fprintf(stderr, "Error: --emit=both is not yet implemented for `ae build`.\n");
-                fprintf(stderr, "       Run `ae build --emit=exe` and `ae build --emit=lib` separately.\n");
-                return 1;
+                /* `ae build --emit=both` produces both an executable and
+                 * a shared library from a single source. Implementation:
+                 * dispatch cmd_build twice — first as --emit=exe, then
+                 * as --emit=lib — using a duplicated argv with the flag
+                 * rewritten in place. Two gcc calls, yes, but that's
+                 * what producing two ELFs from one source genuinely
+                 * costs — the .c file content for exe and lib differ
+                 * on whether `main` is emitted, so a single gcc call
+                 * can't produce both shapes anyway.
+                 *
+                 * Output paths: when the user passes `-o NAME` we keep
+                 * NAME for the exe pass and append the platform lib
+                 * extension (`NAME.dylib` / `NAME.so`) for the lib
+                 * pass — otherwise the lib pass would overwrite the
+                 * exe at the same path. When `-o` is absent both
+                 * passes use their defaults (exe = `<src-base>`,
+                 * lib = `lib<src-base>.<ext>`) which already differ.
+                 *
+                 * If the exe pass fails the lib pass is skipped and
+                 * the exe's exit code is returned so the user sees
+                 * the precise error.  */
+                int o_idx = -1;
+                for (int j = 0; j < argc - 1; j++) {
+                    if (strcmp(argv[j], "-o") == 0) { o_idx = j + 1; break; }
+                }
+                char lib_out_buf[1024] = {0};
+                char* lib_out_override = NULL;
+                if (o_idx > 0) {
+#ifdef __APPLE__
+                    const char* lib_ext = ".dylib";
+#elif defined(_WIN32)
+                    const char* lib_ext = ".dll";
+#else
+                    const char* lib_ext = ".so";
+#endif
+                    snprintf(lib_out_buf, sizeof(lib_out_buf), "%s%s",
+                             argv[o_idx], lib_ext);
+                    lib_out_override = lib_out_buf;
+                }
+                char** dup_exe = (char**)malloc(sizeof(char*) * (size_t)argc);
+                char** dup_lib = (char**)malloc(sizeof(char*) * (size_t)argc);
+                if (!dup_exe || !dup_lib) {
+                    fprintf(stderr, "Error: out of memory dispatching --emit=both\n");
+                    free(dup_exe); free(dup_lib);
+                    return 1;
+                }
+                for (int j = 0; j < argc; j++) {
+                    if (j == i) {
+                        dup_exe[j] = (char*)"--emit=exe";
+                        dup_lib[j] = (char*)"--emit=lib";
+                    } else if (j == o_idx && lib_out_override) {
+                        dup_exe[j] = argv[j];
+                        dup_lib[j] = lib_out_override;
+                    } else {
+                        dup_exe[j] = argv[j];
+                        dup_lib[j] = argv[j];
+                    }
+                }
+                int rc_exe = cmd_build(argc, dup_exe);
+                int rc_lib = (rc_exe == 0) ? cmd_build(argc, dup_lib) : 0;
+                free(dup_exe); free(dup_lib);
+                if (rc_exe != 0) return rc_exe;
+                return rc_lib;
             } else {
                 fprintf(stderr, "Error: --emit must be one of: exe, lib (got '%s')\n", val);
                 return 1;
