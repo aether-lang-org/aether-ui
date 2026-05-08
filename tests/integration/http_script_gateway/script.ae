@@ -1,0 +1,17 @@
+// In-process gateway script — issue #384.
+//
+// Built as a shared library via:
+//   aetherc --emit=lib script.ae -o script.so
+//
+// The host server (host.ae) dlopens this .so and dispatches matched
+// requests to `aether_script_handle` via the std.http.script_gateway
+// middleware.
+
+import std.http
+
+@c_callback aether_script_handle(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Handler", "script_gateway")
+    http.response_set_body(res, "hello from script.so\n")
+}

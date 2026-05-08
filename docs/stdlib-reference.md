@@ -655,6 +655,74 @@ The pilot scope is `fs.copy` only in this commit; `fs.move`, `fs.realpath`, and 
 
 ---
 
+## In-process script gateway (`std.http.script_gateway`)
+
+CGI-style ergonomics — one `.ae` script file per route — without paying the per-request fork/exec cost. The script is pre-compiled with `aetherc --emit=lib --with=net script.ae -o script.so` to a shared library; the host server `dlopen()`s it once at mount time and dispatches matched requests via a direct indirect call. Empirically ~50× faster than the equivalent subprocess-spawn dispatch (issue #384).
+
+### Script shape
+
+The script must export an `aether_script_handle` symbol with the canonical `HttpHandler` signature, marked `@c_callback` so the emitted C uses the unmangled name:
+
+```aether
+// greeting.ae
+import std.http
+
+@c_callback aether_script_handle(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "hello from greeting.ae\n")
+}
+```
+
+Build it as a shared library — `--with=net` is required because `std.http` is the `net` capability and `--emit=lib` is capability-empty by default:
+
+```sh
+aetherc --emit=lib --with=net greeting.ae -o /var/aether/scripts/greeting.so
+```
+
+### Mount in the host
+
+```aether
+import std.http
+import std.http.script_gateway
+
+main() {
+    s = http.server_create(8080)
+    ok, kind, msg = script_gateway.mount(
+        s, "/greet", "/var/aether/scripts/greeting.so")
+    if kind != script_gateway.KIND_OK {
+        println("mount failed: ${msg}"); exit(1)
+    }
+    http.server_listen(s)
+}
+```
+
+Now `GET /greet/anything` runs `aether_script_handle` from `greeting.so` directly on the connection thread.
+
+### API
+
+- `script_gateway.mount(server, path_prefix, so_path)` → `(int, int, string)` — Mount the shared library at `so_path` as the request handler for every URL whose path starts with `path_prefix`. Returns `(1, KIND_OK, "")` on successful mount; `(0, KIND_*, msg)` on failure. The dlopen handle is intentionally long-lived (process-lifetime); hot-reload is a separate feature.
+
+**Constants** (subset of std.fs's KIND_* — values match so callers can mix the two surfaces):
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `KIND_OK` | 0 | mount succeeded |
+| `KIND_NOT_FOUND` | 1 | `so_path` is missing or unreadable |
+| `KIND_INVALID` | 6 | null arg, or `.so` missing the `aether_script_handle` entrypoint |
+| `KIND_IO` | 5 | `dlopen` failure (incompatible ABI, etc.) |
+| `KIND_UNAVAILABLE` | 99 | platform stub (Windows DLL hosting is a follow-up) |
+
+### Sandbox
+
+`mount()` calls `aether_sandbox_check("fs_read", so_path)` before dlopen, so a sandboxed host cannot bring in arbitrary native code via untrusted `.so` paths. The script itself runs subject to whatever caps the host has armed via `libaether.h` (`aether_set_memory_cap`, `aether_set_call_deadline`).
+
+### Performance characteristic
+
+Per-request hot path is one `strncmp(path, prefix, prefix_len)` plus one indirect call. On Linux/glibc the indirect call goes through the dlopened SO's PLT once and is then jit-bound; subsequent calls are direct. On macOS (lazy bind disabled by RTLD_NOW) the binding happens at mount time so per-request cost is one direct indirect call.
+
+---
+
 ## JSON (`std.json`)
 
 JSON parsing, creation, and serialization. RFC 8259 conformant (318/318
