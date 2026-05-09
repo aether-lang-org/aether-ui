@@ -181,9 +181,21 @@ extern fs_move_raw(src: string, dst: string) -> (int, int, string)
 
 // fs_realpath_raw — OS-canonicalise the path (deref every symlink,
 // remove ./.. components). Returns (resolved_path, KIND_OK, "") on
-// success, ("", KIND_*, msg) on failure. Resolved path is heap-
-// allocated; the runtime owns it.
-extern fs_realpath_raw(path: string) -> (string, int, string)
+// success, ("", KIND_*, msg) on failure.
+//
+// Position 0 (resolved_path) is `@heap`: realpath(3) on POSIX
+// allocates a fresh buffer (POSIX.1-2008 extension); on Windows
+// the GetFinalPathNameByHandleW result is converted to UTF-8 via
+// a fresh malloc. The destructured LHS owns the buffer; the
+// heap-string-tracker frees it at function exit (or on
+// reassignment). Position 2 (msg) stays default-borrow — error
+// message is a static string literal in the C source.
+//
+// Audited callers: only `fs.realpath` (the Aether wrapper below)
+// passes the tuple through; no manual string.release on the
+// resolved path anywhere in stdlib, tests/, examples/, tools/,
+// or contrib/. See #420 follow-up.
+extern fs_realpath_raw(path: string) -> (string @heap, int, string)
 
 // fs_chmod_raw — POSIX chmod(2). On Windows only the user-write
 // bit (0o200) is honoured (matches Python's os.chmod docs). Returns
