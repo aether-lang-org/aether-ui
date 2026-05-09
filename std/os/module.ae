@@ -41,7 +41,19 @@ extern os_run_capture_raw(prog: string, argv: ptr, env: ptr) -> string
 // Tuple sibling that exposes the child's exit code. Returns
 // (stdout, status, err) — see the Aether-side `run_capture` wrapper
 // for the per-slot semantics. Issue #289.
-extern os_run_capture_status_raw(prog: string, argv: ptr, env: ptr) -> (string, int, string)
+//
+// Position 0 (stdout) is `@heap`: the C side accumulates the child's
+// output into a malloc'd buffer that grows via realloc as bytes
+// arrive. The destructured LHS owns it; the heap-string-tracker
+// frees it on reassignment / at function exit. Position 2 (err)
+// stays default-borrow — error messages are static string literals
+// in aether_os.c.
+//
+// Audited callers: only the Aether wrapper `run_capture` at line ~150
+// passes the tuple through; no manual string.release on the captured
+// stdout anywhere in stdlib, tests/, examples/, tools/, or contrib/.
+// See #420 follow-up.
+extern os_run_capture_status_raw(prog: string, argv: ptr, env: ptr) -> (string @heap, int, string)
 
 // std.ipc back-channel spawn. Spawns a child with an inherited
 // pipe at fd 3 (write end, child side). Sets AETHER_IPC_FD=3 in
@@ -81,7 +93,18 @@ extern os_wait_pid_raw(pid: int) -> (int, string)
 // the lower-level os_run_pipe_raw + os_wait_pid_raw pair instead.
 //
 // On Windows, returns ("", -1, "unsupported on Windows").
-extern os_run_pipe_drain_and_wait_raw(prog: string, argv: ptr, env: ptr) -> (string, int, string)
+//
+// Position 0 (channel_payload) is `@heap`: the C side accumulates
+// the drained pipe contents into a malloc'd buffer that grows via
+// realloc. The destructured LHS owns it; the heap-string-tracker
+// frees it on reassignment / at function exit. Position 2 (err)
+// stays default-borrow — every error path returns a static
+// string literal.
+//
+// Audited callers: no manual string.release on the channel
+// payload anywhere in stdlib, tests/, examples/, tools/, or
+// contrib/. See #420 follow-up.
+extern os_run_pipe_drain_and_wait_raw(prog: string, argv: ptr, env: ptr) -> (string @heap, int, string)
 
 // Get environment variable, returns string or NULL if not set
 extern os_getenv(name: string) -> string

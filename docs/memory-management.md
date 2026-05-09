@@ -326,9 +326,51 @@ extern realpath_raw(path: string) -> (string @heap, int, string)
 extern get_pair(s: string)        -> (string @heap, string @borrow)
 ```
 
+### Stdlib externs annotated `@heap`
+
+The following stdlib externs are audited and annotated. Their tuple destructures auto-free at function exit; you do **not** need to call `string.release` on the resulting strings.
+
+| Extern | Heap position | Notes |
+|---|---|---|
+| `fs.realpath` (`fs_realpath_raw`) | resolved path | POSIX `realpath(NULL)` / Windows `GetFinalPathNameByHandleW` + UTF-8 malloc |
+| `os.run_capture_status` (`os_run_capture_status_raw`) | captured stdout | realloc-grown buffer |
+| `os.run_pipe_drain_and_wait` (`os_run_pipe_drain_and_wait_raw`) | pipe payload | realloc-grown buffer |
+
+Other tuple-returning string-position externs in the stdlib stay at default `@borrow` until a per-callee audit confirms heap-ness AND verifies no caller relies on manual `string.release` of the returned pointer.
+
+### Function-exit defer-free for hoisted heap-string vars
+
+The wrapper-on-reassignment frees the **previous** value when a heap-string variable is assigned to. The function-exit defer-free closes the complementary case: a heap-string variable assigned **once** and never reassigned still has a live allocation when the function exits — without an exit-time free, that allocation leaks per-call.
+
+The codegen now emits `if (_heap_<name>) { free((void*)<name>); <name> = NULL; _heap_<name> = 0; }` at every function-exit and explicit `return` for every hoisted heap-string variable that is **not** escaped. The escape walker — same one the wrapper consults — decides which variables are held by something that outlives the call (return, closure capture, `ptr`-typed param, `@retain`-typed param, recursive escape via another store) and skips the defer for those.
+
+```aether
+foo(b64: string) -> int {
+    raw = decode_b64(b64)         // _heap_raw = 1
+    n   = check(raw)              // raw is not escaped (read-only)
+    return n
+    // function-exit: if (_heap_raw) free(raw);  ← reclaims the allocation
+}
+```
+
+Cost: zero on functions that don't allocate heap strings; one inline conditional per non-escaped heap-string var per return path.
+
+### `@retain` per-parameter annotation on extern declarations
+
+For functions that *store* a string pointer beyond the call (collection adders, map keys, route registrations), the default "string parameter is read-only" treatment from the escape walker is wrong: it would let the function-exit defer-free reclaim the bytes while the recipient still holds the pointer — UAF. The `@retain` annotation fixes this:
+
+```aether
+extern string_list_add(list: ptr, s: @retain string) -> int
+extern map_put_raw(map: ptr, key: @retain string, value: ptr) -> int
+```
+
+Tells the heap-string-tracker escape walker "this slot stores the pointer; mark the heap-string arg as escaped, skip the function-exit free." Multiple annotations stack (`@aether @retain string` is legal; order doesn't matter). Default for unannotated string parameters remains "read-only" — correct for `string.length` / `string.equals` / `print` / `println` and other consumers that don't outlive the call.
+
+Audited stdlib retainers carrying `@retain` today: `string_list_add`, `string_list_set`, `map_put_raw`'s key. Other functions are added as their callers are audited.
+
 ### When you DO need explicit cleanup
 
-Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*` without an `@heap` annotation) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments and annotated extern returns only.
+Strings returned from a function whose ownership the compiler can't infer (e.g. an opaque C extern returning `char*` without an `@heap` annotation) need the usual `defer free(s)` pattern — same as any other heap allocation. The automatic tracker covers in-Aether assignments, annotated extern returns, and non-escaped function-scope locals.
 
 ---
 

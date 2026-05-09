@@ -19,27 +19,31 @@ main() {
         println("Starts with 'Ae'")
     }
 
-    // Operations that return new strings give you managed AetherString*
+    // Operations that return new strings — heap allocation is
+    // tracked automatically. The compiler frees `upper` on
+    // function exit; you don't need a `defer string.release`.
+    // Manual release still works (it's @retain-annotated, so the
+    // auto-cleanup correctly skips already-released buffers) —
+    // it's just no longer required for correctness.
     upper = string.to_upper(name)
-    defer string.release(upper)
     print("Upper: ")
     println(string.to_cstr(upper))
 
-    // You can also use string.new() for managed strings
+    // string.new() returns a managed AetherString*; auto-cleanup
+    // applies the same way.
     s = string.new("Hello, Aether!")
-    defer string.release(s)
     print("Managed string length: ")
     println(string.length(s))
 
-    // Mix plain and managed freely
+    // Mix plain and managed freely; both flow through the
+    // compiler-emitted heap-string tracker.
     joined = string.concat("Hello, ", name)
-    defer string.release(joined)
     print("Concat: ")
     println(string.to_cstr(joined))
 
-    // Conversion
+    // Conversion: same model. No `defer string.release(num)`
+    // needed — the tracker reclaims at function exit.
     num = string.from_int(42)
-    defer string.release(num)
     print("Number as string: ")
     println(string.to_cstr(num))
 

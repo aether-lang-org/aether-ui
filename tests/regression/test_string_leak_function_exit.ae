@@ -1,0 +1,168 @@
+// Regression test for the function-exit defer-free + @retain
+// extern-param annotation that complete the issue #420 fix.
+// Companion to test_string_leak_user_function.ae (single-value
+// loop), test_string_leak_loop.ae (tight-loop bug_repo.md
+// pattern), and test_string_leak_tuple_destructure.ae (tuple
+// destructure wrapper-on-reassignment).
+//
+// What this test guards:
+//
+//   1. **Single-call leak — single-value path.** A function that
+//      assigns a heap string once and exits without reassignment.
+//      Pre-fix the heap allocation leaked at function exit; post-
+//      fix the function-exit defer-free reclaims it.
+//
+//   2. **Single-call leak — tuple-destructure path.** A function
+//      that destructures into a heap-string LHS once and exits.
+//      Same shape as case 1 but for the tuple wrapper.
+//
+//   3. **Escape via @retain extern-param.** A heap string passed
+//      to a `@retain`-annotated extern (here `string_list_add`)
+//      survives the caller's function exit because the escape
+//      walker correctly classifies the LHS as escaped — defer-
+//      free skips the free, the list's stored pointer stays
+//      valid even under allocator pressure.
+//
+//   4. **Escape via @retain on a key.** Same shape as case 3
+//      but exercising `map_put_raw`'s `key: @retain string`
+//      annotation. Storing a heap-allocated key into a map and
+//      reading it back after the caller's frame is gone proves
+//      the escape walker propagates the @retain marker through
+//      to suppress the function-exit free.
+//
+//   5. **Mixed: heap + non-heap return positions in a tuple.**
+//      A tuple-returning user function whose position 0 is
+//      heap and position 1 is a literal. Destructure into two
+//      string vars; only the heap one gets a function-exit
+//      defer-free emitted. Verifies the per-position heap-ness
+//      classifier from #420 v1 stays correct under the new
+//      defer-free pre-pass.
+
+import std.string
+import std.collections
+
+extern exit(code: int)
+
+// Case 1 helper: single-value heap return, called once per main
+// iteration with no reassignment in this function.
+single_value_heap(prefix: string, name: string) -> string {
+    s = string.concat(prefix, name)
+    return s
+}
+
+// Case 2 helper: tuple destructure with both positions heap.
+tuple_both_heap(prefix: string, name: string) -> (string, string) {
+    return string.concat(prefix, name), string.concat(name, prefix)
+}
+
+// Case 5 helper: mixed heap + literal return positions.
+tuple_mixed(seed: string) -> (string, string) {
+    return string.concat(seed, "-derived"), "literal-suffix"
+}
+
+main() {
+    println("=== function-exit defer-free + @retain ===")
+
+    // --- Case 1: single-call leak — single-value path ---
+    // Each iteration calls single_value_heap which allocates and
+    // returns; the call site reassigns `acc1` so the heap pointer
+    // is captured. The wrapper-on-reassignment frees the previous
+    // value. The FINAL allocation (last iteration's) is freed by
+    // the function-exit defer-free at main's exit. Without that
+    // defer the test still passes (correctness isn't memory-
+    // bounded here) but the leak is real and observable under
+    // a heap-bytes counter; a runtime check that the program
+    // exits cleanly is what we can assert in-language.
+    acc1 = ""
+    i = 0
+    while i < 5 {
+        acc1 = single_value_heap("p1_", "alice")
+        i = i + 1
+    }
+    if string.length(acc1) <= 0 { println("FAIL 1"); exit(1) }
+    println("  PASS 1: single-value heap reassignment loop")
+
+    // --- Case 2: single-call leak — tuple-destructure path ---
+    a2 = ""
+    b2 = ""
+    j = 0
+    while j < 5 {
+        a2, b2 = tuple_both_heap("p2_", "bob")
+        j = j + 1
+    }
+    if string.length(a2) <= 0 { println("FAIL 2: a2 empty"); exit(1) }
+    if string.length(b2) <= 0 { println("FAIL 2: b2 empty"); exit(1) }
+    println("  PASS 2: tuple-destructure both-heap reassignment loop")
+
+    // --- Case 3: @retain on string_list_add ---
+    // build_list returns a list holding a reference to a heap
+    // string allocated inside its frame. Without the @retain
+    // annotation on string_list_add, the function-exit defer-
+    // free would free the bytes while the list still holds the
+    // pointer — UAF. Exercise allocator pressure to surface a
+    // UAF if it exists.
+    L = build_list_with_retained_heap()
+    k = 0
+    while k < 100 {
+        x = string.copy("filler-padding-padding-padding")
+        if string.length(x) < 0 { exit(1) }
+        k = k + 1
+    }
+    got = string_list_get(L, 0)
+    if string.equals(got, "ephemeral-retained") == 0 {
+        println("FAIL 3: locality lost; got '${got}', want 'ephemeral-retained'")
+        exit(1)
+    }
+    string_list_free(L)
+    println("  PASS 3: @retain on string_list_add survives caller exit")
+
+    // --- Case 4: @retain on map_put_raw's key ---
+    M = build_map_with_retained_key()
+    k4 = 0
+    while k4 < 100 {
+        y = string.copy("filler-padding-padding-padding")
+        if string.length(y) < 0 { exit(1) }
+        k4 = k4 + 1
+    }
+    has_key = map_has(M, "computed-key")
+    if has_key == 0 {
+        println("FAIL 4: map.has reports key absent — was it freed before lookup?")
+        exit(1)
+    }
+    println("  PASS 4: @retain on map_put_raw key survives caller exit")
+
+    // --- Case 5: mixed heap + literal tuple destructure ---
+    // The position-0 var must get a function-exit defer-free
+    // (heap), the position-1 var must NOT (literal). Codegen
+    // correctness — incorrect classification would either leak
+    // (heap missed) or crash on free of literal (literal mis-
+    // classified). The test exits cleanly only if both
+    // classifications are right.
+    s5_h, s5_l = tuple_mixed("seed5")
+    if string.length(s5_h) <= 0 { println("FAIL 5: heap pos empty"); exit(1) }
+    if string.equals(s5_l, "literal-suffix") == 0 {
+        println("FAIL 5: literal pos = '${s5_l}'"); exit(1)
+    }
+    println("  PASS 5: mixed heap + literal destructure")
+
+    println("=== All cases passed ===")
+}
+
+build_list_with_retained_heap() -> ptr {
+    L = string_list_new()
+    s = string.copy("ephemeral-retained")  // heap AetherString*
+    string_list_add(L, s)                   // @retain — list owns reference
+    // s goes out of scope on return; the list's retain keeps the
+    // bytes alive. With the old behaviour (no function-exit free)
+    // s would just leak. With my fix and NO @retain it would
+    // double-free (list holding freed pointer). With @retain
+    // the escape walker marks s escaped; defer-free skips.
+    return L
+}
+
+build_map_with_retained_key() -> ptr {
+    m = map_new()
+    k = string.concat("computed-", "key")  // heap-allocated key
+    map_put_raw(m, k, m)                    // @retain on key
+    return m
+}

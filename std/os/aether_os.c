@@ -1,6 +1,22 @@
 #include "aether_os.h"
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/aether_sandbox.h"
+#include <stdlib.h>
+
+/* Heap-empty sentinel for the position-0 slot on error returns
+ * from extern functions annotated `(string @heap, ...)` —
+ * specifically os_run_capture_status_raw and
+ * os_run_pipe_drain_and_wait_raw. The caller-side heap-string-
+ * tracker auto-frees position 0 on function exit; returning a
+ * static literal "" would surface as `free((void*)"")` and abort.
+ * Allocate a fresh 1-byte buffer so the @heap contract holds
+ * uniformly across success and error paths. NULL on OOM is
+ * acceptable — `free(NULL)` is a defined no-op. See #420 v2. */
+static char* aether_os_empty_heap(void) {
+    char* p = (char*)malloc(1);
+    if (p) p[0] = '\0';
+    return p;
+}
 
 // NOTE on aether_argv0 placement: the implementation lives in
 // runtime/aether_runtime.c next to the aether_argc / aether_argv it
@@ -21,7 +37,7 @@ char* os_run_capture_raw(const char* p, void* a, void* e) { (void)p; (void)a; (v
 typedef struct { const char* _0; int _1; const char* _2; } _tuple_string_int_string;
 _tuple_string_int_string os_run_capture_status_raw(const char* p, void* a, void* e) {
     (void)p; (void)a; (void)e;
-    _tuple_string_int_string out = { "", -1, "os.run_capture unavailable" };
+    _tuple_string_int_string out = { aether_os_empty_heap(), -1, "os.run_capture unavailable" };
     return out;
 }
 typedef struct { int _0; int _1; const char* _2; } _tuple_int_int_string;
@@ -38,7 +54,7 @@ _tuple_int_string os_wait_pid_raw(int pid) {
 }
 _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* p, void* a, void* e) {
     (void)p; (void)a; (void)e;
-    _tuple_string_int_string out = { "", -1, "os.run_pipe_drain_and_wait unavailable" };
+    _tuple_string_int_string out = { aether_os_empty_heap(), -1, "os.run_pipe_drain_and_wait unavailable" };
     return out;
 }
 /* ipc_parent_channel_raw — implemented in std/ipc/aether_ipc.c
@@ -634,7 +650,7 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
 typedef struct { const char* _0; int _1; const char* _2; } _tuple_string_int_string;
 
 _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_list, void* env_list) {
-    _tuple_string_int_string out = { "", -1, "" };
+    _tuple_string_int_string out = { aether_os_empty_heap(), -1, "" };
     if (!prog) {
         out._2 = "null prog";
         return out;
@@ -724,11 +740,16 @@ _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_
 
     int st = 0;
     if (waitpid(pid, &st, 0) < 0) {
+        /* Free the empty-heap initializer before overwriting with
+         * the captured-output buffer (#420 v2 — keeps the @heap
+         * contract from leaking 1 byte per failed-waitpid call). */
+        free((void*)out._0);
         out._0 = result;
         out._1 = -1;
         out._2 = "waitpid failed";
         return out;
     }
+    free((void*)out._0);
     out._0 = result;
     if (WIFEXITED(st)) {
         out._1 = WEXITSTATUS(st);
@@ -901,7 +922,7 @@ _tuple_int_string os_wait_pid_raw(int pid) {
  * No deadlock risk: the read loop drains continuously, so the
  * pipe buffer never fills regardless of payload size. */
 _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* argv_list, void* env_list) {
-    _tuple_string_int_string out = { "", -1, "" };
+    _tuple_string_int_string out = { aether_os_empty_heap(), -1, "" };
     /* Delegate to os_run_pipe_raw for the spawn, then drain + wait. */
     _tuple_int_int_string spawn = os_run_pipe_raw(prog, argv_list, env_list);
     if (spawn._2 && spawn._2[0]) {
@@ -955,11 +976,15 @@ _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* 
 
     int st = 0;
     if (waitpid((pid_t)pid, &st, 0) < 0) {
+        /* Free the empty-heap initializer before overwriting with
+         * the drained payload (#420 v2). */
+        free((void*)out._0);
         out._0 = result;
         out._1 = -1;
         out._2 = "waitpid failed";
         return out;
     }
+    free((void*)out._0);
     out._0 = result;
     if (WIFEXITED(st)) {
         out._1 = WEXITSTATUS(st);
@@ -1310,7 +1335,7 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
 typedef struct { const char* _0; int _1; const char* _2; } _tuple_string_int_string;
 
 _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_list, void* env_list) {
-    _tuple_string_int_string out = { "", -1, "" };
+    _tuple_string_int_string out = { aether_os_empty_heap(), -1, "" };
     if (!prog) { out._2 = "null prog"; return out; }
     if (!aether_sandbox_check("exec", prog)) { out._2 = "denied by sandbox"; return out; }
 
@@ -1321,7 +1346,10 @@ _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_
         out._2 = "spawn failed";
         return out;
     }
-    out._0 = capture ? capture : strdup("");
+    /* Free the empty-heap initializer before overwriting, so the
+     * success path doesn't leak a 1-byte allocation per call. */
+    free((void*)out._0);
+    out._0 = capture ? capture : aether_os_empty_heap();
     out._1 = exit_code;
     /* err stays "" — Win32 win_launch already returned 0 here, so
      * the spawn itself succeeded. */
@@ -1354,7 +1382,7 @@ _tuple_int_string os_wait_pid_raw(int pid) {
 
 _tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* argv_list, void* env_list) {
     (void)prog; (void)argv_list; (void)env_list;
-    _tuple_string_int_string out = { "", -1, "unsupported on Windows" };
+    _tuple_string_int_string out = { aether_os_empty_heap(), -1, "unsupported on Windows" };
     return out;
 }
 

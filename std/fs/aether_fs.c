@@ -1230,8 +1230,22 @@ typedef struct {
     const char* _2;    // "" on success, error message on failure
 } _tuple_string_int_string;
 
+/* Position-0 sentinel for error returns. The extern is annotated
+ * `(string @heap, int, string)` so the caller-side heap-string-
+ * tracker auto-frees position 0 on function exit. Returning a
+ * static literal `""` would surface as `free((void*)"")` and
+ * abort under glibc / dyld. Allocate a fresh 1-byte buffer so
+ * the @heap contract holds uniformly across success and error
+ * paths; callers comparing `resolved == ""` continue to match
+ * via the AetherString-aware string compare (string_equals walks
+ * the bytes regardless of allocation origin). */
+static char* aether_fs_sks_empty_heap(void) {
+    char* p = (char*)malloc(1);
+    if (p) p[0] = '\0';
+    return p;
+}
 static _tuple_string_int_string aether_fs_sks_err(int kind, const char* msg) {
-    _tuple_string_int_string out = { "", kind, msg };
+    _tuple_string_int_string out = { aether_fs_sks_empty_heap(), kind, msg };
     return out;
 }
 static _tuple_string_int_string aether_fs_sks_ok(const char* resolved) {

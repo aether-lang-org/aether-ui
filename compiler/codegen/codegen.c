@@ -185,6 +185,7 @@ void free_code_generator(CodeGenerator* gen) {
                 free(gen->extern_registry[i].c_name);
                 free(gen->extern_registry[i].params);
                 free(gen->extern_registry[i].params_aether);
+                free(gen->extern_registry[i].params_retain);
             }
             free(gen->extern_registry);
         }
@@ -419,6 +420,38 @@ void enter_scope(CodeGenerator* gen) {
     }
 }
 
+// Heap-string-exit-free defer carrier (issue #420 follow-up).
+//
+// `push_heap_string_exit_free_defers` (codegen_stmt.c) pushes an
+// AST_EXPRESSION_STATEMENT whose annotation encodes the variable
+// name as `"heap_string_exit_free:<name>"`. The defer-emit loops
+// (here and in emit_all_defers_protected) detect the prefix and
+// render the conditional-free directly:
+//
+//     if (_heap_<name>) { free((void*)<name>); <name> = NULL; _heap_<name> = 0; }
+//
+// without descending through generate_statement (the carrier's
+// body is intentionally empty). The reset-after-free is defensive:
+// a defer can be drained from emit_all_defers at a return site;
+// the C var is dead from the caller's perspective either way, but
+// keeping the tracker honest means a re-emitted scope-exit drain
+// is idempotent. Returns 1 if the defer was a heap-exit-free
+// carrier and was rendered; 0 otherwise (caller falls through to
+// the standard `generate_statement` path).
+static int try_emit_heap_string_exit_free(CodeGenerator* gen, ASTNode* deferred) {
+    if (!deferred || !deferred->annotation) return 0;
+    const char* prefix = "heap_string_exit_free:";
+    size_t plen = strlen(prefix);
+    if (strncmp(deferred->annotation, prefix, plen) != 0) return 0;
+    const char* name = deferred->annotation + plen;
+    if (!*name) return 0;
+    print_indent(gen);
+    fprintf(gen->output,
+            "/* deferred */ if (_heap_%s) { free((void*)%s); %s = NULL; _heap_%s = 0; }\n",
+            name, name, name, name);
+    return 1;
+}
+
 // Emit deferred statements for current scope only (in reverse order)
 void emit_defers_for_scope(CodeGenerator* gen) {
     if (gen->scope_depth <= 0) return;
@@ -429,6 +462,7 @@ void emit_defers_for_scope(CodeGenerator* gen) {
     for (int i = gen->defer_count - 1; i >= scope_start; i--) {
         ASTNode* deferred = gen->defer_stack[i];
         if (deferred) {
+            if (try_emit_heap_string_exit_free(gen, deferred)) continue;
             print_indent(gen);
             fprintf(gen->output, "/* deferred */ ");
             generate_statement(gen, deferred);
@@ -507,6 +541,7 @@ void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int p
             fprintf(gen->output, "/* deferred (suppressed: escapes via return) */\n");
             continue;
         }
+        if (try_emit_heap_string_exit_free(gen, deferred)) continue;
         print_indent(gen);
         fprintf(gen->output, "/* deferred */ ");
         generate_statement(gen, deferred);
@@ -1520,6 +1555,22 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
         if (main->children[0] && main->children[0]->type == AST_BLOCK) {
             hoist_heap_string_trackers(gen, main->children[0]);
             mark_escaped_heap_string_vars(gen, main->children[0]);
+            /* Mirror the regular-function path in
+             * codegen_func.c::generate_function_definition: push a
+             * function-exit defer-free for every non-escaped
+             * hoisted heap-string variable so heap allocations
+             * surviving to main()'s tail are reclaimed at exit
+             * instead of leaking per-process. Without this the
+             * tracker would correctly free on every reassignment
+             * but the FINAL allocation in main() would never be
+             * freed — a constant per-program leak.
+             *
+             * Safety: the @retain annotations on string_retain/
+             * release/free (std/string/module.ae) mark vars that
+             * the user explicitly hands to a refcount call as
+             * escaped, so the auto-free here cannot double-free
+             * a buffer the user already released manually. */
+            push_heap_string_exit_free_defers(gen, main->children[0]);
         }
         generate_statement(gen, main->children[0]);
         gen->current_promoted_captures = prev_promoted;
