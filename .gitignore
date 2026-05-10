@@ -1,4 +1,12 @@
+# Build artifacts
 build/
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# System files
 .DS_Store
 .DS_Store?
 ._*
@@ -6,3 +14,10 @@ build/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
