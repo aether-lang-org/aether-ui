@@ -49,11 +49,12 @@ and Common Controls ship with Windows itself):
 Backend-level smoke tests (headless, no display needed) for any platform:
 
 ```bash
-make contrib-aether-ui-check    # widget + driver tests for current backend
-make benchmark-aether-ui        # microbenchmarks, CSV to stdout
+# widget + driver tests for current backend
+gcc tests/test_widgets.c aether_ui_gtk4.c -o build/test_widgets $(pkg-config --cflags --libs gtk4) -I. -Itests -lpthread -lm && ./build/test_widgets    # widget + driver tests for current backend
+# microbenchmarks, CSV to stdout        # microbenchmarks, CSV to stdout
 ```
 
-See [docs/aether-ui-windows.md](../../docs/aether-ui-windows.md) for
+See [docs/aether-ui-windows.md](docs/aether-ui-windows.md) for
 Windows-specific details (DPI model, dark mode, widget mappings, known
 limitations).
 
@@ -200,6 +201,7 @@ capabilities the test harness is denied, not the other way around.
 ## Status
 
 All groups (1–7) plus AetherUIDriver are implemented on every backend.
-`make contrib-aether-ui-check` runs the cross-platform smoke suite and, on
-Windows, the HTTP driver integration. `make benchmark-aether-ui` prints a
+`# widget + driver tests for current backend
+gcc tests/test_widgets.c aether_ui_gtk4.c -o build/test_widgets $(pkg-config --cflags --libs gtk4) -I. -Itests -lpthread -lm && ./build/test_widgets` runs the cross-platform smoke suite and, on
+Windows, the HTTP driver integration. `# microbenchmarks, CSV to stdout` prints a
 CSV of per-operation latencies.
