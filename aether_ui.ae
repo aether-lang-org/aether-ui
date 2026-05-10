@@ -6,7 +6,7 @@
 // parent widget handle so children are wired up automatically.
 //
 // Build with:
-//   ./contrib/aether_ui/build.sh your_app.ae build/your_app
+//   ./build.sh your_app.ae build/your_app
 
 exports (
     ALIGN_LEADING, ALIGN_CENTER, ALIGN_FILL, ALIGN_TOP, ALIGN_BOTTOM, ALIGN_CENTER_Y,

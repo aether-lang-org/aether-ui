@@ -3,7 +3,7 @@
 #
 # Usage:
 #   AETHER_UI_TEST_PORT=9222 ./build/calculator &
-#   ./contrib/aether_ui/test_calculator.sh
+#   ./test_calculator.sh
 #   kill %1
 
 set -e

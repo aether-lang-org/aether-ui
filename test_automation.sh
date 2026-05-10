@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./build/perry_testable &       # start the app
-#   ./contrib/aether_ui/test_automation.sh   # run the tests
+#   ./test_automation.sh   # run the tests
 #   kill %1                         # stop the app
 #
 # Requires: curl, jq (optional for pretty output)

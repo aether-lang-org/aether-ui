@@ -4,7 +4,7 @@
 //   - closure-as-operator (`op` holds a |a,b| closure; equals dispatches
 //     via `call(op, prev, num)` — no opcode ints or if/else chain)
 
-import contrib.aether_ui (
+import aether_ui (
     root_vstack, hstack, btn, button,
     bg_color, onclick, divider, text_bound,
     ui_state, ui_set, margin,

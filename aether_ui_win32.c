@@ -10,7 +10,7 @@
 // happens at the API boundary.
 //
 // This file is paired with aether_ui_backend.h. The Aether DSL layer
-// (contrib/aether_ui/module.ae) declares matching externs.
+// (module.ae) declares matching externs.
 
 #include "aether_ui_backend.h"
 

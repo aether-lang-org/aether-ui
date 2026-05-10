@@ -1,9 +1,9 @@
 // Aether UI system integration example — timers, sheets, dark mode.
 //
 // Build and run:
-//   ./contrib/aether_ui/build.sh contrib/aether_ui/example_system.ae build/perry_system
+//   ./build.sh example_system.ae build/perry_system
 
-import contrib.aether_ui
+import aether_ui
 
 extern println(s: string)
 

@@ -3,11 +3,11 @@
 // This header declares the cross-platform widget API that every Aether UI
 // backend must implement. The three backends are:
 //
-//   contrib/aether_ui/aether_ui_gtk4.c   — Linux, backed by GTK4
-//   contrib/aether_ui/aether_ui_macos.m  — macOS, backed by AppKit
-//   contrib/aether_ui/aether_ui_win32.c  — Windows, backed by USER32+GDI+
+//   aether_ui_gtk4.c   — Linux, backed by GTK4
+//   aether_ui_macos.m  — macOS, backed by AppKit
+//   aether_ui_win32.c  — Windows, backed by USER32+GDI+
 //
-// The Aether DSL layer (contrib/aether_ui/module.ae) declares matching
+// The Aether DSL layer (module.ae) declares matching
 // `extern` functions and is platform-neutral. Build-time backend selection
 // happens in build.sh based on `uname -s`.
 //

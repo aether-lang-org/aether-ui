@@ -5,11 +5,11 @@
 // of which label is longer. The "Sign In" button spans both columns.
 //
 // Build and run:
-//   ./contrib/aether_ui/build.sh contrib/aether_ui/example_grid.ae build/grid
+//   ./build.sh example_grid.ae build/grid
 //   ./build/grid          (Linux/macOS)
 //   ./build/grid.exe      (Windows)
 
-import contrib.aether_ui
+import aether_ui
 
 extern println(s: string)
 

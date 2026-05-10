@@ -10,17 +10,17 @@ set -u
 
 PORT="${1:-9233}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OS="$(uname -s)"
 
 # Build the driver app for whichever platform we're on.
 case "$OS" in
     MINGW*|MSYS*|CYGWIN*)
         gcc -O2 \
-            -I"$ROOT/contrib/aether_ui" \
+            -I"$ROOT" \
             "$SCRIPT_DIR/test_driver_app.c" \
-            "$ROOT/contrib/aether_ui/aether_ui_win32.c" \
-            "$ROOT/contrib/aether_ui/aether_ui_test_server.c" \
+            "$ROOT/aether_ui_win32.c" \
+            "$ROOT/aether_ui_test_server.c" \
             -o "$ROOT/build/test_driver_app.exe" \
             -luser32 -lgdi32 -lgdiplus -lcomctl32 -lcomdlg32 \
             -lshell32 -lole32 -luuid -ldwmapi -luxtheme \

@@ -25,12 +25,12 @@
 # Exits non-zero only when an implemented platform fails. Leaves no
 # background processes.
 #
-# Usage: ./contrib/aether_ui/ci.sh [port]
+# Usage: ./ci.sh [port]
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT="$SCRIPT_DIR"
 PORT="${1:-9222}"
 
 cd "$ROOT"
@@ -128,7 +128,7 @@ run_smoke_test() {
 
 echo "=== Phase 1: build all aether_ui examples ==="
 for ex in "${EXAMPLES[@]}"; do
-    src="contrib/aether_ui/example_${ex}.ae"
+    src="example_${ex}.ae"
     out="build/${ex}"
     if "$SCRIPT_DIR/build.sh" "$src" "$out" > "/tmp/ci_build_${ex}.log" 2>&1; then
         echo "  OK   $ex"

@@ -10,8 +10,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-AETHER_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-AETHERC="$AETHER_ROOT/build/aetherc"
+AETHER_ROOT="$(cd "$SCRIPT_DIR/../aether" && pwd)"
+AETHERC="aetherc"
 
 SOURCE="${1:?Usage: $0 <source.ae> [output_binary]}"
 OUTPUT="${2:-build/$(basename "$SOURCE" .ae)}"

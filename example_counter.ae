@@ -1,12 +1,12 @@
 // Aether UI counter example — reactive state with button callbacks.
 //
 // Build and run:
-//   ae build contrib/aether_ui/example_counter.ae \
-//       --extra contrib/aether_ui/aether_ui_gtk4.c \
+//   ae build example_counter.ae \
+//       --extra aether_ui_gtk4.c \
 //       $(pkg-config --cflags --libs gtk4) \
 //       -o build/perry_counter && ./build/perry_counter
 
-import contrib.aether_ui
+import aether_ui
 
 extern println(s: string)
 

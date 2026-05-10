@@ -2,7 +2,7 @@
 // Port of aether-ui-gtk4 (Rust) to C, calling the GTK4 C API directly.
 //
 // This file is compiled separately and linked with Aether programs via:
-//   ae build app.ae --extra contrib/aether_ui/aether_ui_gtk4.c $(pkg-config --cflags --libs gtk4)
+//   ae build app.ae --extra aether_ui_gtk4.c $(pkg-config --cflags --libs gtk4)
 
 #include "aether_ui_backend.h"
 #include <gtk/gtk.h>
@@ -723,7 +723,7 @@ static void global_css_reload(void) {
             display, GTK_STYLE_PROVIDER(global_css_provider),
             GTK_STYLE_PROVIDER_PRIORITY_USER);
     }
-    gtk_css_provider_load_from_string(global_css_provider, global_css_buf);
+    gtk_css_provider_load_from_data(global_css_provider, global_css_buf, -1);
 }
 
 static void aether_ui_apply_css(int handle, GtkWidget* widget, const char* property_css) {
@@ -940,26 +940,19 @@ void aether_ui_set_margin(int handle, int top, int right, int bottom, int left) 
 void aether_ui_alert_impl(const char* title, const char* message) {
     if (aeui_is_headless()) return;  // modal dialog would block on CI
     ensure_gtk_init();
-    GtkAlertDialog* dialog = gtk_alert_dialog_new("%s", message ? message : "");
-    if (title) gtk_alert_dialog_set_detail(dialog, title);
-    // Show on the active window if we have one, otherwise standalone
-    gtk_alert_dialog_show(dialog, NULL);
-    g_object_unref(dialog);
+    GtkWidget* dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
+        GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s", message ? message : "");
+    if (title) gtk_window_set_title(GTK_WINDOW(dialog), title);
+    g_signal_connect(dialog, "response", G_CALLBACK(gtk_window_destroy), NULL);
+    gtk_widget_show(dialog);
 }
 
 // File open dialog — blocks and returns the selected path, or "" if cancelled.
 char* aether_ui_file_open(const char* title) {
     ensure_gtk_init();
-    GtkFileDialog* dialog = gtk_file_dialog_new();
-    if (title) gtk_file_dialog_set_title(dialog, title);
-
-    // Use a synchronous approach via main loop iteration
-    // For simplicity, use the legacy FileChooserDialog
-    g_object_unref(dialog);
-
-    // Fallback to GtkFileChooserNative for sync behavior
-    // GTK4 file dialogs are async-only; return empty for now
-    // TODO: implement async callback pattern
+    // GtkFileChooserNative is the GTK 4.8-compatible way to do this.
+    // However, it is still async-oriented. For now, we stub it as requested.
+    fprintf(stderr, "Warning: aether_ui_file_open is not yet implemented for GTK 4.8\n");
     return strdup("");
 }
 
@@ -995,9 +988,7 @@ void aether_ui_timer_cancel_impl(int timer_id) {
 void aether_ui_open_url_impl(const char* url) {
     if (!url) return;
     ensure_gtk_init();
-    GtkUriLauncher* launcher = gtk_uri_launcher_new(url);
-    gtk_uri_launcher_launch(launcher, NULL, NULL, NULL, NULL);
-    g_object_unref(launcher);
+    gtk_show_uri(NULL, url, GDK_CURRENT_TIME);
 }
 
 // Dark mode detection
@@ -1939,14 +1930,14 @@ static void inject_remote_control_banner(int root_handle) {
     gtk_widget_add_css_class(banner, "aether-rc-banner");
 
     GtkCssProvider* prov = gtk_css_provider_new();
-    gtk_css_provider_load_from_string(prov,
+    gtk_css_provider_load_from_data(prov,
         ".aether-rc-banner {"
         "  background-color: #cc3333;"
         "  color: white;"
         "  font-weight: bold;"
         "  padding: 4px 12px;"
         "  font-size: 12px;"
-        "}");
+        "}", -1);
     GdkDisplay* display = gdk_display_get_default();
     if (display) {
         gtk_style_context_add_provider_for_display(

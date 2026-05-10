@@ -25,14 +25,14 @@ Portions Copyright (c) 2026 Perry Contributors, and portions Copyright (c) 2026 
 
 ```bash
 sudo apt install libgtk-4-dev   # Debian/Ubuntu
-./contrib/aether_ui/build.sh contrib/aether_ui/example_counter.ae build/counter
+./build.sh example_counter.ae build/counter
 ./build/counter
 ```
 
 ### macOS (AppKit)
 
 ```bash
-./contrib/aether_ui/build.sh contrib/aether_ui/example_counter.ae build/counter
+./build.sh example_counter.ae build/counter
 ./build/counter
 ```
 
@@ -42,7 +42,7 @@ Build from an MSYS2 MinGW64 shell (no extra dev libraries — USER32, GDI+
 and Common Controls ship with Windows itself):
 
 ```bash
-./contrib/aether_ui/build.sh contrib/aether_ui/example_counter.ae build/counter
+./build.sh example_counter.ae build/counter
 ./build/counter.exe
 ```
 
