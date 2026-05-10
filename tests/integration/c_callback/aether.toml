@@ -1,4 +1,0 @@
-[[bin]]
-name = "probe"
-path = "probe.ae"
-extra_sources = ["shim.c"]

@@ -1,6 +1,0 @@
-import std.host
-
-multiply(a: int, b: int) {
-    notify("Computed", 2)
-    return a * b
-}

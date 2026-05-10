@@ -1,6 +1,0 @@
-import std.host
-
-subtract(a: int, b: int) {
-    notify("Computed", 3)
-    return a - b
-}

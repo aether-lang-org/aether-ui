@@ -1,9 +1,0 @@
-.vscode/**
-.vscode-test/**
-.gitignore
-.editorconfig
-node_modules/**
-src/**
-tsconfig.json
-package-lock.json
-install.sh

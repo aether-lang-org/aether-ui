@@ -1,4 +1,0 @@
-[[bin]]
-name = "server"
-path = "server.ae"
-extra_sources = ["shim.c"]

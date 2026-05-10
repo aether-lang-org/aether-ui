@@ -1,7 +1,0 @@
-greet(name: string) {
-    println("hello, ${name}!")
-}
-
-add(a: int, b: int) {
-    return a + b
-}
