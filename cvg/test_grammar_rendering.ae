@@ -1,0 +1,143 @@
+// cvg/test_grammar_rendering.ae — regression test for grammar_rendering.ae.
+//
+// Covers the coordinate-mapping subset: transform-stack push/pop with
+// composition, map_x/map_y/map_length, map_point (currentTransform ∘
+// viewBoxTransform), parse_len_x/y with "%" against vb_width/vb_height,
+// and map_stroke_width's sub-pixel opacity factor.
+
+import grammar_rendering
+import grammar_context
+import transform
+import std.math
+
+extern exit(code: int)
+
+assert_near(label: string, got: float, want: float) {
+    if math.abs_float(got - want) < 0.0001 {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+// Build a context whose viewBox transform scales by 2 and offsets
+// by (10, 20) — i.e. viewBox→canvas: tx = 2x + 10, ty = 2y + 20.
+mk_test_ctx() -> ptr {
+    // viewBox: 0,0 → 100x50; canvas 200×100; scale 2; offset 10,20.
+    // Build the viewBox transform as scale(2) then translate(10, 20):
+    //   apply(0,0) = (10, 20)
+    //   apply(50, 25) = (110, 70)
+    vb_xform = transform.affine_mul(
+        transform.affine_translate(10.0, 20.0),
+        transform.affine_scale(2.0, 2.0)
+    )
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 50.0,     // viewBox
+        200.0, 100.0,              // canvas
+        2.0,                       // scale
+        10.0, 20.0,                // offset
+        vb_xform
+    )
+    return grammar_context.new_context(m)
+}
+
+main() {
+    println("=== test_grammar_rendering ===")
+
+    ctx = mk_test_ctx()
+
+    // ─── current_transform: starts at identity ───────────────────
+    ct0 = grammar_rendering.current_transform(ctx)
+    assert_eq_int("initial current_transform is identity",
+                   transform.affine_is_identity_p(ct0), 1)
+
+    // ─── map_x / map_y: viewBox-only projection ──────────────────
+    // tx = 2x + 10
+    assert_near("map_x(0)",  grammar_rendering.map_x(ctx, 0.0),  10.0)
+    assert_near("map_x(50)", grammar_rendering.map_x(ctx, 50.0), 110.0)
+    assert_near("map_y(0)",  grammar_rendering.map_y(ctx, 0.0),  20.0)
+    assert_near("map_y(25)", grammar_rendering.map_y(ctx, 25.0), 70.0)
+
+    // ─── map_length: scalar via mapping.scale ────────────────────
+    assert_near("map_length(1)", grammar_rendering.map_length(ctx, 1.0), 2.0)
+    assert_near("map_length(5)", grammar_rendering.map_length(ctx, 5.0), 10.0)
+
+    // ─── parse_len_x / parse_len_y: "%" → vb-dim fraction ────────
+    assert_near("parse_len_x('50%')",  grammar_rendering.parse_len_x(ctx, "50%"), 50.0)
+    assert_near("parse_len_x('100%')", grammar_rendering.parse_len_x(ctx, "100%"), 100.0)
+    assert_near("parse_len_y('50%')",  grammar_rendering.parse_len_y(ctx, "50%"), 25.0)
+    assert_near("parse_len_y('20%')",  grammar_rendering.parse_len_y(ctx, "20%"), 10.0)
+    // Plain numeric pass-through
+    assert_near("parse_len_x('42')",   grammar_rendering.parse_len_x(ctx, "42"),  42.0)
+    assert_near("parse_len_y('-3.5')", grammar_rendering.parse_len_y(ctx, "-3.5"), 0.0 - 3.5)
+
+    // ─── map_point: currentTransform ∘ vb_xform ──────────────────
+    // With identity currentTransform: map_point(x, y) == vb_xform(x, y).
+    p = grammar_rendering.map_point(ctx, 50.0, 25.0)
+    assert_near("map_point(50, 25).x", transform.pt_x(p), 110.0)
+    assert_near("map_point(50, 25).y", transform.pt_y(p), 70.0)
+
+    // ─── push_transform_str: parse + compose ─────────────────────
+    grammar_rendering.push_transform_str(ctx, "translate(5 5)")
+    assert_eq_int("transform-stack depth after push",
+                   grammar_context.transform_depth(ctx), 2)
+    // After translate(5,5) under identity parent: tx-only matrix.
+    // map_point(0, 0) now: currentTransform(0,0)=(5,5), then vb(5,5)=(20, 30).
+    p2 = grammar_rendering.map_point(ctx, 0.0, 0.0)
+    assert_near("map_point(0,0) after translate(5,5).x", transform.pt_x(p2), 20.0)
+    assert_near("map_point(0,0) after translate(5,5).y", transform.pt_y(p2), 30.0)
+
+    // Compose: another translate(3, 0) — total translate (8, 5).
+    grammar_rendering.push_transform_str(ctx, "translate(3 0)")
+    p3 = grammar_rendering.map_point(ctx, 0.0, 0.0)
+    assert_near("map_point(0,0) after compose.x", transform.pt_x(p3), 26.0)   // 2*(0+5+3) + 10 = 26
+    assert_near("map_point(0,0) after compose.y", transform.pt_y(p3), 30.0)   // 2*(0+5+0) + 20 = 30
+
+    // ─── pop_transform: returns to single-translate state ────────
+    grammar_rendering.pop_transform(ctx)
+    p4 = grammar_rendering.map_point(ctx, 0.0, 0.0)
+    assert_near("map_point(0,0) after pop.x", transform.pt_x(p4), 20.0)
+    assert_near("map_point(0,0) after pop.y", transform.pt_y(p4), 30.0)
+
+    // pop again — back to identity.
+    grammar_rendering.pop_transform(ctx)
+    assert_eq_int("stack depth = 1 after two pops",
+                   grammar_context.transform_depth(ctx), 1)
+    // Over-pop should not crash and not drop below 1 (identity preserved).
+    grammar_rendering.pop_transform(ctx)
+    assert_eq_int("stack depth = 1 after over-pop (preserved)",
+                   grammar_context.transform_depth(ctx), 1)
+
+    // ─── push_transform_none ────────────────────────────────────
+    grammar_rendering.push_transform_none(ctx)
+    assert_eq_int("depth = 2 after push_none", grammar_context.transform_depth(ctx), 2)
+    // Top should still be identity (parent was identity).
+    ct_after = grammar_rendering.current_transform(ctx)
+    assert_eq_int("push_none preserves identity",
+                   transform.affine_is_identity_p(ct_after), 1)
+    grammar_rendering.pop_transform(ctx)
+
+    // ─── map_stroke_width: sub-pixel → opacity factor ────────────
+    // mapping.scale = 2, averageScale of identity = 1.
+    // raw=0.4 → w = 0.4 * 2 * 1 = 0.8 (sub-pixel) → returns (1.0, 0.8)
+    sw_small = grammar_rendering.map_stroke_width(ctx, 0.4)
+    assert_near("sub-pixel width",  grammar_rendering.stroke_width(sw_small), 1.0)
+    assert_near("sub-pixel opacity", grammar_rendering.stroke_opacity_factor(sw_small), 0.8)
+
+    // raw=1.5 → w = 3.0 → returns (3.0, 1.0)
+    sw_big = grammar_rendering.map_stroke_width(ctx, 1.5)
+    assert_near("normal width",  grammar_rendering.stroke_width(sw_big), 3.0)
+    assert_near("normal opacity", grammar_rendering.stroke_opacity_factor(sw_big), 1.0)
+
+    println("=== test_grammar_rendering passed ===")
+}

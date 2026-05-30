@@ -38,7 +38,8 @@ exports (
     // (struct types don't cross module boundaries; ptr handles do).
     pt_x, pt_y,
     affine_a, affine_b, affine_c, affine_d, affine_e, affine_f,
-    affine_mul_p, affine_apply_p, affine_is_identity_p
+    affine_mul_p, affine_apply_p, affine_is_identity_p,
+    affine_average_scale_p
 )
 
 import std.regex
@@ -287,6 +288,10 @@ affine_apply_p(m: ptr, x: float, y: float) -> *Pt {
 
 affine_is_identity_p(m: ptr) -> int {
     return affine_is_identity(m as *Affine)
+}
+
+affine_average_scale_p(m: ptr) -> float {
+    return affine_average_scale(m as *Affine)
 }
 
 // ─── parse_transform: SVG transform string → *Affine ─────────────

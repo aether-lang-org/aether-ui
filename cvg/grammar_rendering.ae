@@ -1,0 +1,211 @@
+// cvg/grammar_rendering.ae — context coordinate mapping (Tier C).
+//
+// Port of cosyne/src/cvg/grammar-rendering.ts, coordinate-mapping
+// subset. The TS file prototype-augments CvgContext with many
+// concerns; this commit lands the pure-math coordinate piece. The
+// style-cascade subset (pushStyle/popStyle/currentStyle/resolveStyle)
+// is a separate follow-up since it needs the full SvgStyle struct
+// definition (15+ optional fields) and CSS class lookup plumbing.
+//
+// In scope this commit:
+//   - push_transform / pop_transform — pushes attrs.transform onto
+//     the context's transform_stack (uses parse_transform from
+//     transform.ae + composeTransforms semantics)
+//   - current_transform — peek the top of transform_stack
+//   - map_point(x, y) — apply currentTransform then viewBox mapping
+//   - map_x / map_y — viewBox-only projection (skips currentTransform)
+//   - map_length(l) — scalar length through viewBox scale
+//   - parse_len_x / parse_len_y — handles "50%" → vb_width * 0.5
+//   - map_stroke_width(raw) — viewBox-scaled width, returns *StrokeMap
+//     packing the scaled width + opacity factor (sub-pixel strokes
+//     render as 1px with reduced alpha)
+//
+// Out of scope this commit:
+//   - Style cascade (pushStyle/popStyle/currentStyle/resolveStyle)
+//   - CSS class system (registerCssStyle/getCssProps)
+//   - refresh() rendering loop
+//   - enableEvents / wireEventHandlers (event sub-system)
+//   - buildFillGradient (gradient construction)
+//   - indexNodes / setWalkNode (SVG node traversal)
+//   - remapPath / mapPathCoords (path-string rewriting; pure but
+//     verbose and not blocking other modules right now)
+
+exports (
+    push_transform_str, push_transform_none, pop_transform,
+    current_transform,
+    map_point,
+    map_x, map_y, map_length,
+    parse_len_x, parse_len_y,
+    map_stroke_width,
+    stroke_width, stroke_opacity_factor
+)
+
+import std.string
+import std.math
+import grammar_context
+import transform
+
+extern malloc(size: int) -> ptr
+
+// ─── Transform stack management ──────────────────────────────────
+//
+// TS source has `pushTransform(attrs)` that handles three cases:
+//   1. attrs.transform is a string → parse_transform(s)
+//   2. attrs.transform is a TransformSpec → transformFromSpec
+//   3. attrs.transform absent → push the parent unchanged
+//
+// The TransformSpec object case isn't yet ported (it'd need its
+// own struct; rare in real-world SVG, not blocking now). We split
+// the surface into two functions: push_transform_str (case 1) and
+// push_transform_none (case 3). Callers dispatch based on whether
+// attrs.transform is present.
+
+push_transform_str(ctx: ptr, transform_attr: string) {
+    parent = grammar_context.transform_top(ctx)
+    local_xform = transform.parse_transform(transform_attr)
+    composed = transform.affine_mul_p(parent, local_xform)
+    grammar_context.transform_push(ctx, composed)
+}
+
+push_transform_none(ctx: ptr) {
+    parent = grammar_context.transform_top(ctx)
+    grammar_context.transform_push(ctx, parent)
+}
+
+pop_transform(ctx: ptr) {
+    // TS preserves the bottom identity: only pop if depth > 1.
+    if grammar_context.transform_depth(ctx) > 1 {
+        grammar_context.transform_pop(ctx)
+    }
+}
+
+current_transform(ctx: ptr) -> ptr {
+    return grammar_context.transform_top(ctx)
+}
+
+// ─── map_point: currentTransform ∘ viewBox.transform ─────────────
+//
+// Returns a *Pt struct (transform.ae's Pt) with the projected
+// coordinates. Two-step composition: (x, y) → currentTransform →
+// viewBox transform.
+
+map_point(ctx: ptr, x: float, y: float) -> ptr {
+    ct = current_transform(ctx)
+    p1 = transform.affine_apply_p(ct, x, y)
+    mapping = grammar_context.ctx_mapping(ctx)
+    vb_xform = grammar_context.mapping_transform(mapping)
+    return transform.affine_apply_p(vb_xform, transform.pt_x(p1), transform.pt_y(p1))
+}
+
+// ─── map_x / map_y — viewBox-only ────────────────────────────────
+//
+// Project x or y through the viewBox transform ONLY (no
+// currentTransform). Matches the TS `mapX(x) = t.a * x + t.e`.
+
+map_x(ctx: ptr, x: float) -> float {
+    mapping = grammar_context.ctx_mapping(ctx)
+    vb_xform = grammar_context.mapping_transform(mapping)
+    return transform.affine_a(vb_xform) * x + transform.affine_e(vb_xform)
+}
+
+map_y(ctx: ptr, y: float) -> float {
+    mapping = grammar_context.ctx_mapping(ctx)
+    vb_xform = grammar_context.mapping_transform(mapping)
+    return transform.affine_d(vb_xform) * y + transform.affine_f(vb_xform)
+}
+
+map_length(ctx: ptr, l: float) -> float {
+    mapping = grammar_context.ctx_mapping(ctx)
+    return l * grammar_context.mapping_scale(mapping)
+}
+
+// ─── parse_len_x / parse_len_y ────────────────────────────────────
+//
+// Length parser that resolves "%" against the viewBox dimensions
+// (parse_len_x against vb.width, parse_len_y against vb.height).
+// Plain numeric values pass through unchanged (lenient prefix-scan,
+// same shape as bbox.ae's parse_length_to_px but viewBox-aware).
+
+// Local helper — pulls a numeric prefix from a length string.
+numeric_prefix(s: string) -> float {
+    len = string.length(s)
+    end = 0
+    while end < len {
+        c = string_char_at(s, end)
+        is_num = 0
+        if c >= 48 { if c <= 57 { is_num = 1 } }
+        if c == 46 { is_num = 1 }
+        if c == 43 { is_num = 1 }
+        if c == 45 { if end == 0 { is_num = 1 } }
+        if c == 101 {
+            if end + 1 < len {
+                nx = string_char_at(s, end + 1)
+                if nx >= 48 { if nx <= 57 { is_num = 1 } }
+                if nx == 43 { is_num = 1 }
+                if nx == 45 { is_num = 1 }
+            }
+        }
+        if c == 69 {
+            if end + 1 < len {
+                nx = string_char_at(s, end + 1)
+                if nx >= 48 { if nx <= 57 { is_num = 1 } }
+                if nx == 43 { is_num = 1 }
+                if nx == 45 { is_num = 1 }
+            }
+        }
+        if is_num == 0 { break }
+        end = end + 1
+    }
+    if end == 0 { return 0.0 }
+    n, e = string.to_double(string.substring(s, 0, end))
+    if e != "" { return 0.0 }
+    return n
+}
+
+parse_len_x(ctx: ptr, v: string) -> float {
+    n = numeric_prefix(v)
+    if string.ends_with(v, "%") == 1 {
+        mapping = grammar_context.ctx_mapping(ctx)
+        return (n / 100.0) * grammar_context.mapping_vb_width(mapping)
+    }
+    return n
+}
+
+parse_len_y(ctx: ptr, v: string) -> float {
+    n = numeric_prefix(v)
+    if string.ends_with(v, "%") == 1 {
+        mapping = grammar_context.ctx_mapping(ctx)
+        return (n / 100.0) * grammar_context.mapping_vb_height(mapping)
+    }
+    return n
+}
+
+// ─── map_stroke_width: scaled width + opacity factor ─────────────
+//
+// Returns *StrokeMap struct with width and opacity_factor fields.
+// Sub-pixel strokes (post-scaling) render at 1px with reduced alpha
+// (e.g. 0.38px input → 1px width, 38% opacity factor) — matches
+// browser anti-aliasing convention.
+
+struct StrokeMap {
+    width: float
+    opacity_factor: float
+}
+
+stroke_width(p: ptr) -> float          { v = p as *StrokeMap; return v.width }
+stroke_opacity_factor(p: ptr) -> float { v = p as *StrokeMap; return v.opacity_factor }
+
+mk_stroke_map(w: float, op: float) -> *StrokeMap {
+    s = malloc(16) as *StrokeMap
+    s.width = w
+    s.opacity_factor = op
+    return s
+}
+
+map_stroke_width(ctx: ptr, raw: float) -> ptr {
+    mapping = grammar_context.ctx_mapping(ctx)
+    ct = current_transform(ctx)
+    w = raw * grammar_context.mapping_scale(mapping) * transform.affine_average_scale_p(ct)
+    if w < 1.0 { return mk_stroke_map(1.0, w) }
+    return mk_stroke_map(w, 1.0)
+}
