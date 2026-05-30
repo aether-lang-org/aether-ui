@@ -21,6 +21,7 @@ are wired into `ci.sh` as **Phase 0** (runs even with no display).
 | **— Tier B —** | | | | |
 | blur | `blur.ts` (101 LoC) | `blur.ae` | `test_blur.ae` (25 asserts, property-based) | ✅ Two-pass separable Gaussian on RGBA `std.bytes` buffers. First downstream consumer of v0.192's `bytes.copy_from_bytes` (σ=0 fall-through). Uses libm `lrint` extern for fast float→int (no `as int` cast available). |
 | rasterize | `rasterize.ts` (307 LoC) | `rasterize.ae` | `test_rasterize.ae` (33 asserts) | ✅ Software rasterizer. `parse_color_to_rgba` handles hex (3/6/8-char), `rgb()`/`rgba()`, and a 40-entry named-color table. `fill_rect`, `fill_circle` (distance test), and `fill_path` with full scanline rendering: tokenize → cubic Bezier flattening (recursive subdivision, 0.5px tolerance) → edge collection → per-scanline x-crossings → insertion-sort → nonzero/evenodd span fill. `apply_clip_mask` for alpha multiplication. |
+| grammar_utils | `grammar-utils.ts` (305 LoC, ~50% subset) | `grammar_utils.ae` | `test_grammar_utils.ae` (49 asserts) | ✅ Tier-B subset: style-attr / length / font-size / dy-em / filter-region parsing, url(#id) extraction, preserveAspectRatio, points→path, path bounds, color-with-opacity emit (`rgba(R,G,B,α)`), base64 byte-encode (via `std.cryptography`). Tier-C resolve_* + transform_path_to_buffer deferred (need CvgContextLike). `normalize_color` deferred (needs `from_int_radix` + `pad_start` from `aether/cvg_asked_for.md`). |
 
 Also landed: **`parse_transform`** (deferred since the first commit; ~22
 extra assertions in `test_transform.ae`, total 52) + cross-module
@@ -34,9 +35,17 @@ boundaries, so a shared `types.ae` would be dead weight; each
 consumer declares the structs it uses locally and exposes accessor
 functions for cross-module reads.
 
-**Tier A complete.** **Tier B mostly done**: `blur.ae` + `rasterize.ae`
-landed. The rendering core is operational. Next: `grammar-utils.ae`
-(bridges into Tier C).
+**Tiers A and B complete.** The rendering core is operational and the
+Tier-B utility helpers are in place. **Total: 8 modules, 367
+assertions, all passing in Phase 0** (pure-Aether, no GTK/display
+dependency).
+
+Next: Tier C — the DSL surface (`grammar-element`, `grammar-context`,
+`grammar-shapes`, `grammar-defs`, `grammar-rendering`,
+`grammar-factories`) and then Tier D integration (`loader`,
+`transpiler`). Tier C is bigger (4× the LoC of Tier B) and involves
+the trailing-block builder pattern + event/animation closures, so
+expect more idiom discovery.
 
 ## Running a test by hand
 
@@ -131,3 +140,20 @@ reference. Capturing them here so the next module doesn't rediscover them.
   (`while remaining > 0.5 { count += 1; remaining -= 1.0 }`) works
   for small bounded counts (kernel size derivation: ~10 iterations
   once per blur) but is O(n) so DO NOT use inside per-pixel loops.
+- **Heap string in a struct field across a function return needs
+  explicit `string_retain`.** Pure-local strings get auto-released
+  on function exit via Aether's per-scope `_heap_<field>` tracking.
+  When you build a struct in function `make_x()` whose string fields
+  come from `string.copy` / `regex.capture` / similar heap producers,
+  the locals are auto-released as the function exits — leaving the
+  struct fields dangling. Symptom: garbled bytes when reading the
+  field at the caller. Fix: `string_retain(local)` before storing into
+  the malloc'd struct, OR before the function returns. See
+  `grammar_utils.parse_preserve_aspect_ratio` for the pattern. (The
+  struct-with-`string`-field auto-destructor described in the Aether
+  LLM.md is for *stack* structs; malloc'd structs have no destructor,
+  so retains are the caller's responsibility.)
+- **`std.cryptography` (OpenSSL-backed base64, hashes) needs
+  `pkg-config --libs openssl` on the link line** — same gap as
+  `std.regex` needing `-lpcre2-8`. Both filed in
+  `aether/regex-lib-fix.md`. CI's Phase-0 block adds both.

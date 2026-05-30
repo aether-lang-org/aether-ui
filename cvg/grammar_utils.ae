@@ -1,0 +1,419 @@
+// cvg/grammar_utils.ae — Tier B helpers: parsing, geometry,
+// color emit. Port of cosyne/src/cvg/grammar-utils.ts.
+//
+// Tier-B subset (in scope here):
+//   parse_style_attr(s)          — inline `style="k:v;k:v"` → map
+//   parse_length_to_px(s)        — CSS length with cm/mm/in/pt/pc
+//   parse_font_size(s)           — px / pt / em
+//   parse_dy_em(s, fontSize)     — em-relative dy
+//   parse_filter_region(s, def)  — percentage or fraction
+//   extract_url_id(s)            — url(#id) → id
+//   parse_preserve_aspect_ratio  — "xMidYMid meet" → {alignX,alignY,meetOrSlice}
+//   points_to_path(s, closed)    — polygon points → SVG d
+//   compute_path_bounds(s)       — walk path numbers → AABB
+//   apply_opacity_to_color(c, α) — color string → rgba(r,g,b,α)
+//   base64_encode_bytes(buf, n)  — std.bytes → base64 string
+//
+// Out of scope (waits for Tier C or pending Aether asks):
+//   normalize_color: rgb(r,g,b) → #RRGGBB needs from_int_radix +
+//     pad_start, both still pending in aether/cvg_asked_for.md.
+//   resolve_fill_color / resolve_stroke_color / effective_alpha /
+//     resolve_gradient_* / transform_path_to_buffer: all need
+//     CvgContextLike (gradient lookup / viewBox mapping). Tier C.
+
+exports (
+    parse_style_attr, parse_length_to_px, parse_font_size,
+    parse_dy_em, parse_filter_region,
+    extract_url_id, parse_preserve_aspect_ratio,
+    points_to_path, compute_path_bounds, apply_opacity_to_color,
+    base64_encode_bytes,
+    // Accessors for the AspectRatio struct and Bounds4 struct.
+    aspect_align_x, aspect_align_y, aspect_meet_or_slice,
+    bounds4_min_x, bounds4_min_y, bounds4_max_x, bounds4_max_y
+)
+
+import std.string
+import std.map
+import std.regex
+import std.bytes
+import std.cryptography
+import rasterize
+
+extern malloc(size: int) -> ptr
+
+// ─── parse_style_attr ────────────────────────────────────────────
+//
+// Split `key1: val1; key2: val2` into a std.map. Whitespace around
+// keys and values is trimmed; entries without `:` are skipped.
+
+parse_style_attr(s: string) -> ptr {
+    out = map.new()
+    if string.length(s) == 0 { return out }
+    arr = string_split(s, ";")
+    n = string_array_size(arr)
+    i = 0
+    while i < n {
+        part_ptr = string_array_get(arr, i)
+        // part_ptr is an AetherString*; pass through interpolation-style
+        // (the ptr is the string).
+        part = part_ptr
+        colon = string.index_of(part, ":")
+        if colon >= 0 {
+            key = string.trim(string.substring(part, 0, colon))
+            val = string.trim(string.substring(part, colon + 1, string.length(part)))
+            if string.length(key) > 0 {
+                if string.length(val) > 0 {
+                    e = map.put(out, key, val)
+                    if string.length(e) > 0 { } // ignored
+                }
+            }
+        }
+        i = i + 1
+    }
+    string_array_free(arr)
+    return out
+}
+
+// ─── parse_length_to_px ──────────────────────────────────────────
+//
+// Same shape as bbox.ae's helper (kept here too because grammar_utils
+// is the long-term home; bbox imported a private copy). Lenient: read
+// the leading numeric prefix, then check the trailing unit.
+
+parse_length_to_px(v: string) -> float {
+    s = string.trim(v)
+    if string.length(s) == 0 { return 0.0 }
+    n = numeric_prefix(s)
+    if string.ends_with(s, "cm") == 1 { return n * 37.7953 }
+    if string.ends_with(s, "mm") == 1 { return n * 3.77953 }
+    if string.ends_with(s, "in") == 1 { return n * 96.0 }
+    if string.ends_with(s, "pt") == 1 { return n * 1.333 }
+    if string.ends_with(s, "pc") == 1 { return n * 16.0 }
+    return n
+}
+
+// ─── parse_font_size ─────────────────────────────────────────────
+//
+// Font sizes use pt/px/em (not cm/mm/in/pc, per the TS source).
+// em-relative is resolved against a 16px base.
+
+parse_font_size(v: string) -> float {
+    s = string.trim(v)
+    if string.length(s) == 0 { return 0.0 }
+    // Strip numeric prefix.
+    n = numeric_prefix(s)
+    if n == 0.0 { return 0.0 }
+    if string.ends_with(s, "pt") == 1 { return n * 1.333 }
+    if string.ends_with(s, "em") == 1 { return n * 16.0 }
+    if string.ends_with(s, "px") == 1 { return n }
+    return n
+}
+
+// Lenient float prefix-parse. Helper used by font_size and dy_em.
+// Accepts e/E only when followed by a digit or sign — otherwise the
+// trailing 'e' in `1em` would be eaten as a (broken) exponent.
+numeric_prefix(s: string) -> float {
+    len = string.length(s)
+    end = 0
+    while end < len {
+        c = string_char_at(s, end)
+        is_num = 0
+        if c >= 48 { if c <= 57 { is_num = 1 } }
+        if c == 46 { is_num = 1 }
+        if c == 43 { is_num = 1 }
+        if c == 45 { if end == 0 { is_num = 1 } }
+        if c == 101 {
+            // Only accept 'e' as exponent if next char is digit or sign.
+            if end + 1 < len {
+                nx = string_char_at(s, end + 1)
+                if nx >= 48 { if nx <= 57 { is_num = 1 } }
+                if nx == 43 { is_num = 1 }
+                if nx == 45 { is_num = 1 }
+            }
+        }
+        if c == 69 {   // 'E'
+            if end + 1 < len {
+                nx = string_char_at(s, end + 1)
+                if nx >= 48 { if nx <= 57 { is_num = 1 } }
+                if nx == 43 { is_num = 1 }
+                if nx == 45 { is_num = 1 }
+            }
+        }
+        if is_num == 0 { break }
+        end = end + 1
+    }
+    if end == 0 { return 0.0 }
+    n, e = string.to_double(string.substring(s, 0, end))
+    if e != "" { return 0.0 }
+    return n
+}
+
+// ─── parse_dy_em ─────────────────────────────────────────────────
+//
+// "1.1em" → 1.1 * fontSize; plain number → number.
+
+parse_dy_em(v: string, font_size: float) -> float {
+    s = string.trim(v)
+    n = numeric_prefix(s)
+    if string.ends_with(s, "em") == 1 { return n * font_size }
+    return n
+}
+
+// ─── parse_filter_region ─────────────────────────────────────────
+//
+// SVG <filter> region attrs (x/y/width/height) accept either a
+// percentage ("50%" → 0.5) or a fraction. Empty/missing → fallback.
+
+parse_filter_region(v: string, fallback: float) -> float {
+    s = string.trim(v)
+    if string.length(s) == 0 { return fallback }
+    if string.ends_with(s, "%") == 1 {
+        n = numeric_prefix(s)
+        return n / 100.0
+    }
+    return parse_length_to_px(s)
+}
+
+// ─── extract_url_id ──────────────────────────────────────────────
+//
+// "url(#foo)" → "foo", " url ( #bar )" → "bar" (regex tolerates
+// whitespace). Returns "" if no match.
+
+extract_url_id(s: string) -> string {
+    re, e = regex.compile("url\\(\\s*#([^)\\s]+)\\s*\\)")
+    if e != "" { return "" }
+    caps, ce = regex.captures(re, s)
+    if ce != "" { regex.free(re); return "" }
+    if caps == null { regex.free(re); return "" }
+    // Copy + retain before free (see parse_preserve_aspect_ratio):
+    // the captures-borrowed string is freed with captures_free, and
+    // the local string.copy result would be auto-released on
+    // function exit if not retained.
+    id = string.copy(regex.capture(caps, 1))
+    string_retain(id)
+    regex.captures_free(caps)
+    regex.free(re)
+    return id
+}
+
+// ─── parse_preserve_aspect_ratio ─────────────────────────────────
+//
+// "xMidYMid meet" → {alignX="Mid", alignY="Mid", meetOrSlice="meet"}
+// Defaults: xMidYMid meet.
+
+struct AspectRatio {
+    align_x: string         // "Min" | "Mid" | "Max"
+    align_y: string         // "Min" | "Mid" | "Max"
+    meet_or_slice: string   // "meet" | "slice"
+}
+
+aspect_align_x(p: ptr) -> string { v = p as *AspectRatio; return v.align_x }
+aspect_align_y(p: ptr) -> string { v = p as *AspectRatio; return v.align_y }
+aspect_meet_or_slice(p: ptr) -> string { v = p as *AspectRatio; return v.meet_or_slice }
+
+mk_aspect(ax: string, ay: string, mos: string) -> *AspectRatio {
+    p = malloc(48) as *AspectRatio
+    p.align_x = ax
+    p.align_y = ay
+    p.meet_or_slice = mos
+    return p
+}
+
+parse_preserve_aspect_ratio(s: string) -> *AspectRatio {
+    t = string.trim(s)
+    if string.length(t) == 0 {
+        m = string.copy("Mid"); m2 = string.copy("Mid"); mt = string.copy("meet")
+        string_retain(m); string_retain(m2); string_retain(mt)
+        return mk_aspect(m, m2, mt)
+    }
+
+    // Split on whitespace; first token is alignment, second is meet/slice.
+    re, _ = regex.compile("\\s+")
+    parts, _ = regex.replace_all(re, t, " ")
+    regex.free(re)
+
+    sp = string.index_of(parts, " ")
+    align = parts
+    mos = "meet"
+    if sp >= 0 {
+        align = string.substring(parts, 0, sp)
+        mos = string.substring(parts, sp + 1, string.length(parts))
+    }
+
+    // Match "xMidYMid"-style alignment via regex captures.
+    a_re, _ = regex.compile("^x(Min|Mid|Max)Y(Min|Mid|Max)$")
+    a_caps, _ = regex.captures(a_re, align)
+    if a_caps == null {
+        regex.free(a_re)
+        m = string.copy("Mid"); m2 = string.copy("Mid")
+        string_retain(m); string_retain(m2); string_retain(mos)
+        return mk_aspect(m, m2, mos)
+    }
+    if regex.capture_count(a_caps) < 3 {
+        regex.captures_free(a_caps)
+        regex.free(a_re)
+        m = string.copy("Mid"); m2 = string.copy("Mid")
+        string_retain(m); string_retain(m2); string_retain(mos)
+        return mk_aspect(m, m2, mos)
+    }
+    // Copy + retain captures before free — regex.capture returns a
+    // borrow owned by the captures handle. string.copy creates a
+    // heap dup, but Aether's function-exit reclamation would free
+    // the *local* heap string when this fn returns; retain keeps
+    // it alive in the struct that crosses the return.
+    ax = string.copy(regex.capture(a_caps, 1))
+    ay = string.copy(regex.capture(a_caps, 2))
+    string_retain(ax)
+    string_retain(ay)
+    string_retain(mos)
+    regex.captures_free(a_caps)
+    regex.free(a_re)
+    return mk_aspect(ax, ay, mos)
+}
+
+// ─── points_to_path ──────────────────────────────────────────────
+//
+// "10,20 30,40 50,60" → "M 10 20 L 30 40 L 50 60" (Z if closed).
+// Polygon → closed; polyline → open.
+
+points_to_path(points: string, closed: int) -> string {
+    re, _ = regex.compile("[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?")
+    fa, _ = regex.find_all(re, points)
+    n = regex.find_all_count(fa)
+    if n < 2 {
+        regex.find_all_free(fa)
+        regex.free(re)
+        return ""
+    }
+    // First pair → M, subsequent → L.
+    s0 = regex.find_all_start(fa, 0); e0 = regex.find_all_end(fa, 0)
+    s1 = regex.find_all_start(fa, 1); e1 = regex.find_all_end(fa, 1)
+    tok0 = string.substring(points, s0, e0)
+    tok1 = string.substring(points, s1, e1)
+    out = string.concat("M ", string.concat(tok0, string.concat(" ", tok1)))
+
+    i = 2
+    while i + 1 < n {
+        si = regex.find_all_start(fa, i); ei = regex.find_all_end(fa, i)
+        sj = regex.find_all_start(fa, i + 1); ej = regex.find_all_end(fa, i + 1)
+        ti = string.substring(points, si, ei)
+        tj = string.substring(points, sj, ej)
+        out = string.concat(out, string.concat(" L ", string.concat(ti, string.concat(" ", tj))))
+        i = i + 2
+    }
+    if closed == 1 { out = string.concat(out, " Z") }
+    regex.find_all_free(fa)
+    regex.free(re)
+    return out
+}
+
+// ─── compute_path_bounds ─────────────────────────────────────────
+//
+// Walk every numeric coordinate in a normalised path string and
+// compute the AABB. Returns *Bounds4 (small 4-float struct).
+
+struct Bounds4 {
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+}
+
+bounds4_min_x(p: ptr) -> float { v = p as *Bounds4; return v.min_x }
+bounds4_min_y(p: ptr) -> float { v = p as *Bounds4; return v.min_y }
+bounds4_max_x(p: ptr) -> float { v = p as *Bounds4; return v.max_x }
+bounds4_max_y(p: ptr) -> float { v = p as *Bounds4; return v.max_y }
+
+mk_bounds4(mnx: float, mny: float, mxx: float, mxy: float) -> *Bounds4 {
+    p = malloc(32) as *Bounds4
+    p.min_x = mnx; p.min_y = mny; p.max_x = mxx; p.max_y = mxy
+    return p
+}
+
+compute_path_bounds(path_str: string) -> *Bounds4 {
+    re, _ = regex.compile("[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?")
+    fa, _ = regex.find_all(re, path_str)
+    n = regex.find_all_count(fa)
+    if n < 2 {
+        regex.find_all_free(fa)
+        regex.free(re)
+        return mk_bounds4(0.0, 0.0, 0.0, 0.0)
+    }
+    has = 0
+    mnx = 0.0; mny = 0.0; mxx = 0.0; mxy = 0.0
+    i = 0
+    while i + 1 < n {
+        sx = regex.find_all_start(fa, i); ex = regex.find_all_end(fa, i)
+        sy = regex.find_all_start(fa, i + 1); ey = regex.find_all_end(fa, i + 1)
+        px, _ = string.to_double(string.substring(path_str, sx, ex))
+        py, _ = string.to_double(string.substring(path_str, sy, ey))
+        if has == 0 {
+            mnx = px; mny = py; mxx = px; mxy = py
+            has = 1
+        } else {
+            if px < mnx { mnx = px }
+            if py < mny { mny = py }
+            if px > mxx { mxx = px }
+            if py > mxy { mxy = py }
+        }
+        i = i + 2
+    }
+    regex.find_all_free(fa)
+    regex.free(re)
+    return mk_bounds4(mnx, mny, mxx, mxy)
+}
+
+// ─── apply_opacity_to_color ──────────────────────────────────────
+//
+// "#80c0ff" + 0.5 → "rgba(128, 192, 255, 0.5)".
+// Uses rasterize.parse_color_to_rgba so the color-string vocabulary
+// is unified (hex / rgb()/rgba() / named all funnel through one
+// parser). Re-emits as decimal rgba(...).
+//
+// Note the TS source's `applyOpacityToColor` accepts a 0..1 alpha
+// and bakes it into the rgba() string; we use string.format for
+// the emit and string.from_float for the alpha — the latter has
+// 6-sig-fig precision per CHANGELOG, but for alpha values (~3 digits
+// typical) that's fine.
+
+apply_opacity_to_color(color: string, opacity: float) -> string {
+    rgba = rasterize.parse_color_to_rgba(color)
+    r = rasterize.rgba_r(rgba)
+    g = rasterize.rgba_g(rgba)
+    b = rasterize.rgba_b(rgba)
+    // Build "rgba(R, G, B, OPACITY)" with string.format.
+    args = std_list_for_format_color(r, g, b, opacity)
+    out = string.format("rgba({}, {}, {}, {})", args)
+    return out
+}
+
+// Helper: pack the four format args into a std.list of pre-stringified
+// values (string.format wants AetherString* values in the list).
+import std.list
+
+std_list_for_format_color(r: int, g: int, b: int, opacity: float) -> ptr {
+    args = list.new()
+    _ = list.add(args, string.from_int(r))
+    _ = list.add(args, string.from_int(g))
+    _ = list.add(args, string.from_int(b))
+    _ = list.add(args, string.from_float(opacity))
+    return args
+}
+
+// ─── base64_encode_bytes ─────────────────────────────────────────
+//
+// std.bytes buffer → base64 (RFC 4648, padded). Wraps
+// std.cryptography.base64_encode_padded by first finalising the bytes
+// buffer into a string. `len` is the logical pixel data length; the
+// buffer must contain that many bytes.
+
+base64_encode_bytes(buf: ptr, len: int) -> string {
+    // bytes.finish (a.k.a. aether_bytes_finish) hands back a heap
+    // string of the buffer's first `length` bytes. The buffer is
+    // consumed (don't reuse `buf` after). For non-consuming use,
+    // copy first.
+    s = bytes.finish(buf, len)
+    out, e = cryptography.base64_encode_padded(s, len)
+    if e != "" { return "" }
+    return out
+}

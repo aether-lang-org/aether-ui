@@ -1,0 +1,160 @@
+// cvg/test_grammar_utils.ae — regression test for grammar_utils.ae.
+//
+// Covers the Tier-B-scope subset of grammar-utils.ts: parsing helpers,
+// geometry conversions, and color emit. Skips the resolve_* /
+// transform_path_to_buffer functions (Tier C — need CvgContextLike).
+
+import grammar_utils
+import std.map
+import std.string
+import std.bytes
+import std.math
+
+extern exit(code: int)
+
+EPS() -> float { return 0.0001 }
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("  PASS: ${label} ('${got}')")
+    } else {
+        println("  FAIL: ${label}: got '${got}' want '${want}'")
+        exit(1)
+    }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_near(label: string, got: float, want: float) {
+    if math.abs_float(got - want) < EPS() {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+main() {
+    println("=== test_grammar_utils ===")
+
+    // ─── parse_style_attr ────────────────────────────────────────
+    sty = grammar_utils.parse_style_attr("fill: red; stroke-width: 2; opacity:0.5")
+    assert_eq_int("style count", map.size(sty), 3)
+    v1, _ = map.get(sty, "fill")
+    assert_eq_str("style fill", v1, "red")
+    v2, _ = map.get(sty, "stroke-width")
+    assert_eq_str("style stroke-width", v2, "2")
+    v3, _ = map.get(sty, "opacity")
+    assert_eq_str("style opacity", v3, "0.5")
+
+    // Empty string → empty map
+    sty_empty = grammar_utils.parse_style_attr("")
+    assert_eq_int("empty style count", map.size(sty_empty), 0)
+
+    // Whitespace-only entries skipped
+    sty_ws = grammar_utils.parse_style_attr(" ; fill: blue ; ")
+    assert_eq_int("style trim", map.size(sty_ws), 1)
+    v4, _ = map.get(sty_ws, "fill")
+    assert_eq_str("style trim fill", v4, "blue")
+
+    // ─── parse_length_to_px ──────────────────────────────────────
+    assert_near("plain 12.5",     grammar_utils.parse_length_to_px("12.5"),     12.5)
+    assert_near("12px",           grammar_utils.parse_length_to_px("12px"),     12.0)
+    assert_near("1in = 96",       grammar_utils.parse_length_to_px("1in"),      96.0)
+    assert_near("2cm ≈ 75.59",    grammar_utils.parse_length_to_px("2cm"),      75.5906)
+    assert_near("10mm ≈ 37.79",   grammar_utils.parse_length_to_px("10mm"),     37.7953)
+    assert_near("1pt ≈ 1.333",    grammar_utils.parse_length_to_px("1pt"),      1.333)
+    assert_near("1pc = 16",       grammar_utils.parse_length_to_px("1pc"),      16.0)
+    assert_near("garbage = 0",    grammar_utils.parse_length_to_px("abc"),      0.0)
+
+    // ─── parse_font_size ─────────────────────────────────────────
+    assert_near("font 14",        grammar_utils.parse_font_size("14"),    14.0)
+    assert_near("font 14px",      grammar_utils.parse_font_size("14px"),  14.0)
+    assert_near("font 12pt",      grammar_utils.parse_font_size("12pt"),  15.996)  // 12 * 1.333
+    assert_near("font 0.5em",     grammar_utils.parse_font_size("0.5em"), 8.0)   // 0.5 * 16
+
+    // ─── parse_dy_em ─────────────────────────────────────────────
+    assert_near("dy 1.1em base 20", grammar_utils.parse_dy_em("1.1em", 20.0), 22.0)
+    assert_near("dy 5 (plain)",     grammar_utils.parse_dy_em("5", 20.0),     5.0)
+    assert_near("dy -2 (plain)",    grammar_utils.parse_dy_em("-2", 20.0),    0.0 - 2.0)
+
+    // ─── parse_filter_region ─────────────────────────────────────
+    assert_near("region 50%",   grammar_utils.parse_filter_region("50%", 0.0), 0.5)
+    assert_near("region 1.5",   grammar_utils.parse_filter_region("1.5", 0.0), 1.5)
+    assert_near("region empty", grammar_utils.parse_filter_region("", 0.25),   0.25)
+
+    // ─── extract_url_id ──────────────────────────────────────────
+    assert_eq_str("url id simple", grammar_utils.extract_url_id("url(#grad1)"), "grad1")
+    assert_eq_str("url id WS",     grammar_utils.extract_url_id("url(  #my-id  )"), "my-id")
+    assert_eq_str("url no match",  grammar_utils.extract_url_id("red"), "")
+
+    // ─── parse_preserve_aspect_ratio ─────────────────────────────
+    ar1 = grammar_utils.parse_preserve_aspect_ratio("xMidYMid meet")
+    assert_eq_str("PAR alignX", grammar_utils.aspect_align_x(ar1), "Mid")
+    assert_eq_str("PAR alignY", grammar_utils.aspect_align_y(ar1), "Mid")
+    assert_eq_str("PAR mos",    grammar_utils.aspect_meet_or_slice(ar1), "meet")
+
+    ar2 = grammar_utils.parse_preserve_aspect_ratio("xMinYMax slice")
+    assert_eq_str("PAR alignX 2", grammar_utils.aspect_align_x(ar2), "Min")
+    assert_eq_str("PAR alignY 2", grammar_utils.aspect_align_y(ar2), "Max")
+    assert_eq_str("PAR mos 2",    grammar_utils.aspect_meet_or_slice(ar2), "slice")
+
+    // Default fallback for invalid alignment
+    ar3 = grammar_utils.parse_preserve_aspect_ratio("garbage meet")
+    assert_eq_str("PAR fallback alignX", grammar_utils.aspect_align_x(ar3), "Mid")
+    assert_eq_str("PAR fallback alignY", grammar_utils.aspect_align_y(ar3), "Mid")
+
+    // Empty → all defaults
+    ar4 = grammar_utils.parse_preserve_aspect_ratio("")
+    assert_eq_str("PAR empty alignX", grammar_utils.aspect_align_x(ar4), "Mid")
+
+    // ─── points_to_path ──────────────────────────────────────────
+    // Polygon (closed) — adds " Z".
+    p1 = grammar_utils.points_to_path("0,0 10,0 5,8.66", 1)
+    assert_eq_str("polygon path", p1, "M 0 0 L 10 0 L 5 8.66 Z")
+
+    // Polyline (open) — no Z.
+    p2 = grammar_utils.points_to_path("1 2 3 4 5 6", 0)
+    assert_eq_str("polyline path", p2, "M 1 2 L 3 4 L 5 6")
+
+    // Too few points
+    p3 = grammar_utils.points_to_path("5", 0)
+    assert_eq_str("points-too-few", p3, "")
+
+    // ─── compute_path_bounds ─────────────────────────────────────
+    b1 = grammar_utils.compute_path_bounds("M 10 20 L 30 5 L -2 50")
+    assert_near("path-bb minX", grammar_utils.bounds4_min_x(b1), 0.0 - 2.0)
+    assert_near("path-bb minY", grammar_utils.bounds4_min_y(b1), 5.0)
+    assert_near("path-bb maxX", grammar_utils.bounds4_max_x(b1), 30.0)
+    assert_near("path-bb maxY", grammar_utils.bounds4_max_y(b1), 50.0)
+
+    // Empty path → all zeros
+    b2 = grammar_utils.compute_path_bounds("")
+    assert_near("empty-path minX", grammar_utils.bounds4_min_x(b2), 0.0)
+
+    // ─── apply_opacity_to_color ──────────────────────────────────
+    s1 = grammar_utils.apply_opacity_to_color("#ff0000", 0.5)
+    assert_eq_str("hex+α", s1, "rgba(255, 0, 0, 0.5)")
+    s2 = grammar_utils.apply_opacity_to_color("blue", 1.0)
+    assert_eq_str("named+α", s2, "rgba(0, 0, 255, 1)")
+    s3 = grammar_utils.apply_opacity_to_color("rgb(10, 20, 30)", 0.75)
+    assert_eq_str("rgb+α", s3, "rgba(10, 20, 30, 0.75)")
+
+    // ─── base64_encode_bytes ─────────────────────────────────────
+    // Encode the byte sequence [72, 105, 33] ("Hi!") — known answer "SGkh".
+    buf = bytes.new(8)
+    bytes.set(buf, 0, 72)
+    bytes.set(buf, 1, 105)
+    bytes.set(buf, 2, 33)
+    b64 = grammar_utils.base64_encode_bytes(buf, 3)
+    assert_eq_str("base64 Hi!", b64, "SGkh")
+
+    println("=== test_grammar_utils passed ===")
+}
