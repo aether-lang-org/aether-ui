@@ -1,0 +1,183 @@
+// aevg/grammar_reactive.ae — re-evaluate per-element property bindings.
+//
+// Port of the per-element binding loop inside CvgContext.refresh()
+// (grammar-rendering.ts, lines ~52-95). Driven by the tracked-elements
+// list on the context; for each visible non-destroyed element, fetch
+// each binding closure (if set) and invoke it. The results would
+// flow into backend redispatch in the real renderer; under the
+// recording stub, the test verifies the closures were invoked.
+//
+// Binding semantics (matches TS):
+//
+//   - `.when()` predicate is evaluated *first* — if it returns 0,
+//     element is hidden via element_set_visible(0) and bindings
+//     for that element are skipped this refresh.
+//   - `.bindFill` returns string (a new fill color).
+//   - `.bindStroke` returns ptr — a {color, width} map. In the TS,
+//     stroke_fn returns `{ color: string; width?: number }`. We
+//     map this to a std.map string→string with keys "color" and
+//     "width" (width as a from_float-rendered string). The
+//     reactive call casts and reads the keys back. This sidesteps
+//     the need for a custom struct return.
+//   - `.bindOpacity` returns float.
+//   - `.bindText` returns string.
+//   - `.bindPos` returns ptr — a std.map string→float of property
+//     names ("cx", "cy", "x", "y", "r", "width", "height", etc.)
+//     to numeric values.
+//
+// Float-returning closures (opacity, plus float values inside pos)
+// remain at risk of the layer-2 codegen bug
+// (aether/fn_return_float_cast.md / fn_bare_name_env_shift.md)
+// when passed as bare-named functions. Always-`callback { … }` is
+// the dodge. The reactive surface itself only takes the closure
+// ptr (already boxed at the element_bind_* site).
+//
+// The `.refresh()` callback evaluates bindings; it does not store
+// results on the element. Phase 1 backend wiring will add caching
+// + redispatch.
+//
+// Test convention: closure side-effects into a captured std.list
+// to log invocation order and arg values, which the test inspects.
+
+exports (
+    refresh_element_bindings,
+    refresh_all_elements,
+    invoke_fill_binding,
+    invoke_stroke_binding,
+    invoke_opacity_binding,
+    invoke_text_binding,
+    invoke_pos_binding,
+    invoke_when_predicate
+)
+
+import std.list
+import std.string
+import grammar_element
+import grammar_context
+
+// ─── Per-element refresh ─────────────────────────────────────────
+//
+// Returns a small bitmask of "what fired" so tests can verify
+// without reaching into the closures' side effects:
+//   bit 0: when() was evaluated (and survived → element visible)
+//   bit 1: fill binding fired
+//   bit 2: stroke binding fired
+//   bit 3: opacity binding fired
+//   bit 4: text binding fired
+//   bit 5: pos binding fired
+//
+// If when() returned 0 (hide), only bit 0 is set — bindings are
+// skipped per the TS contract.
+
+refresh_element_bindings(el: ptr) -> int {
+    fired = 0
+
+    if grammar_element.element_is_destroyed(el) == 1 {
+        return 0
+    }
+
+    // when() — if returns 0, hide and skip bindings.
+    pred = grammar_element.element_when_predicate(el)
+    if pred != null {
+        fired = fired + 1
+        ok = invoke_when_predicate(pred)
+        if ok == 0 {
+            grammar_element.element_set_visible(el, 0)
+            return fired
+        } else {
+            grammar_element.element_set_visible(el, 1)
+        }
+    }
+
+    if grammar_element.element_is_visible(el) == 0 {
+        return fired
+    }
+
+    fb = grammar_element.element_fill_binding(el)
+    if fb != null {
+        _new_fill = invoke_fill_binding(fb)
+        fired = fired + 2
+    }
+
+    sb = grammar_element.element_stroke_binding(el)
+    if sb != null {
+        _stroke_map = invoke_stroke_binding(sb)
+        fired = fired + 4
+    }
+
+    ob = grammar_element.element_opacity_binding(el)
+    if ob != null {
+        _new_opacity = invoke_opacity_binding(ob)
+        fired = fired + 8
+    }
+
+    tb = grammar_element.element_text_binding(el)
+    if tb != null {
+        _new_text = invoke_text_binding(tb)
+        fired = fired + 16
+    }
+
+    pb = grammar_element.element_pos_binding(el)
+    if pb != null {
+        _pos_map = invoke_pos_binding(pb)
+        fired = fired + 32
+    }
+
+    return fired
+}
+
+// ─── Whole-context pass ──────────────────────────────────────────
+//
+// Iterate ctx.tracked_elements and refresh each one. Returns the
+// number of elements that had *any* binding fire.
+
+refresh_all_elements(ctx: ptr) -> int {
+    elements = grammar_context.ctx_tracked_elements(ctx)
+    n = list.size(elements)
+    touched = 0
+    i = 0
+    while i < n {
+        el, _ = list.get(elements, i)
+        bits = refresh_element_bindings(el)
+        if bits > 0 { touched = touched + 1 }
+        i = i + 1
+    }
+    return touched
+}
+
+// ─── Invocation thunks ──────────────────────────────────────────
+//
+// Two-layer pattern (outer takes ptr, inner takes fn with the
+// right declared return type) so the closure-call trampoline's
+// return-type cast resolves through the enclosing fn's return.
+// Mirrors grammar_bind.ae's invoke_*/inner_* pattern.
+
+invoke_fill_binding(cb: ptr) -> string {
+    return inner_fill(cb)
+}
+inner_fill(cb: fn) -> string { return cb() }
+
+invoke_stroke_binding(cb: ptr) -> ptr {
+    return inner_stroke(cb)
+}
+inner_stroke(cb: fn) -> ptr { return cb() }
+
+invoke_opacity_binding(cb: ptr) -> float {
+    return inner_opacity(cb)
+}
+inner_opacity(cb: fn) -> float { return cb() }
+
+invoke_text_binding(cb: ptr) -> string {
+    return inner_text(cb)
+}
+inner_text(cb: fn) -> string { return cb() }
+
+invoke_pos_binding(cb: ptr) -> ptr {
+    return inner_pos(cb)
+}
+inner_pos(cb: fn) -> ptr { return cb() }
+
+invoke_when_predicate(cb: ptr) -> int {
+    return inner_when(cb)
+}
+inner_when(cb: fn) -> int { return cb() }

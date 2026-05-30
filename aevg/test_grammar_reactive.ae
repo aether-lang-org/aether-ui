@@ -1,0 +1,220 @@
+// aevg/test_grammar_reactive.ae — per-element reactive bindings.
+//
+// Validates the .bindFill / .bindStroke / .bindOpacity / .bindText /
+// .bindPos surface that grammar_reactive.refresh_*_bindings drives.
+//
+// What this tests:
+//   - Each binding closure is invoked when present, skipped when null
+//   - when() predicate gates binding evaluation:
+//       - returns 1 → element becomes visible, bindings fire
+//       - returns 0 → element becomes hidden, bindings skipped
+//   - Destroyed elements are skipped entirely (refresh returns 0)
+//   - Closures with string-return (fill, text), ptr-return (stroke,
+//     pos), float-return (opacity), and int-return (when) all work
+//     through the closure-unbox trampoline.
+//
+// Side-effect approach: each closure pushes a sentinel into a
+// captured std.list per call; the test inspects log lengths to
+// verify the right closures fired.
+
+import std.string
+import std.list
+import std.map
+import grammar_element
+import grammar_context
+import grammar_reactive
+import transform
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+// ─── Track tracked_elements via the public helper ───────────────
+//
+// grammar_context.tracked_elements isn't an exported add-helper;
+// elements register themselves via the rendering pipeline. For the
+// test we use ctx_tracked_elements (which returns the list ptr)
+// and append directly.
+
+track(ctx: ptr, el: ptr) {
+    elements = grammar_context.ctx_tracked_elements(ctx)
+    _ = list.add(elements, el)
+}
+
+main() {
+    println("=== test_grammar_reactive ===")
+
+    ctx = mk_test_ctx()
+
+    // Side-effect logs, one per binding kind.
+    fill_log    = list.new()
+    stroke_log  = list.new()
+    opacity_log = list.new()
+    text_log    = list.new()
+    pos_log     = list.new()
+    when_log    = list.new()
+
+    // ─── el1: all five bindings set, no when ──────────────────
+    el1 = grammar_element.element_new(null)
+    track(ctx, el1)
+
+    grammar_element.element_bind_fill(el1) callback {
+        ignored = list.add(fill_log, el1)
+        return "#ff00ff"
+    }
+    grammar_element.element_bind_stroke(el1) callback {
+        ignored = list.add(stroke_log, el1)
+        m = map.new()
+        ig1 = map.put(m, "color", "#000")
+        ig2 = map.put(m, "width", "2.5")
+        return m
+    }
+    grammar_element.element_bind_opacity(el1) callback {
+        ignored = list.add(opacity_log, el1)
+        return 0.75
+    }
+    grammar_element.element_bind_text(el1) callback {
+        ignored = list.add(text_log, el1)
+        return "hello"
+    }
+    grammar_element.element_bind_pos(el1) callback {
+        ignored = list.add(pos_log, el1)
+        m = map.new()
+        ig3 = map.put(m, "cx", "50")
+        ig4 = map.put(m, "cy", "30")
+        return m
+    }
+
+    // ─── el2: only when() — visible when len(fill_log) > 0 ────
+    el2 = grammar_element.element_new(null)
+    track(ctx, el2)
+    grammar_element.element_set_when(el2) callback {
+        ignored = list.add(when_log, el2)
+        if list.size(fill_log) > 0 { return 1 } else { return 0 }
+    }
+
+    // ─── el3: destroyed — refresh should skip entirely ────────
+    el3 = grammar_element.element_new(null)
+    track(ctx, el3)
+    grammar_element.element_bind_fill(el3) callback {
+        // Should NOT fire because element is destroyed.
+        ignored = list.add(fill_log, el3)
+        return "should-not-appear"
+    }
+    grammar_element.element_set_destroyed(el3, 1)
+
+    // ─── First refresh ────────────────────────────────────────
+    touched = grammar_reactive.refresh_all_elements(ctx)
+
+    // el1 fires all 5 bindings; el2 fires when() and is hidden
+    // (fill_log was empty when when() was evaluated; closure
+    // sees pre-refresh state); el3 destroyed, skipped.
+    // Note: el2's closure runs after el1's, so fill_log has 1 entry
+    // when when() fires — but the closure body reads list.size BEFORE
+    // it pushes anything, so it sees > 0 → returns 1 (visible).
+    assert_eq_int("first: fill fired 1×",    list.size(fill_log),    1)
+    assert_eq_int("first: stroke fired 1×",  list.size(stroke_log),  1)
+    assert_eq_int("first: opacity fired 1×", list.size(opacity_log), 1)
+    assert_eq_int("first: text fired 1×",    list.size(text_log),    1)
+    assert_eq_int("first: pos fired 1×",     list.size(pos_log),     1)
+    assert_eq_int("first: when fired 1×",    list.size(when_log),    1)
+
+    // el2 should now be visible (when() returned 1).
+    assert_eq_int("el2 visible after when()=1", grammar_element.element_is_visible(el2), 1)
+
+    // el1 touched (5 bindings); el2 touched (when only); el3 skipped.
+    assert_eq_int("first: touched count", touched, 2)
+
+    // ─── Second refresh — same closures fire again ────────────
+    touched2 = grammar_reactive.refresh_all_elements(ctx)
+    assert_eq_int("second: fill fired 2×",    list.size(fill_log),    2)
+    assert_eq_int("second: stroke fired 2×",  list.size(stroke_log),  2)
+    assert_eq_int("second: opacity fired 2×", list.size(opacity_log), 2)
+    assert_eq_int("second: text fired 2×",    list.size(text_log),    2)
+    assert_eq_int("second: pos fired 2×",     list.size(pos_log),     2)
+    assert_eq_int("second: when fired 2×",    list.size(when_log),    2)
+    assert_eq_int("second: touched count",    touched2,               2)
+
+    // ─── el4: when()=0 hides element + skips bindings ─────────
+    el4 = grammar_element.element_new(null)
+    track(ctx, el4)
+    grammar_element.element_set_when(el4) callback {
+        ignored = list.add(when_log, el4)
+        return 0
+    }
+    el4_fired = list.new()
+    grammar_element.element_bind_fill(el4) callback {
+        ignored = list.add(el4_fired, el4)
+        return "#fff"
+    }
+
+    fill_before = list.size(fill_log)
+    when_before = list.size(when_log)
+    _ = grammar_reactive.refresh_all_elements(ctx)
+    // el4's when() fires (when_log grew by 1 for el4 + 1 for el2 = 2)
+    assert_eq_int("third: when grew by 2 (el2+el4)", list.size(when_log), when_before + 2)
+    // el4's fill closure must NOT have fired
+    assert_eq_int("third: el4 fill skipped (hidden)", list.size(el4_fired), 0)
+    // el4 should be hidden
+    assert_eq_int("third: el4 hidden",     grammar_element.element_is_visible(el4), 0)
+    // el1's fill still fires
+    assert_eq_int("third: el1 fill +1", list.size(fill_log), fill_before + 1)
+
+    // ─── Verify the stroke closure's ptr-map round-trip ───────
+    // We pull the most recent stroke map by re-invoking the
+    // closure ourselves through grammar_reactive.invoke_stroke_binding
+    // and reading the keys back. This validates the
+    // ptr-return path through closure-unbox.
+    sb = grammar_element.element_stroke_binding(el1)
+    smap = grammar_reactive.invoke_stroke_binding(sb)
+    color_v, _ = map.get(smap, "color")
+    if string.equals(color_v, "#000") == 1 {
+        println("  PASS: stroke map color round-trip ('${color_v}')")
+    } else {
+        println("  FAIL: stroke color got '${color_v}'"); exit(1)
+    }
+    width_v, _ = map.get(smap, "width")
+    if string.equals(width_v, "2.5") == 1 {
+        println("  PASS: stroke map width round-trip ('${width_v}')")
+    } else {
+        println("  FAIL: stroke width got '${width_v}'"); exit(1)
+    }
+
+    // ─── Float opacity round-trip ─────────────────────────────
+    ob = grammar_element.element_opacity_binding(el1)
+    op_v = grammar_reactive.invoke_opacity_binding(ob)
+    // 0.75 ± 0.001
+    diff = op_v - 0.75
+    if diff < 0.0 { diff = 0.0 - diff }
+    if diff < 0.001 {
+        println("  PASS: opacity float round-trip (${op_v})")
+    } else {
+        println("  FAIL: opacity got ${op_v} want 0.75"); exit(1)
+    }
+
+    // ─── Text string round-trip ───────────────────────────────
+    tb = grammar_element.element_text_binding(el1)
+    t_v = grammar_reactive.invoke_text_binding(tb)
+    if string.equals(t_v, "hello") == 1 {
+        println("  PASS: text string round-trip ('${t_v}')")
+    } else {
+        println("  FAIL: text got '${t_v}'"); exit(1)
+    }
+
+    println("=== test_grammar_reactive passed ===")
+}
