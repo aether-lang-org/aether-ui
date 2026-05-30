@@ -1,0 +1,135 @@
+// aevg/test_filter_routing.ae — filter/clipPath → raster routing.
+//
+// Verifies that shape_circle / shape_rectangle delegate to
+// render_as_raster (dispatching a "raster" backend call) when their
+// resolved style carries filter=url(#id) or clip-path=url(#id), and
+// dispatch normally ("circle"/"rectangle") otherwise. Mirrors the TS
+// `if (style.filterId || style.clipPathId)` branch — the only two
+// shapes the CVG source routes through raster.
+
+import std.string
+import std.map
+import grammar_shapes
+import grammar_context
+import grammar_defs
+import aevg_backend
+import parser
+import transform
+
+extern exit(code: int)
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+// Register a blur filter id by parsing a minimal <filter> element.
+register_blur(ctx: ptr, id: string, sigma: float) {
+    a = string.concat("<svg><defs><filter id='", id)
+    a = string.concat(a, "'><feGaussianBlur stdDeviation='")
+    a = string.concat(a, string.from_float(sigma))
+    a = string.concat(a, "'/></filter></defs></svg>")
+    root = parser.parse_svg(a)
+    defs_node = parser.node_child_at(root, 0)
+    filter_node = parser.node_child_at(defs_node, 0)
+    _ = grammar_defs.parse_filter(ctx, filter_node)
+}
+
+// Register a rect clipPath.
+register_clip(ctx: ptr, id: string) {
+    a = string.concat("<svg><defs><clipPath id='", id)
+    a = string.concat(a, "'><rect x='0' y='0' width='10' height='20'/></clipPath></defs></svg>")
+    root = parser.parse_svg(a)
+    defs_node = parser.node_child_at(root, 0)
+    cp_node = parser.node_child_at(defs_node, 0)
+    _ = grammar_defs.parse_clip_path(ctx, cp_node)
+}
+
+mk_attrs(pairs_k1: string, v1: string, k2: string, v2: string,
+         k3: string, v3: string, k4: string, v4: string) -> ptr {
+    m = map.new()
+    _ = map.put(m, pairs_k1, v1)
+    _ = map.put(m, k2, v2)
+    _ = map.put(m, k3, v3)
+    _ = map.put(m, k4, v4)
+    return m
+}
+
+main() {
+    println("=== test_filter_routing ===")
+
+    // ─── Plain circle → "circle" dispatch ─────────────────────
+    ctx1 = mk_ctx()
+    bk1 = aevg_backend.backend_new()
+    a1 = mk_attrs("cx", "50", "cy", "50", "r", "20", "fill", "red")
+    _ = grammar_shapes.shape_circle(ctx1, bk1, a1)
+    assert_eq_int("plain circle: 1 call", aevg_backend.backend_call_count(bk1), 1)
+    assert_eq_str("plain circle: kind=circle", aevg_backend.backend_kind(bk1, 0), "circle")
+
+    // ─── Filtered circle → "raster" dispatch ──────────────────
+    ctx2 = mk_ctx()
+    bk2 = aevg_backend.backend_new()
+    register_blur(ctx2, "b1", 3.0)
+    a2 = mk_attrs("cx", "50", "cy", "50", "r", "20", "fill", "red")
+    _ = map.put(a2, "filter", "url(#b1)")
+    _ = grammar_shapes.shape_circle(ctx2, bk2, a2)
+    assert_eq_int("filtered circle: 1 call", aevg_backend.backend_call_count(bk2), 1)
+    assert_eq_str("filtered circle: kind=raster", aevg_backend.backend_kind(bk2, 0), "raster")
+
+    // ─── Clipped rect → "raster" dispatch ─────────────────────
+    ctx3 = mk_ctx()
+    bk3 = aevg_backend.backend_new()
+    register_clip(ctx3, "c1")
+    a3 = mk_attrs("x", "10", "y", "10", "width", "40", "height", "30")
+    _ = map.put(a3, "fill", "blue")
+    _ = map.put(a3, "clip-path", "url(#c1)")
+    _ = grammar_shapes.shape_rectangle(ctx3, bk3, a3)
+    assert_eq_int("clipped rect: 1 call", aevg_backend.backend_call_count(bk3), 1)
+    assert_eq_str("clipped rect: kind=raster", aevg_backend.backend_kind(bk3, 0), "raster")
+
+    // ─── Plain rect → "rectangle" dispatch ────────────────────
+    ctx4 = mk_ctx()
+    bk4 = aevg_backend.backend_new()
+    a4 = mk_attrs("x", "10", "y", "10", "width", "40", "height", "30")
+    _ = map.put(a4, "fill", "green")
+    _ = grammar_shapes.shape_rectangle(ctx4, bk4, a4)
+    assert_eq_int("plain rect: 1 call", aevg_backend.backend_call_count(bk4), 1)
+    assert_eq_str("plain rect: kind=rectangle", aevg_backend.backend_kind(bk4, 0), "rectangle")
+
+    // ─── Both filter + clip on a circle → still raster ────────
+    ctx5 = mk_ctx()
+    bk5 = aevg_backend.backend_new()
+    register_blur(ctx5, "b2", 2.0)
+    register_clip(ctx5, "c2")
+    a5 = mk_attrs("cx", "30", "cy", "30", "r", "15", "fill", "purple")
+    _ = map.put(a5, "filter", "url(#b2)")
+    _ = map.put(a5, "clip-path", "url(#c2)")
+    _ = grammar_shapes.shape_circle(ctx5, bk5, a5)
+    assert_eq_str("filter+clip circle: kind=raster", aevg_backend.backend_kind(bk5, 0), "raster")
+
+    // ─── rawPixels present on the raster dispatch ─────────────
+    raw = aevg_backend.backend_opt_get(bk2, 0, "rawPixels")
+    if string.length(raw) > 0 {
+        println("  PASS: filtered circle produced rawPixels (len=${string.length(raw)})")
+    } else {
+        println("  FAIL: no rawPixels on filtered circle"); exit(1)
+    }
+
+    println("=== test_filter_routing passed ===")
+}

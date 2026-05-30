@@ -26,8 +26,11 @@ main() {
         backend = aevg_gtk_backend.gtk_backend_new(c)
 
         svg = "<svg viewBox='0 0 400 300'>"
+        svg = string_concat3(svg, "<defs><filter id='blur'><feGaussianBlur stdDeviation='4'/></filter></defs>")
         svg = string_concat3(svg, "<rect x='20' y='20' width='120' height='80' fill='#4488cc' stroke='#003366'/>")
         svg = string_concat3(svg, "<circle cx='280' cy='80' r='50' fill='#cc4444'/>")
+        // Filtered circle → routed through render_as_raster → blit.
+        svg = string_concat3(svg, "<circle cx='150' cy='130' r='30' fill='#ddaa22' filter='url(#blur)'/>")
         svg = string_concat3(svg, "<line x1='20' y1='180' x2='380' y2='180' stroke='#333333'/>")
         svg = string_concat3(svg, "<path d='M 200 200 C 240 150 320 150 360 200 L 360 250 L 200 250 Z' fill='#66aa55' stroke='#224411'/>")
         svg = string_concat3(svg, "<text x='40' y='285' font-size='26' fill='#222'>Hello AeVG</text>")

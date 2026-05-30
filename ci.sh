@@ -129,7 +129,7 @@ run_smoke_test() {
 # AeVG port unit tests — pure Aether (no GTK/display), so they run even
 # under SKIP_RUNTIME. Each is a self-contained `main()` that exits non-zero
 # on the first failed assertion. Append new modules' tests here as they land.
-AEVG_TESTS=(test_transform test_normalizer test_easing test_parser test_bbox test_blur test_rasterize test_grammar_utils test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_render_as_raster test_grammar_bind test_grammar_reactive test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip)
+AEVG_TESTS=(test_transform test_normalizer test_easing test_parser test_bbox test_blur test_rasterize test_grammar_utils test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_render_as_raster test_grammar_bind test_grammar_reactive test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip test_filter_routing)
 
 # `ae cflags --libs` emits the transitive deps that libaether.a was
 # built with (PCRE2 / OpenSSL / zlib / nghttp2 — see Aether CHANGELOG
@@ -188,7 +188,7 @@ if [ "$PLATFORM" = "linux" ]; then
     echo "  --- AeVG demos (real backend adapter) ---"
     if "$SCRIPT_DIR/build.sh" aevg/example_aevg.ae build/aevg_demo \
             > /tmp/ci_build_aevg_demo.log 2>&1; then
-        echo "  OK   aevg_demo (rect/circle/line/path/text on real canvas)"
+        echo "  OK   aevg_demo (rect/circle/line/path/text + filtered circle on real canvas)"
     else
         echo "  FAIL aevg_demo"
         tail -15 /tmp/ci_build_aevg_demo.log | sed 's/^/       /'

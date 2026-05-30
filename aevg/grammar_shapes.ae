@@ -50,6 +50,8 @@ import transform
 import backend_dispatch
 import normalizer
 import std.strbuilder
+import render_as_raster
+import rasterize
 import parser
 import std.regex
 
@@ -104,6 +106,33 @@ maybe_pop_transform(ctx: ptr, did_push: int) {
     if did_push == 1 { grammar_rendering.pop_transform(ctx) }
 }
 
+// ─── filter / clipPath detection ─────────────────────────────────
+//
+// A shape with `filter=url(#id)` or `clip-path=url(#id)` in its
+// resolved style is rendered via the raster pipeline
+// (render_as_raster) instead of a direct backend dispatch — matches
+// the TS `if (style.filterId || style.clipPathId)` branch. Returns
+// the extracted id ("" if absent).
+
+style_filter_id(style: ptr) -> string {
+    v = grammar_style.style_get(style, "filter")
+    if string.length(v) == 0 { return "" }
+    return grammar_utils.extract_url_id(v)
+}
+
+style_clip_id(style: ptr) -> string {
+    v = grammar_style.style_get(style, "clip-path")
+    if string.length(v) == 0 { return "" }
+    return grammar_utils.extract_url_id(v)
+}
+
+// 1 if the style requests filter or clipPath rasterization.
+needs_raster(filter_id: string, clip_id: string) -> int {
+    if string.length(filter_id) > 0 { return 1 }
+    if string.length(clip_id) > 0 { return 1 }
+    return 0
+}
+
 // ─── shape_circle ────────────────────────────────────────────────
 
 shape_circle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
@@ -114,6 +143,33 @@ shape_circle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
     cx_raw = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "cx", "0"))
     cy_raw = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "cy", "0"))
     r_raw  = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "r",  "0"))
+
+    // Filter / clipPath → render via the raster pipeline.
+    fid = style_filter_id(style)
+    cid = style_clip_id(style)
+    if needs_raster(fid, cid) == 1 {
+        fill_c = grammar_utils.resolve_fill_color(style)
+        if string.length(fill_c) == 0 { fill_c = "black" }
+        // Element bounds in SVG space: the circle's bbox.
+        bx = cx_raw - r_raw
+        by = cy_raw - r_raw
+        bw = r_raw * 2.0
+        bh = r_raw * 2.0
+        // The filler paints the circle into the pixel buffer. Pixel
+        // radius = map_length(r_raw) * averageScale; centre is at
+        // (off + pxR, off + pxR) since the bbox is 2r square.
+        el_raster = render_as_raster.render_as_raster(ctx, backend,
+            bx, by, bw, bh, fill_c, style, fid, cid) callback |buf: ptr, w: int, h: int, off_x: float, off_y: float, r: int, g: int, b: int, a: int| {
+            avg = transform.affine_average_scale_p(grammar_rendering.current_transform(ctx))
+            px_r = grammar_rendering.map_length(ctx, r_raw) * avg
+            rasterize.fill_circle_in_buffer(buf, w, h,
+                off_x + px_r, off_y + px_r, px_r, r, g, b, a)
+        }
+        maybe_pop_transform(ctx, did_push)
+        el_w = grammar_element.element_new(el_raster)
+        grammar_element.element_set_shape_circle(el_w, cx_raw, cy_raw, r_raw)
+        return el_w
+    }
 
     p = grammar_rendering.map_point(ctx, cx_raw, cy_raw)
     cx = transform.pt_x(p)
@@ -167,6 +223,25 @@ shape_rectangle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
     py = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "y", "0"))
     pw = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "width",  "0"))
     ph = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "height", "0"))
+
+    // Filter / clipPath → render via the raster pipeline.
+    rfid = style_filter_id(style)
+    rcid = style_clip_id(style)
+    if needs_raster(rfid, rcid) == 1 {
+        rfill = grammar_utils.resolve_fill_color(style)
+        if string.length(rfill) == 0 { rfill = "black" }
+        el_raster = render_as_raster.render_as_raster(ctx, backend,
+            px, py, pw, ph, rfill, style, rfid, rcid) callback |buf: ptr, w: int, h: int, off_x: float, off_y: float, r: int, g: int, b: int, a: int| {
+            avg = transform.affine_average_scale_p(grammar_rendering.current_transform(ctx))
+            px_w = grammar_rendering.map_length(ctx, pw) * avg
+            px_h = grammar_rendering.map_length(ctx, ph) * avg
+            rasterize.fill_rect_in_buffer(buf, w, h, off_x, off_y, px_w, px_h, r, g, b, a)
+        }
+        maybe_pop_transform(ctx, did_push)
+        el_w = grammar_element.element_new(el_raster)
+        grammar_element.element_set_shape_rect(el_w, px, py, pw, ph)
+        return el_w
+    }
 
     // Project the four corners and compute axis-aligned bounds.
     p1 = grammar_rendering.map_point(ctx, px, py)
