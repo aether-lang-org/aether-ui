@@ -1,0 +1,197 @@
+// cvg/test_grammar_element.ae — regression test for grammar_element.ae.
+//
+// Covers: construction with default flags, all setter/getter round-
+// trips for name/tooltip/cursor, visibility & destroyed flags,
+// bounds + hit-test pure-math, and the closure storage shape for
+// event handlers and reactive bindings.
+
+import grammar_element
+import std.string
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("  PASS: ${label} ('${got}')")
+    } else {
+        println("  FAIL: ${label}: got '${got}' want '${want}'")
+        exit(1)
+    }
+}
+
+assert_not_null(label: string, p: ptr) {
+    if p == null {
+        println("  FAIL: ${label}: null")
+        exit(1)
+    } else {
+        println("  PASS: ${label} (non-null)")
+    }
+}
+
+assert_null(label: string, p: ptr) {
+    if p == null {
+        println("  PASS: ${label} (null)")
+    } else {
+        println("  FAIL: ${label}: non-null")
+        exit(1)
+    }
+}
+
+// Sample handlers and bindings — bare function names that callers
+// (the test below) pass to ptr-typed setters. The named-fn → ptr
+// coercion fires at the call site.
+my_click_handler() -> int { return 1 }
+my_hover_handler() -> int { return 2 }
+my_drag_handler() -> int { return 3 }
+my_fill_binding() -> string { return "#ff0000" }
+my_opacity_binding() -> float { return 0.5 }
+my_when_predicate() -> int { return 1 }
+
+main() {
+    println("=== test_grammar_element ===")
+
+    // ─── Construction defaults ───────────────────────────────────
+    // Underlying handle is opaque; we use a small non-null sentinel.
+    sentinel = malloc(8)
+    el = grammar_element.element_new(sentinel)
+
+    assert_not_null("element_new returns non-null", el)
+    assert_eq_int("default visible = 1", grammar_element.element_is_visible(el), 1)
+    assert_eq_int("default destroyed = 0", grammar_element.element_is_destroyed(el), 0)
+    assert_eq_int("default has_bounds = 0", grammar_element.element_has_bounds(el), 0)
+    assert_eq_str("default name = ''", grammar_element.element_name(el), "")
+    assert_eq_str("default tooltip = ''", grammar_element.element_tooltip(el), "")
+    assert_eq_str("default cursor = ''", grammar_element.element_cursor(el), "")
+    assert_null("default click_handler = null", grammar_element.element_click_handler(el))
+    assert_null("default fill_binding = null", grammar_element.element_fill_binding(el))
+    assert_null("default when_predicate = null", grammar_element.element_when_predicate(el))
+    assert_null("default context = null", grammar_element.element_context(el))
+
+    // Underlying handle round-trip.
+    if grammar_element.element_underlying(el) == sentinel {
+        println("  PASS: underlying handle round-trips")
+    } else {
+        println("  FAIL: underlying handle mismatch")
+        exit(1)
+    }
+
+    // ─── Identity / tooltip / cursor ────────────────────────────
+    grammar_element.element_set_name(el, "main-circle")
+    assert_eq_str("name set", grammar_element.element_name(el), "main-circle")
+
+    grammar_element.element_set_tooltip(el, "click me")
+    assert_eq_str("tooltip set", grammar_element.element_tooltip(el), "click me")
+
+    grammar_element.element_set_cursor(el, "pointer")
+    assert_eq_str("cursor set", grammar_element.element_cursor(el), "pointer")
+
+    // ─── Visibility / destroyed flags ────────────────────────────
+    grammar_element.element_set_visible(el, 0)
+    assert_eq_int("visible = 0", grammar_element.element_is_visible(el), 0)
+    grammar_element.element_set_visible(el, 1)
+    assert_eq_int("visible = 1 again", grammar_element.element_is_visible(el), 1)
+
+    grammar_element.element_set_destroyed(el, 1)
+    assert_eq_int("destroyed = 1", grammar_element.element_is_destroyed(el), 1)
+    grammar_element.element_set_destroyed(el, 0)
+
+    // ─── Event handlers (bare-name → ptr coercion at call site) ──
+    grammar_element.element_on_click(el, my_click_handler)
+    assert_not_null("click handler stored", grammar_element.element_click_handler(el))
+
+    grammar_element.element_on_hover(el, my_hover_handler)
+    assert_not_null("hover handler stored", grammar_element.element_hover_handler(el))
+
+    grammar_element.element_on_drag(el, my_drag_handler)
+    assert_not_null("drag handler stored", grammar_element.element_drag_handler(el))
+
+    grammar_element.element_on_drag_end(el, my_drag_handler)
+    assert_not_null("drag-end handler stored", grammar_element.element_drag_end_handler(el))
+
+    grammar_element.element_on_scroll(el, my_drag_handler)
+    assert_not_null("scroll handler stored", grammar_element.element_scroll_handler(el))
+
+    grammar_element.element_on_double_click(el, my_drag_handler)
+    assert_not_null("dblclick handler stored", grammar_element.element_double_click_handler(el))
+
+    grammar_element.element_on_right_click(el, my_drag_handler)
+    assert_not_null("rclick handler stored", grammar_element.element_right_click_handler(el))
+
+    // ─── Reactive bindings ──────────────────────────────────────
+    grammar_element.element_bind_fill(el, my_fill_binding)
+    assert_not_null("fill binding stored", grammar_element.element_fill_binding(el))
+
+    grammar_element.element_bind_stroke(el, my_fill_binding)
+    assert_not_null("stroke binding stored", grammar_element.element_stroke_binding(el))
+
+    grammar_element.element_bind_opacity(el, my_opacity_binding)
+    assert_not_null("opacity binding stored", grammar_element.element_opacity_binding(el))
+
+    grammar_element.element_bind_text(el, my_fill_binding)
+    assert_not_null("text binding stored", grammar_element.element_text_binding(el))
+
+    grammar_element.element_bind_pos(el, my_fill_binding)
+    assert_not_null("pos binding stored", grammar_element.element_pos_binding(el))
+
+    // ─── when() predicate ───────────────────────────────────────
+    grammar_element.element_set_when(el, my_when_predicate)
+    assert_not_null("when predicate stored", grammar_element.element_when_predicate(el))
+
+    // ─── Bounds + hit-test ──────────────────────────────────────
+    grammar_element.element_set_bounds(el, 10.0, 20.0, 30.0, 40.0)
+    assert_eq_int("has_bounds after set", grammar_element.element_has_bounds(el), 1)
+    if grammar_element.element_bounds_x(el) == 10.0 {
+        println("  PASS: bounds_x")
+    } else {
+        println("  FAIL: bounds_x")
+        exit(1)
+    }
+    if grammar_element.element_bounds_y(el) == 20.0 {
+        println("  PASS: bounds_y")
+    } else {
+        println("  FAIL: bounds_y")
+        exit(1)
+    }
+
+    // Hit-test: point inside bounds.
+    assert_eq_int("hit-test inside (15, 25)", grammar_element.element_hit_test(el, 15.0, 25.0), 1)
+    // Point at edges.
+    assert_eq_int("hit-test top-left corner", grammar_element.element_hit_test(el, 10.0, 20.0), 1)
+    assert_eq_int("hit-test bot-right corner", grammar_element.element_hit_test(el, 40.0, 60.0), 1)
+    // Point outside.
+    assert_eq_int("hit-test outside (5, 5)", grammar_element.element_hit_test(el, 5.0, 5.0), 0)
+    assert_eq_int("hit-test outside (100, 100)", grammar_element.element_hit_test(el, 100.0, 100.0), 0)
+    assert_eq_int("hit-test just-past x", grammar_element.element_hit_test(el, 41.0, 30.0), 0)
+
+    // Hit-test: invisible → always 0
+    grammar_element.element_set_visible(el, 0)
+    assert_eq_int("hit-test invisible", grammar_element.element_hit_test(el, 15.0, 25.0), 0)
+    grammar_element.element_set_visible(el, 1)
+
+    // Hit-test: destroyed → always 0
+    grammar_element.element_set_destroyed(el, 1)
+    assert_eq_int("hit-test destroyed", grammar_element.element_hit_test(el, 15.0, 25.0), 0)
+    grammar_element.element_set_destroyed(el, 0)
+
+    // ─── Context back-pointer ───────────────────────────────────
+    fake_ctx = malloc(8)
+    grammar_element.element_set_context(el, fake_ctx)
+    if grammar_element.element_context(el) == fake_ctx {
+        println("  PASS: context back-pointer round-trips")
+    } else {
+        println("  FAIL: context back-pointer mismatch")
+        exit(1)
+    }
+
+    println("=== test_grammar_element passed ===")
+}

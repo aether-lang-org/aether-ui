@@ -1,0 +1,431 @@
+// cvg/grammar_element.ae — CvgElement wrapper (Tier C).
+//
+// Port of cosyne/src/cvg/grammar-element.ts. CvgElement is the
+// per-shape wrapper returned by element factory methods (s.circle,
+// s.rect, s.path, …). It holds:
+//
+//   - the underlying aether-ui widget handle (Tier C backend, not
+//     yet wired — stored as opaque ptr)
+//   - all event-handler callbacks (click/hover/drag/scroll/dblclick/
+//     rightclick)
+//   - reactive binding closures (.bindFill, .bindStroke, .bindOpacity,
+//     .bindText, .bindPos) — re-evaluated on context.refresh()
+//   - a `when` predicate for conditional rendering
+//   - a tooltip + cursor preference
+//   - a bounds rectangle for hit-testing
+//   - visibility + destroyed flags
+//   - a back-pointer to the CvgContext that owns it
+//
+// Aether port shape: TS class → flat *CvgElement struct with all
+// fields, plus exported setter/getter free functions. The TS fluent
+// `return this` chaining loses its meaning in a no-classes language;
+// call sites become explicit sequences:
+//
+//   el = element_new(handle)
+//   element_set_name(el, "main-circle")
+//   element_on_click(el, my_click_handler)
+//   element_bind_fill(el, my_fill_fn)
+//
+// All callback fields are stored as `ptr`. Setters declare their
+// callback param as `ptr` too. Why not `fn`? The v0.193+1 fn ↔ ptr
+// coercion fix landed for *function-call argument positions* but NOT
+// for *struct-field assignment* — `e.handler = h` where `h: fn`
+// fails type-check ("Type mismatch in assignment"). Filed as a
+// follow-up to aether/fn_ptr_coercion.md.
+//
+// Workaround / call-site shape: callers pass a bare function name
+// (the named-fn → ptr coercion still fires at the setter call site),
+// e.g. `element_on_click(el, my_click_handler)`. Closures created
+// inline via `callback { … }` need to go through a list/map first
+// (which box via the v0.193+1 fix) and be fetched back as ptr.
+// Getters return the stored ptr; invoking via a `fn`-typed param
+// auto-unboxes at that call site.
+//
+// Out of scope this commit (defer until backend wiring lands):
+//   - text() / fill() / stroke() / opacity() — reach through to
+//     underlying widget's .update() — meaningful only when the
+//     backend is plugged in
+//   - transition() — animation manager (separate commit)
+//   - setPathResize / setShapeInfo / updateSvgProps — viewBox /
+//     reactive resize support, plumbed when grammar_rendering lands
+//   - destroy() — needs backend widget removal hook
+
+exports (
+    // Construction
+    element_new,
+
+    // Identity / name
+    element_set_name, element_name,
+
+    // Underlying widget handle
+    element_underlying, element_set_context, element_context,
+
+    // Event handlers (each: ptr field; setters take `fn`)
+    element_on_click, element_click_handler,
+    element_on_hover, element_hover_handler,
+    element_on_drag, element_drag_handler,
+    element_on_drag_end, element_drag_end_handler,
+    element_on_scroll, element_scroll_handler,
+    element_on_double_click, element_double_click_handler,
+    element_on_right_click, element_right_click_handler,
+
+    // Tooltip, cursor, when, visibility, destroyed
+    element_set_tooltip, element_tooltip,
+    element_set_cursor, element_cursor,
+    element_set_when, element_when_predicate,
+    element_set_visible, element_is_visible,
+    element_set_destroyed, element_is_destroyed,
+
+    // Reactive bindings — each callback returns a fresh value on
+    // every refresh
+    element_bind_fill, element_fill_binding,
+    element_bind_stroke, element_stroke_binding,
+    element_bind_opacity, element_opacity_binding,
+    element_bind_text, element_text_binding,
+    element_bind_pos, element_pos_binding,
+
+    // Bounds + hit-test
+    element_set_bounds, element_has_bounds,
+    element_bounds_x, element_bounds_y,
+    element_bounds_width, element_bounds_height,
+    element_hit_test
+)
+
+import std.string
+
+extern malloc(size: int) -> ptr
+
+// ─── CvgElement struct ───────────────────────────────────────────
+//
+// 17 ptr/int fields. ptr fields default to null (malloc zeroes — no:
+// malloc doesn't zero; new_context's pattern is to set them
+// explicitly. We do the same here in element_new.) Bounds are stored
+// as four floats + a `has_bounds` flag (no nullable Bounds struct
+// across ptr boundary needed).
+
+struct CvgElement {
+    underlying: ptr         // backend widget handle (Tier C, opaque)
+    context: ptr            // *CvgContext back-pointer
+
+    name_str: string
+
+    // Event handlers — all ptr (boxed closures via _AeClosure post
+    // the v0.193+1 fn ↔ ptr fix).
+    click_handler: ptr
+    hover_handler: ptr
+    drag_handler: ptr
+    drag_end_handler: ptr
+    scroll_handler: ptr
+    double_click_handler: ptr
+    right_click_handler: ptr
+
+    // Bindings — all ptr (boxed closures).
+    fill_binding: ptr
+    stroke_binding: ptr
+    opacity_binding: ptr
+    text_binding: ptr
+    pos_binding: ptr
+
+    // when() predicate
+    when_predicate: ptr
+
+    // Tooltip, cursor (strings)
+    tooltip_str: string
+    cursor_str: string
+
+    // Visibility / destroyed flags
+    visible: int            // 1 = visible (default)
+    destroyed: int
+
+    // Bounds
+    has_bounds: int
+    bounds_x: float
+    bounds_y: float
+    bounds_w: float
+    bounds_h: float
+}
+
+// ─── Construction ────────────────────────────────────────────────
+//
+// Zero-initialised except `visible = 1` (matches TS default).
+element_new(underlying: ptr) -> ptr {
+    // Conservative size — counting fields:
+    //   16 ptr-equivalent fields (underlying, context, 7 handlers,
+    //     5 bindings, when_predicate) × 8 = 128
+    //   3 string fields (AetherString* = 8) × 8 = 24
+    //   3 int fields (visible, destroyed, has_bounds) × 4 + pad = 24
+    //   4 float (bounds_x/y/w/h) × 8 = 32
+    // Sum ≈ 208 with padding. malloc(256) is the safe margin.
+    e = malloc(256) as *CvgElement
+    e.underlying = underlying
+    e.context = null
+    e.name_str = ""
+    e.click_handler = null
+    e.hover_handler = null
+    e.drag_handler = null
+    e.drag_end_handler = null
+    e.scroll_handler = null
+    e.double_click_handler = null
+    e.right_click_handler = null
+    e.fill_binding = null
+    e.stroke_binding = null
+    e.opacity_binding = null
+    e.text_binding = null
+    e.pos_binding = null
+    e.when_predicate = null
+    e.tooltip_str = ""
+    e.cursor_str = ""
+    e.visible = 1
+    e.destroyed = 0
+    e.has_bounds = 0
+    e.bounds_x = 0.0
+    e.bounds_y = 0.0
+    e.bounds_w = 0.0
+    e.bounds_h = 0.0
+    return e
+}
+
+// ─── Identity / name ─────────────────────────────────────────────
+
+element_set_name(p: ptr, n: string) {
+    e = p as *CvgElement
+    e.name_str = n
+}
+
+element_name(p: ptr) -> string {
+    e = p as *CvgElement
+    return e.name_str
+}
+
+// ─── Underlying widget / context ────────────────────────────────
+
+element_underlying(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.underlying
+}
+
+element_set_context(p: ptr, ctx: ptr) {
+    e = p as *CvgElement
+    e.context = ctx
+}
+
+element_context(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.context
+}
+
+// ─── Event handlers ──────────────────────────────────────────────
+//
+// Setters take `ptr` (the v0.193+1 fix doesn't reach struct-field
+// assignment; see file header). Bare function-name args still
+// coerce at the call site. Getters return the stored ptr; invoking
+// via a `fn`-typed param auto-unboxes at that call site.
+
+element_on_click(p: ptr, h: ptr) {
+    e = p as *CvgElement
+    e.click_handler = h
+}
+
+element_click_handler(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.click_handler
+}
+
+element_on_hover(p: ptr, h: ptr) {
+    e = p as *CvgElement
+    e.hover_handler = h
+}
+
+element_hover_handler(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.hover_handler
+}
+
+element_on_drag(p: ptr, h: ptr) {
+    e = p as *CvgElement
+    e.drag_handler = h
+}
+
+element_drag_handler(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.drag_handler
+}
+
+element_on_drag_end(p: ptr, h: ptr) {
+    e = p as *CvgElement
+    e.drag_end_handler = h
+}
+
+element_drag_end_handler(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.drag_end_handler
+}
+
+element_on_scroll(p: ptr, h: ptr) {
+    e = p as *CvgElement
+    e.scroll_handler = h
+}
+
+element_scroll_handler(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.scroll_handler
+}
+
+element_on_double_click(p: ptr, h: ptr) {
+    e = p as *CvgElement
+    e.double_click_handler = h
+}
+
+element_double_click_handler(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.double_click_handler
+}
+
+element_on_right_click(p: ptr, h: ptr) {
+    e = p as *CvgElement
+    e.right_click_handler = h
+}
+
+element_right_click_handler(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.right_click_handler
+}
+
+// ─── Tooltip / cursor / when / visibility / destroyed ────────────
+
+element_set_tooltip(p: ptr, t: string) {
+    e = p as *CvgElement
+    e.tooltip_str = t
+}
+
+element_tooltip(p: ptr) -> string {
+    e = p as *CvgElement
+    return e.tooltip_str
+}
+
+element_set_cursor(p: ptr, c: string) {
+    e = p as *CvgElement
+    e.cursor_str = c
+}
+
+element_cursor(p: ptr) -> string {
+    e = p as *CvgElement
+    return e.cursor_str
+}
+
+element_set_when(p: ptr, pred: ptr) {
+    e = p as *CvgElement
+    e.when_predicate = pred
+}
+
+element_when_predicate(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.when_predicate
+}
+
+element_set_visible(p: ptr, v: int) {
+    e = p as *CvgElement
+    e.visible = v
+}
+
+element_is_visible(p: ptr) -> int {
+    e = p as *CvgElement
+    return e.visible
+}
+
+element_set_destroyed(p: ptr, d: int) {
+    e = p as *CvgElement
+    e.destroyed = d
+}
+
+element_is_destroyed(p: ptr) -> int {
+    e = p as *CvgElement
+    return e.destroyed
+}
+
+// ─── Reactive bindings ───────────────────────────────────────────
+
+element_bind_fill(p: ptr, f: ptr) {
+    e = p as *CvgElement
+    e.fill_binding = f
+}
+
+element_fill_binding(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.fill_binding
+}
+
+element_bind_stroke(p: ptr, f: ptr) {
+    e = p as *CvgElement
+    e.stroke_binding = f
+}
+
+element_stroke_binding(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.stroke_binding
+}
+
+element_bind_opacity(p: ptr, f: ptr) {
+    e = p as *CvgElement
+    e.opacity_binding = f
+}
+
+element_opacity_binding(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.opacity_binding
+}
+
+element_bind_text(p: ptr, f: ptr) {
+    e = p as *CvgElement
+    e.text_binding = f
+}
+
+element_text_binding(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.text_binding
+}
+
+element_bind_pos(p: ptr, f: ptr) {
+    e = p as *CvgElement
+    e.pos_binding = f
+}
+
+element_pos_binding(p: ptr) -> ptr {
+    e = p as *CvgElement
+    return e.pos_binding
+}
+
+// ─── Bounds + hit-test ───────────────────────────────────────────
+
+element_set_bounds(p: ptr, x: float, y: float, w: float, h: float) {
+    e = p as *CvgElement
+    e.has_bounds = 1
+    e.bounds_x = x
+    e.bounds_y = y
+    e.bounds_w = w
+    e.bounds_h = h
+}
+
+element_has_bounds(p: ptr) -> int {
+    e = p as *CvgElement
+    return e.has_bounds
+}
+
+element_bounds_x(p: ptr) -> float      { e = p as *CvgElement; return e.bounds_x }
+element_bounds_y(p: ptr) -> float      { e = p as *CvgElement; return e.bounds_y }
+element_bounds_width(p: ptr) -> float  { e = p as *CvgElement; return e.bounds_w }
+element_bounds_height(p: ptr) -> float { e = p as *CvgElement; return e.bounds_h }
+
+// Hit-test: returns 1 if (px, py) is inside the element's bounds.
+// Mirrors TS: false if destroyed, invisible, or no bounds set.
+element_hit_test(p: ptr, px: float, py: float) -> int {
+    e = p as *CvgElement
+    if e.destroyed == 1 { return 0 }
+    if e.visible == 0 { return 0 }
+    if e.has_bounds == 0 { return 0 }
+    if px < e.bounds_x { return 0 }
+    if py < e.bounds_y { return 0 }
+    if px > e.bounds_x + e.bounds_w { return 0 }
+    if py > e.bounds_y + e.bounds_h { return 0 }
+    return 1
+}

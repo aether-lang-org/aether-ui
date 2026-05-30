@@ -24,6 +24,7 @@ are wired into `ci.sh` as **Phase 0** (runs even with no display).
 | grammar_utils | `grammar-utils.ts` (305 LoC, ~50% subset) | `grammar_utils.ae` | `test_grammar_utils.ae` (49 asserts) | ✅ Tier-B subset: style-attr / length / font-size / dy-em / filter-region parsing, url(#id) extraction, preserveAspectRatio, points→path, path bounds, color-with-opacity emit (`rgba(R,G,B,α)`), base64 byte-encode (via `std.cryptography`). Tier-C resolve_* + transform_path_to_buffer deferred (need CvgContextLike). `normalize_color` deferred (needs `from_int_radix` + `pad_start` from `aether/cvg_asked_for.md`). |
 | **— Tier C —** | | | | |
 | grammar_context | `grammar-context.ts` (583 LoC, core subset) | `grammar_context.ae` | `test_grammar_context.ae` (40 asserts) | ✅ Core state holder. `ViewBoxMapping` + `CvgContext` structs (opaque ptr handles). Five registries (gradient/filter/clipPath/node/cssRule) via `register_*`/`get_*`/`has_*`. Three stacks (style/transform/when) with push/pop/top + safe over-pop. Initial transform-stack seeded with identity (matches TS). Animations / event tracking / bindings / polling — separate commits. |
+| grammar_element | `grammar-element.ts` (525 LoC, core subset) | `grammar_element.ae` | `test_grammar_element.ae` (43 asserts) | ✅ Per-shape wrapper. `CvgElement` struct (~17 fields), setter/getter pairs for all event handlers (click/hover/drag/dragEnd/scroll/dblclick/rclick), reactive bindings (fill/stroke/opacity/text/pos), tooltip/cursor/when/visibility/destroyed flags. Pure hit-test: bounds inside-check + invisible/destroyed guards. Backend reach-through (text/fill/stroke/opacity) and animation `transition()` deferred until the aether-ui widget surface is wired. Callback setters take `ptr` (v0.193+1 `fn ↔ ptr` fix doesn't reach struct-field assignment — filed as a follow-up to `aether/fn_ptr_coercion.md`); call sites still pass bare function names cleanly. |
 
 Also landed: **`parse_transform`** (deferred since the first commit; ~22
 extra assertions in `test_transform.ae`, total 52) + cross-module
@@ -44,11 +45,11 @@ assertions, all passing in Phase 0** (pure-Aether, no GTK/display
 dependency).
 
 Tier C breakdown (per inventory):
-  - ✅ `grammar_context.ae` (core + registries; this commit)
-  - ⬜ Event tracking & dispatch
+  - ✅ `grammar_context.ae` (core + registries)
+  - ✅ `grammar_element.ae` (per-shape wrapper, hit-test, bindings)
+  - ⬜ Event tracking & dispatch (context-side)
   - ⬜ Animation manager
   - ⬜ Binding regions
-  - ⬜ `grammar-element` (fluent builder + closure-captured bindings)
   - ⬜ `grammar-shapes` (shape factories)
   - ⬜ `grammar-defs` (gradient/filter/clipPath/text/use construction)
   - ⬜ `grammar-rendering` (viewBox mapping, CSS, event wiring)
