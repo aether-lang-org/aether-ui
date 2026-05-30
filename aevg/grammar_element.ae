@@ -69,7 +69,7 @@ exports (
     element_set_cursor, element_cursor,
     element_set_when, element_when_predicate,
     element_set_visible, element_is_visible,
-    element_set_destroyed, element_is_destroyed,
+    element_set_destroyed, element_is_destroyed, element_destroy,
 
     // Reactive bindings — each callback returns a fresh value on
     // every refresh
@@ -336,6 +336,16 @@ element_set_destroyed(p: ptr, d: int) {
 element_is_destroyed(p: ptr) -> int {
     e = p as *AevgElement
     return e.destroyed
+}
+
+// element_destroy — TS's `async destroy()`: marks destroyed + hides.
+// Untracking from `ctx.tracked_elements` is the binding-region
+// caller's responsibility (matches TS, where refreshBindingRegions
+// calls untrackElement separately).
+element_destroy(p: ptr) {
+    e = p as *AevgElement
+    e.destroyed = 1
+    e.visible = 0
 }
 
 // ─── Reactive bindings ───────────────────────────────────────────

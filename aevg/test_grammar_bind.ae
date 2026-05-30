@@ -17,6 +17,7 @@ import std.list
 import std.map
 import grammar_bind
 import grammar_context
+import grammar_element
 import transform
 
 extern exit(code: int)
@@ -111,10 +112,11 @@ main() {
         return items
     }
     grammar_bind.region_set_render(region) callback |item: ptr, idx: int| {
-        // Mock element — fresh malloc gives a unique ptr we can
-        // identity-compare across refresh calls. 24 bytes is
-        // arbitrary; just need a unique heap ptr.
-        el = malloc(24)
+        // Real AevgElement so we can verify destroy fires on removal.
+        // Also register with the context's tracked_elements list so
+        // grammar_bind's destroy path has something to untrack.
+        el = grammar_element.element_new(null)
+        grammar_context.ctx_track_element(ctx, el)
         ignored = list.add(render_log, el)
         return el
     }
@@ -201,6 +203,29 @@ main() {
     assert_eq_int("ctx binding_regions count", grammar_context.binding_regions_count(ctx), 1)
     same = grammar_context.binding_regions_at(ctx, 0)
     assert_eq_ptr("ctx region ptr matches", same, region)
+
+    // ─── Destroy hook on removed element ──────────────────────
+    //
+    // el_b_before is the *AevgElement that was removed during the
+    // add/rm refresh. grammar_bind.refresh_one should have called
+    // element_destroy(el) AND ctx_untrack_element on it.
+
+    assert_eq_int("destroyed: b's el is_destroyed",
+                  grammar_element.element_is_destroyed(el_b_before), 1)
+    assert_eq_int("destroyed: b's el not visible",
+                  grammar_element.element_is_visible(el_b_before), 0)
+
+    // a/c/d should still be tracked; b should not. Total tracked
+    // elements: 3 (a, c, d). We can't directly probe the list, but
+    // ctx_untrack_element returns 1 if found — trying to untrack
+    // b's el again should return 0 (already removed).
+    second_untrack = grammar_context.ctx_untrack_element(ctx, el_b_before)
+    assert_eq_int("destroyed: b already untracked (second untrack returns 0)",
+                  second_untrack, 0)
+
+    // a's el is still tracked: untracking should return 1.
+    a_untrack = grammar_context.ctx_untrack_element(ctx, el_a_before)
+    assert_eq_int("destroyed: a was still tracked", a_untrack, 1)
 
     println("=== test_grammar_bind passed ===")
 }

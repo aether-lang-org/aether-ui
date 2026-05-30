@@ -1,0 +1,36 @@
+// aevg/refresh.ae — the end-to-end refresh orchestrator.
+//
+// Mirrors the TS `proto.refresh` in grammar-rendering.ts:
+//
+//   await this.refreshBindingRegions();      // grammar_bind
+//   for (const el of this.trackedElements) { // grammar_reactive
+//     if (el.isDestroyed()) continue;
+//     ... when() ...
+//     ... bindings ...
+//   }
+//
+// In AeVG that's two calls:
+//
+//   refresh(ctx)
+//     → grammar_bind.refresh_all(ctx)         // diff data-driven regions
+//     → grammar_reactive.refresh_all_elements(ctx)
+//                                              // re-eval per-element bindings
+//
+// Order matters: binding regions can add/remove elements, so they
+// run first. The per-element loop then walks the updated
+// tracked_elements list. Destroyed elements (from region removal)
+// are skipped by grammar_reactive.refresh_element_bindings's
+// is_destroyed check.
+//
+// Returns the count of elements with any binding fire, for caller
+// telemetry. Matches grammar_reactive.refresh_all_elements's return.
+
+exports ( refresh )
+
+import grammar_bind
+import grammar_reactive
+
+refresh(ctx: ptr) -> int {
+    grammar_bind.refresh_all(ctx)
+    return grammar_reactive.refresh_all_elements(ctx)
+}

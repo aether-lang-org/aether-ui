@@ -42,6 +42,7 @@ import std.list
 import std.map
 import std.string
 import grammar_context
+import grammar_element
 
 extern malloc(size: int) -> ptr
 
@@ -150,12 +151,12 @@ refresh_all(ctx: ptr) {
     ri = 0
     while ri < nr {
         rp = grammar_context.binding_regions_at(ctx, ri)
-        refresh_one(rp)
+        refresh_one(ctx, rp)
         ri = ri + 1
     }
 }
 
-refresh_one(rp: ptr) {
+refresh_one(ctx: ptr, rp: ptr) {
     r = rp as *BindingRegion
 
     items = invoke_items(r.items_cb)
@@ -176,16 +177,24 @@ refresh_one(rp: ptr) {
     }
 
     // Pass 1: removals — keys in current but not in new.
+    // For each removed entry: destroy the element (mark destroyed +
+    // hide) and untrack it from the context's tracked_elements list
+    // so events stop hitting it. Mirrors TS's refreshBindingRegions
+    // removal path.
     old_keys = map.keys_raw(r.current)
     nk = string_array_size(old_keys)
     k = 0
     while k < nk {
         key = string_array_get(old_keys, k)
         if map.has(new_keys_map, key) == 0 {
-            // Removed — destroy the element. (The destroy hook on
-            // *AevgElement isn't yet ported; for the diff bookkeeping
-            // we just drop the entry from current. When element_destroy
-            // lands, hook it here.)
+            existing, _ = map.get(r.current, key)
+            if existing != null {
+                e = existing as *Entry
+                if e.el != null {
+                    grammar_element.element_destroy(e.el)
+                    _ = grammar_context.ctx_untrack_element(ctx, e.el)
+                }
+            }
             _ = map.remove(r.current, key)
         }
         k = k + 1

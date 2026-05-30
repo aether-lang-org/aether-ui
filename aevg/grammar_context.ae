@@ -35,6 +35,7 @@ exports (
     mapping_scale, mapping_offset_x, mapping_offset_y,
     mapping_vb_min_x, mapping_vb_min_y, mapping_vb_width, mapping_vb_height,
     mapping_transform, ctx_mapping, ctx_tracked_elements,
+    ctx_track_element, ctx_untrack_element,
 
     // Gradient registry
     register_gradient, get_gradient, has_gradient,
@@ -164,6 +165,33 @@ new_context(mapping_handle: ptr) -> ptr {
 
 ctx_mapping(c: ptr) -> ptr { x = c as *AevgContext; return x.mapping }
 ctx_tracked_elements(c: ptr) -> ptr { x = c as *AevgContext; return x.tracked_elements }
+
+// ctx_track_element — append an element to the tracked list. Called
+// at element_new sites that are aware of their context (Phase 1
+// integration); also the natural slot where shape factories
+// register their results.
+ctx_track_element(c: ptr, el: ptr) {
+    x = c as *AevgContext
+    _ = list.add(x.tracked_elements, el)
+}
+
+// ctx_untrack_element — remove an element from the tracked list.
+// Linear scan + remove-by-index. Matches TS's untrackElement.
+// Returns 1 if removed, 0 if not found.
+ctx_untrack_element(c: ptr, el: ptr) -> int {
+    x = c as *AevgContext
+    n = list.size(x.tracked_elements)
+    i = 0
+    while i < n {
+        v, _ = list.get(x.tracked_elements, i)
+        if v == el {
+            list.remove(x.tracked_elements, i)
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
 
 // ─── Gradient / Filter / ClipPath / Node / CSS registries ────────
 //

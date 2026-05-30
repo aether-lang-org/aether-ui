@@ -1,0 +1,122 @@
+// aevg/test_refresh.ae — end-to-end orchestrator.
+//
+// Composes grammar_bind + grammar_reactive in one call. Verifies:
+//   1. Binding regions diff first (add/remove elements).
+//   2. Per-element bindings re-evaluate.
+//   3. Destroyed elements (from removed region keys) are skipped.
+
+import std.string
+import std.list
+import std.map
+import refresh
+import grammar_bind
+import grammar_reactive
+import grammar_context
+import grammar_element
+import transform
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+struct DataItem { id: string }
+
+mk_item(id: string) -> ptr {
+    d = malloc(8) as *DataItem
+    d.id = string.copy(id)
+    return d
+}
+
+item_id(p: ptr) -> string { d = p as *DataItem; return d.id }
+
+main() {
+    println("=== test_refresh ===")
+
+    ctx = mk_test_ctx()
+
+    items = list.new()
+    a = mk_item("a")
+    b = mk_item("b")
+    c = mk_item("c")
+    _ = list.add(items, a)
+    _ = list.add(items, b)
+    _ = list.add(items, c)
+
+    fill_log = list.new()
+
+    region = grammar_bind.new_region()
+    grammar_bind.region_set_items(region) callback { return items }
+    grammar_bind.region_set_render(region) callback |it: ptr, idx: int| {
+        el = grammar_element.element_new(null)
+        grammar_context.ctx_track_element(ctx, el)
+        // Attach a fill binding that increments fill_log per fire.
+        // The inner closure captures fill_log (not el — Aether's
+        // nested-closure capture only sees one outer scope at a
+        // time; we don't need el inside, just a sentinel).
+        grammar_element.element_bind_fill(el) callback {
+            ignored = list.add(fill_log, fill_log)
+            return "#abc"
+        }
+        return el
+    }
+    grammar_bind.region_set_trackby(region) callback |it: ptr| {
+        return item_id(it)
+    }
+    grammar_bind.region_init(ctx, region)
+
+    // After init: 3 elements rendered, but bindings haven't been
+    // fired yet (init only renders; refresh fires bindings).
+    assert_eq_int("init: 0 fills yet", list.size(fill_log), 0)
+
+    // ─── First refresh ───
+    touched = refresh.refresh(ctx)
+    // refresh = bind.refresh_all + reactive.refresh_all_elements
+    // Same 3 items → no diff change → 3 bindings fire.
+    assert_eq_int("refresh1: 3 fills", list.size(fill_log), 3)
+    assert_eq_int("refresh1: 3 touched", touched, 3)
+
+    // ─── Remove b, add d ───
+    list.clear(items)
+    _ = list.add(items, a)
+    _ = list.add(items, c)
+    d = mk_item("d")
+    _ = list.add(items, d)
+
+    touched2 = refresh.refresh(ctx)
+    // After diff: a/c preserved, b destroyed (skipped), d rendered.
+    // Bindings fire on a, c, d = 3 (d picked up the binding via
+    // its render callback). b's binding is on a destroyed element
+    // → grammar_reactive skips it.
+    assert_eq_int("refresh2: 3 more fills (a+c+d)", list.size(fill_log), 6)
+    // touched count: a, c, d → 3. b destroyed → not counted.
+    assert_eq_int("refresh2: 3 touched (b destroyed → skipped)", touched2, 3)
+
+    // ─── Verify destroyed state ───
+    // b's element is on a region's "current" map for "b" → we can
+    // probe via grammar_bind.region_current_get_el (which returns
+    // null for missing keys).
+    el_b = grammar_bind.region_current_get_el(region, "b")
+    if el_b == null {
+        println("  PASS: b removed from region.current")
+    } else {
+        println("  FAIL: b still in region")
+        exit(1)
+    }
+
+    println("=== test_refresh passed ===")
+}
