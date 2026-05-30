@@ -1,0 +1,209 @@
+// cvg/test_blur.ae — regression test for blur.ae.
+//
+// Property-based: instead of pinning exact RGBA bytes (which would
+// be brittle across kernel-implementation variations), check
+// invariants that any separable Gaussian must satisfy:
+//   - Constant image is preserved (Σ kernel = 1).
+//   - Edge pixels are clamp-extended, not zero-extended.
+//   - Symmetric input → symmetric output.
+//   - σ=0 on both axes is a no-op.
+//   - σ=0 on one axis acts as 1-D blur (fall-through uses
+//     bytes.copy_from_bytes — the v0.192 primitive).
+//   - Kernel is normalised (Σ = 1) and symmetric around centre.
+
+import blur
+import std.bytes
+import std.floatarr
+import std.math
+
+extern exit(code: int)
+
+EPS() -> float { return 0.001 }
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_near(label: string, got: float, want: float) {
+    if math.abs_float(got - want) < EPS() {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+// Make a w*h RGBA buffer filled with (r,g,b,a) at every pixel.
+mk_solid(w: int, h: int, r: int, g: int, b: int, a: int) -> ptr {
+    n = w * h * 4
+    buf = bytes.new(n)
+    bytes.set(buf, n - 1, 0)   // extend logical length to n
+    i = 0
+    while i < n {
+        bytes.set(buf, i,     r)
+        bytes.set(buf, i + 1, g)
+        bytes.set(buf, i + 2, b)
+        bytes.set(buf, i + 3, a)
+        i = i + 4
+    }
+    return buf
+}
+
+// Set a single pixel.
+set_px(buf: ptr, w: int, x: int, y: int, r: int, g: int, b: int, a: int) {
+    idx = (y * w + x) * 4
+    bytes.set(buf, idx,     r)
+    bytes.set(buf, idx + 1, g)
+    bytes.set(buf, idx + 2, b)
+    bytes.set(buf, idx + 3, a)
+}
+
+// Read one channel of one pixel.
+get_ch(buf: ptr, w: int, x: int, y: int, ch: int) -> int {
+    return bytes.get(buf, (y * w + x) * 4 + ch)
+}
+
+main() {
+    println("=== test_blur ===")
+
+    // ─── Kernel properties ───────────────────────────────────────
+    k = blur.build_kernel(1.0)
+    n = floatarr.size(k)
+    // r = ceil(3*1) = 3 → size = 7
+    assert_eq_int("kernel size for σ=1", n, 7)
+    sum = 0.0
+    i = 0
+    while i < n {
+        sum = sum + floatarr.get_unchecked(k, i)
+        i = i + 1
+    }
+    assert_near("kernel sum = 1", sum, 1.0)
+    // Symmetric around centre
+    centre = (n - 1) / 2
+    j = 0
+    while j < centre {
+        l = floatarr.get_unchecked(k, j)
+        r = floatarr.get_unchecked(k, n - 1 - j)
+        assert_near("kernel symmetric j=${j}", l, r)
+        j = j + 1
+    }
+    floatarr.free(k)
+
+    // Larger sigma
+    k2 = blur.build_kernel(2.0)
+    n2 = floatarr.size(k2)
+    // r = ceil(6) = 6 → size = 13
+    assert_eq_int("kernel size for σ=2", n2, 13)
+    floatarr.free(k2)
+
+    // ─── σ=0,0 → no-op ───────────────────────────────────────────
+    img1 = mk_solid(5, 5, 100, 150, 200, 255)
+    blur.gaussian_blur(img1, 5, 5, 0.0, 0.0)
+    // All pixels still (100, 150, 200, 255).
+    assert_eq_int("σ=0,0 R unchanged", get_ch(img1, 5, 2, 2, 0), 100)
+    assert_eq_int("σ=0,0 G unchanged", get_ch(img1, 5, 2, 2, 1), 150)
+    assert_eq_int("σ=0,0 B unchanged", get_ch(img1, 5, 2, 2, 2), 200)
+    assert_eq_int("σ=0,0 A unchanged", get_ch(img1, 5, 2, 2, 3), 255)
+    bytes.free(img1)
+
+    // ─── Constant image is preserved under any σ ─────────────────
+    // Σ kernel = 1 (proven above) → blurring a constant returns
+    // the same constant pixel-by-pixel.
+    img2 = mk_solid(8, 8, 80, 120, 160, 255)
+    blur.gaussian_blur(img2, 8, 8, 1.5, 1.5)
+    // Centre pixel
+    assert_eq_int("constant blur centre R", get_ch(img2, 8, 4, 4, 0), 80)
+    assert_eq_int("constant blur centre G", get_ch(img2, 8, 4, 4, 1), 120)
+    assert_eq_int("constant blur centre B", get_ch(img2, 8, 4, 4, 2), 160)
+    assert_eq_int("constant blur centre A", get_ch(img2, 8, 4, 4, 3), 255)
+    // Corner pixel — clamp-extension means the corner's neighbourhood
+    // includes copies of itself, so it also blurs to the same constant.
+    assert_eq_int("constant blur corner R", get_ch(img2, 8, 0, 0, 0), 80)
+    assert_eq_int("constant blur corner A", get_ch(img2, 8, 0, 0, 3), 255)
+    bytes.free(img2)
+
+    // ─── σ=0 on one axis falls through to bytes.copy_from_bytes ──
+    // (The headline v0.192 use case.) Vertical-only blur on a
+    // 1-pixel-tall image should leave it identical (no rows to
+    // blur into); the σ_x=0 path runs and copy_from_bytes is hit.
+    img3 = mk_solid(4, 1, 50, 60, 70, 80)
+    blur.gaussian_blur(img3, 4, 1, 0.0, 1.0)
+    assert_eq_int("σ_x=0 vertical-only R", get_ch(img3, 4, 2, 0, 0), 50)
+    assert_eq_int("σ_x=0 vertical-only A", get_ch(img3, 4, 2, 0, 3), 80)
+    bytes.free(img3)
+
+    // Horizontal-only blur on a 1-column image: σ_y=0 path runs.
+    img4 = mk_solid(1, 4, 90, 100, 110, 120)
+    blur.gaussian_blur(img4, 1, 4, 1.0, 0.0)
+    assert_eq_int("σ_y=0 horizontal-only R", get_ch(img4, 1, 0, 2, 0), 90)
+    assert_eq_int("σ_y=0 horizontal-only A", get_ch(img4, 1, 0, 2, 3), 120)
+    bytes.free(img4)
+
+    // ─── Mass-conservation: a single bright pixel spreads but its
+    //     total channel sum stays ≈ same. ────────────────────────────
+    // 11x11 buffer, single white pixel in centre. Blur with σ=1.
+    // Sum of all R channels after blur should ≈ sum before (255).
+    img5 = mk_solid(11, 11, 0, 0, 0, 255)
+    set_px(img5, 11, 5, 5, 255, 0, 0, 255)
+    blur.gaussian_blur(img5, 11, 11, 1.0, 1.0)
+    // Total R across all 121 pixels.
+    total_r = 0
+    py = 0
+    while py < 11 {
+        px = 0
+        while px < 11 {
+            total_r = total_r + get_ch(img5, 11, px, py, 0)
+            px = px + 1
+        }
+        py = py + 1
+    }
+    // Expected ≈ 255. Allow ±5 for rounding.
+    if total_r < 250 {
+        println("  FAIL: mass conservation: total_r=${total_r} want ≈255")
+        exit(1)
+    }
+    if total_r > 260 {
+        println("  FAIL: mass conservation: total_r=${total_r} want ≈255")
+        exit(1)
+    }
+    println("  PASS: mass conservation (total_r=${total_r}, ≈255)")
+    // Centre pixel should be the brightest.
+    centre_r = get_ch(img5, 11, 5, 5, 0)
+    edge_r = get_ch(img5, 11, 3, 5, 0)
+    far_r = get_ch(img5, 11, 0, 5, 0)
+    if centre_r <= edge_r {
+        println("  FAIL: centre R (${centre_r}) <= edge R (${edge_r})")
+        exit(1)
+    }
+    if edge_r <= far_r {
+        println("  FAIL: edge R (${edge_r}) <= far R (${far_r})")
+        exit(1)
+    }
+    println("  PASS: monotonic falloff centre>edge>far (${centre_r} > ${edge_r} > ${far_r})")
+    bytes.free(img5)
+
+    // ─── Symmetric input → symmetric output ─────────────────────
+    // 5x5 image with a single bright pixel in centre. After blur,
+    // (cx-1, cy) should equal (cx+1, cy), and (cx, cy-1) should
+    // equal (cx, cy+1).
+    img6 = mk_solid(5, 5, 0, 0, 0, 255)
+    set_px(img6, 5, 2, 2, 255, 0, 0, 255)
+    blur.gaussian_blur(img6, 5, 5, 1.0, 1.0)
+    left  = get_ch(img6, 5, 1, 2, 0)
+    right = get_ch(img6, 5, 3, 2, 0)
+    up    = get_ch(img6, 5, 2, 1, 0)
+    down  = get_ch(img6, 5, 2, 3, 0)
+    assert_eq_int("symmetric L=R", left, right)
+    assert_eq_int("symmetric U=D", up, down)
+    // Anisotropic kernel → vertical should equal horizontal too
+    // (σ_x = σ_y).
+    assert_eq_int("isotropic L=U", left, up)
+    bytes.free(img6)
+
+    println("=== test_blur passed ===")
+}

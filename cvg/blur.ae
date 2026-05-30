@@ -1,0 +1,213 @@
+// cvg/blur.ae — separable Gaussian blur on RGBA pixel buffers.
+//
+// Port of cosyne/src/cvg/blur.ts (Tier B, the start of the pixel
+// pipeline). Two-pass separable kernel: horizontal pass writes
+// pixels → temp, vertical pass writes temp → pixels. Edge pixels
+// are clamped (nearest-neighbour extension). Kernel radius is
+// ceil(3 * sigma).
+//
+// This is the first downstream use of bytes.copy_from_bytes (v0.192,
+// landed specifically for the σ=0 fall-through paths in this code).
+//
+// Data model:
+//   pixels: ptr (std.bytes buffer of length w*h*4, RGBA row-major)
+//   kernel: ptr (std.floatarr of length 2r+1)
+//
+// Aether `bytes.new(n)` returns a buffer with capacity n and
+// **logical length 0**. To use it as a fixed-size pixel buffer we
+// extend the length by writing to the last index once at creation.
+
+exports ( gaussian_blur, build_kernel )
+
+import std.bytes
+import std.floatarr
+import std.math
+
+// Aether has no `float as int` cast. libm's `lrint(double) -> long`
+// fills the gap for the hot inner loop (rounds-to-even, IEEE-754
+// default). Extern decl uses Aether `float` (= C double) → long.
+extern lrint(x: float) -> long
+
+// ─── Kernel builder ──────────────────────────────────────────────
+//
+// Normalised 1D Gaussian, radius = ceil(3 * sigma), total length 2r+1.
+// Returns a *FloatArray. Caller frees with floatarr.free.
+
+build_kernel(sigma: float) -> ptr {
+    rf = math.ceil(3.0 * sigma)
+    // rf is a whole-number float; we need it as an int for the
+    // floatarr size + loop. No `float as int`; convert via the
+    // float-counter idiom (decrement r_float by 1 till 0 to count).
+    size_f = 2.0 * rf + 1.0
+    // Walk a counter to derive the int size — counter loop matches
+    // arc-to-cubic in normalizer.ae.
+    size = 0
+    remaining = size_f
+    while remaining > 0.5 {
+        size = size + 1
+        remaining = remaining - 1.0
+    }
+    k, _ = floatarr.new(size)
+    s2 = 2.0 * sigma * sigma
+
+    // First pass: fill kernel[i+r] = exp(-(i*i)/s2) for i in [-r, r].
+    // i runs from -rf to +rf as a float counter; offset index is
+    // i + r (also float, but we step in 1.0 increments so int casts
+    // would be exact if we had them).
+    fi = 0.0 - rf
+    idx = 0
+    total = 0.0
+    while idx < size {
+        v = math.exp((0.0 - (fi * fi)) / s2)
+        floatarr.set_unchecked(k, idx, v)
+        total = total + v
+        fi = fi + 1.0
+        idx = idx + 1
+    }
+
+    // Normalise.
+    j = 0
+    while j < size {
+        cur = floatarr.get_unchecked(k, j)
+        floatarr.set_unchecked(k, j, cur / total)
+        j = j + 1
+    }
+    return k
+}
+
+// ─── Make a fixed-size pixel buffer of `n` bytes ─────────────────
+//
+// bytes.new(n) creates a buffer of capacity n but logical length 0.
+// Touching index n-1 extends the length to n and zero-fills.
+mk_buf(n: int) -> ptr {
+    b = bytes.new(n)
+    // Extend length and zero-fill via a single write at the tail.
+    e = bytes.set(b, n - 1, 0)
+    if e < 0 { } // unreachable on a fresh buffer
+    return b
+}
+
+// Clamp x to [lo, hi].
+clamp_int(x: int, lo: int, hi: int) -> int {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+
+// Round a float to the nearest byte value (0..255). Uses libm's
+// lrint (banker's rounding to long), then clamps via std.math.
+// Returns int — lrint returns long, but byte values trivially fit
+// and Aether int-typed callees coerce the long down.
+round_clamp_byte(f: float) -> int {
+    if f < 0.0 { return 0 }
+    if f > 255.0 { return 255 }
+    v = lrint(f)
+    // 0..255 clamp again after rounding (e.g. 254.7 → 255 is fine,
+    // but a slightly-out-of-range rounding result shouldn't escape).
+    if v < 0 { return 0 }
+    if v > 255 { return 255 }
+    return math.clamp_int(v, 0, 255)
+}
+
+// ─── gaussian_blur ───────────────────────────────────────────────
+//
+// In-place blur on `pixels`. sigma_x is horizontal stddev; sigma_y
+// is vertical stddev (pass <= 0 to disable that pass). Returns
+// nothing — mutates `pixels` directly.
+
+gaussian_blur(pixels: ptr, w: int, h: int, sigma_x: float, sigma_y: float) {
+    if sigma_x <= 0.0 {
+        if sigma_y <= 0.0 { return }
+    }
+
+    n = w * h * 4
+    temp = mk_buf(n)
+
+    // ─── Horizontal pass: pixels → temp ──────────────────────────
+    if sigma_x > 0.0 {
+        kx = build_kernel(sigma_x)
+        kx_size = floatarr.size(kx)
+        // radius r = (size - 1) / 2 (integer division — exact since
+        // size is always odd).
+        rx = (kx_size - 1) / 2
+        y = 0
+        while y < h {
+            x = 0
+            while x < w {
+                rr = 0.0
+                gg = 0.0
+                bb = 0.0
+                aa = 0.0
+                k = 0 - rx
+                while k <= rx {
+                    sx = clamp_int(x + k, 0, w - 1)
+                    idx = (y * w + sx) * 4
+                    weight = floatarr.get_unchecked(kx, k + rx)
+                    rr = rr + bytes.get(pixels, idx)     * weight
+                    gg = gg + bytes.get(pixels, idx + 1) * weight
+                    bb = bb + bytes.get(pixels, idx + 2) * weight
+                    aa = aa + bytes.get(pixels, idx + 3) * weight
+                    k = k + 1
+                }
+                oi = (y * w + x) * 4
+                e1 = bytes.set(temp, oi,     round_clamp_byte(rr))
+                e2 = bytes.set(temp, oi + 1, round_clamp_byte(gg))
+                e3 = bytes.set(temp, oi + 2, round_clamp_byte(bb))
+                e4 = bytes.set(temp, oi + 3, round_clamp_byte(aa))
+                if e1 + e2 + e3 + e4 < 0 { } // unreachable: index is bounded by n above
+                x = x + 1
+            }
+            y = y + 1
+        }
+        floatarr.free(kx)
+    } else {
+        // No horizontal pass — copy pixels → temp wholesale.
+        // This is the headline use case for bytes.copy_from_bytes
+        // (v0.192, landed for exactly this fall-through).
+        ce = bytes.copy_from_bytes(temp, 0, pixels, 0, n)
+        if ce < 0 { } // unreachable
+    }
+
+    // ─── Vertical pass: temp → pixels ────────────────────────────
+    if sigma_y > 0.0 {
+        ky = build_kernel(sigma_y)
+        ky_size = floatarr.size(ky)
+        ry = (ky_size - 1) / 2
+        y = 0
+        while y < h {
+            x = 0
+            while x < w {
+                rr = 0.0
+                gg = 0.0
+                bb = 0.0
+                aa = 0.0
+                k = 0 - ry
+                while k <= ry {
+                    sy2 = clamp_int(y + k, 0, h - 1)
+                    idx = (sy2 * w + x) * 4
+                    weight = floatarr.get_unchecked(ky, k + ry)
+                    rr = rr + bytes.get(temp, idx)     * weight
+                    gg = gg + bytes.get(temp, idx + 1) * weight
+                    bb = bb + bytes.get(temp, idx + 2) * weight
+                    aa = aa + bytes.get(temp, idx + 3) * weight
+                    k = k + 1
+                }
+                oi = (y * w + x) * 4
+                e1 = bytes.set(pixels, oi,     round_clamp_byte(rr))
+                e2 = bytes.set(pixels, oi + 1, round_clamp_byte(gg))
+                e3 = bytes.set(pixels, oi + 2, round_clamp_byte(bb))
+                e4 = bytes.set(pixels, oi + 3, round_clamp_byte(aa))
+                if e1 + e2 + e3 + e4 < 0 { } // unreachable
+                x = x + 1
+            }
+            y = y + 1
+        }
+        floatarr.free(ky)
+    } else {
+        // No vertical pass — copy temp → pixels wholesale.
+        ce = bytes.copy_from_bytes(pixels, 0, temp, 0, n)
+        if ce < 0 { } // unreachable
+    }
+
+    bytes.free(temp)
+}

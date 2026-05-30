@@ -18,6 +18,8 @@ are wired into `ci.sh` as **Phase 0** (runs even with no display).
 | easing | `grammar-types.ts` (subset, ~80 LoC) | `easing.ae` | `test_easing.ae` (44 asserts) | ✅ 7 easing fns (linear, in/out/inOut quad + cubic), `lerp`, `parse_hex_color` (with 3-char shorthand expansion). First downstream consumer of v0.193's `string.to_int_radix`. `lerp_color` deferred — needs `string.from_int_radix` with zero-padding, filed as `aether/cvg_asked_for.md`. |
 | parser | `parser.ts` (245 LoC) | `parser.ae` | `test_parser.ae` (39 asserts) | ✅ SVG → `SvgNode` tree. Index-walking tokenizer (mirrors TS source) + std.regex for header strip (`<?xml…?>`, multi-line `<!DOCTYPE…>`, comments). Hand-rolled attribute scanner avoids juggling regex captures across walks. Self-closing, nested, mixed-quote, text-content, namespaced/hyphenated attrs all covered. <!ENTITY> expansion deferred (~5% of real-world SVGs need it). |
 | bbox | `bbox.ts` (281 LoC) | `bbox.ae` | `test_bbox.ae` (60 asserts) | ✅ AABB walker for circle/ellipse/rect/line/polyline/polygon/path/text + group recursion. Stroke-width margin from `style="stroke-width:…"` or attribute. CSS length units (cm/mm/in/pt/pc/px). Transform cascade via `parse_transform` (also landed this batch). SKIP_TAGS (defs, filter, …) honoured. |
+| **— Tier B —** | | | | |
+| blur | `blur.ts` (101 LoC) | `blur.ae` | `test_blur.ae` (25 asserts, property-based) | ✅ Two-pass separable Gaussian on RGBA `std.bytes` buffers. First downstream consumer of v0.192's `bytes.copy_from_bytes` (σ=0 fall-through). Uses libm `lrint` extern for fast float→int (no `as int` cast available). |
 
 Also landed: **`parse_transform`** (deferred since the first commit; ~22
 extra assertions in `test_transform.ae`, total 52) + cross-module
@@ -31,8 +33,8 @@ boundaries, so a shared `types.ae` would be dead weight; each
 consumer declares the structs it uses locally and exposes accessor
 functions for cross-module reads.
 
-**Tier A complete.** Next per inventory: Tier B (pixel pipeline:
-`blur.ae`, `rasterize.ae`, `grammar-utils.ae`).
+**Tier A complete.** **Tier B started**: `blur.ae` landed. Next:
+`rasterize.ae`, `grammar-utils.ae`.
 
 ## Running a test by hand
 
@@ -118,3 +120,12 @@ reference. Capturing them here so the next module doesn't rediscover them.
   variants that take the cast inside A. See `transform.affine_mul_p`,
   `affine_apply_p`, `affine_is_identity_p` — symmetric with the
   `normalizer.cmd_type` / `cmd_args` shape.
+- **Float → int via libm `lrint`.** Aether has no `float as int` cast
+  and no `math.to_int(f)`. For hot inner loops (the rasterizer's
+  per-pixel rounding, the blur kernel's centre-index derivation),
+  declare `extern lrint(x: float) -> long` and call directly. Returns
+  long; int-typed callees auto-coerce. Banker's rounding to even at
+  .5 — matches IEEE-754 default. The counter-loop float→int hack
+  (`while remaining > 0.5 { count += 1; remaining -= 1.0 }`) works
+  for small bounded counts (kernel size derivation: ~10 iterations
+  once per blur) but is O(n) so DO NOT use inside per-pixel loops.
