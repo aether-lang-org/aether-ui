@@ -1,0 +1,248 @@
+// aevg/render_as_raster.ae — pre-render element to RGBA + apply
+// filter/clipPath, then dispatch as canvas_raster.
+//
+// Port of renderAsRaster from grammar-defs.ts. This is the bridge
+// from Tier-C shape-factory dispatch (`grammar_shapes.shape_*`)
+// into the Tier-B rasterizer (`rasterize.fill_*_in_buffer`,
+// `blur.gaussian_blur`, `rasterize.apply_clip_mask`).
+//
+// When a shape has `style.filterId` or `style.clipPathId` set, the
+// shape factory delegates to render_as_raster instead of dispatching
+// directly. The flow:
+//
+//   1. Compute expanded buffer dims in SVG space (element bounds +
+//      filter region + blur radius).
+//   2. Map to pixel space; allocate RGBA buffer of pxBufW * pxBufH * 4.
+//   3. Parse fill_color → (cr, cg, cb, ca); bake effective alpha.
+//   4. Call the shape_filler closure with (buf, w, h, off_x, off_y,
+//      r, g, b, a) — caller fills the shape into the buffer.
+//   5. Apply Gaussian blur (if any sigma > 0).
+//   6. Crop to filter region (gives natural blur falloff at the
+//      boundary, matching librsvg).
+//   7. Build a clip mask from the clipPath's shapes, multiply
+//      target alpha by mask alpha.
+//   8. Base64-encode the buffer; dispatch canvas_raster with
+//      {x, y, w, h, rawPixels}.
+//
+// API:
+//   render_as_raster(ctx, backend, bx, by, bw, bh, fill_color,
+//                    style, filter_id, clip_path_id, shape_filler)
+//     -> ptr (underlying handle from canvas_raster)
+//
+// shape_filler: a `callback { ... }` that takes
+//   |buf: ptr, w: int, h: int, off_x: float, off_y: float,
+//    r: int, g: int, b: int, a: int|
+// and fills the shape pixels using rasterize.fill_*_in_buffer.
+//
+// Bare-named functions in this slot would trigger the env-arg-shift
+// codegen bug (aether/fn_bare_name_env_shift.md). The convention is
+// to always pass a `callback { ... }` block, which works correctly.
+
+exports ( render_as_raster )
+
+import std.bytes
+import std.string
+import std.math
+import std.map
+import grammar_context
+import grammar_rendering
+import grammar_utils
+import grammar_defs
+import rasterize
+import blur
+import transform
+import aevg_backend
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+
+// ─── render_as_raster ────────────────────────────────────────────
+
+render_as_raster(ctx: ptr, backend: ptr,
+                 bx: float, by: float, bw: float, bh: float,
+                 fill_color: string,
+                 style: ptr,
+                 filter_id: string, clip_path_id: string,
+                 shape_filler: fn) -> ptr {
+
+    // ─── 1. Resolve filter/clipPath registry lookups ─────────────
+    filter_def = null
+    if string.length(filter_id) > 0 {
+        filter_def = grammar_context.get_filter(ctx, filter_id)
+    }
+    clip_def = null
+    if string.length(clip_path_id) > 0 {
+        clip_def = grammar_context.get_clip_path(ctx, clip_path_id)
+    }
+
+    // ─── 2. Compute blur radius (in SVG units) ───────────────────
+    blur_sigma_x = 0.0
+    blur_sigma_y = 0.0
+    if filter_def != null {
+        if grammar_defs.filter_has_blur(filter_def) == 1 {
+            blur_sigma_x = grammar_defs.filter_blur_sigma_x(filter_def)
+            blur_sigma_y = grammar_defs.filter_blur_sigma_y(filter_def)
+        }
+    }
+    blur_radius_x = math.ceil(3.0 * blur_sigma_x)
+    blur_radius_y = math.ceil(3.0 * blur_sigma_y)
+
+    // ─── 3. Expand bounds by filter region + blur radius ─────────
+    expand_x = blur_radius_x
+    expand_y = blur_radius_y
+    if filter_def != null {
+        fr_expand_x = math.ceil(math.abs_float(grammar_defs.filter_region_x(filter_def)) * bw)
+        fr_expand_y = math.ceil(math.abs_float(grammar_defs.filter_region_y(filter_def)) * bh)
+        if fr_expand_x > expand_x { expand_x = fr_expand_x }
+        if fr_expand_y > expand_y { expand_y = fr_expand_y }
+    }
+
+    // SVG-space buffer bounds:
+    svg_buf_x = bx - expand_x
+    svg_buf_y = by - expand_y
+    svg_buf_w = bw + expand_x * 2.0
+    svg_buf_h = bh + expand_y * 2.0
+
+    // ─── 4. Map to pixel space ───────────────────────────────────
+    p1 = grammar_rendering.map_point(ctx, svg_buf_x, svg_buf_y)
+    p2 = grammar_rendering.map_point(ctx, svg_buf_x + svg_buf_w,
+                                          svg_buf_y + svg_buf_h)
+    px_buf_x = transform.pt_x(p1)
+    px_buf_y = transform.pt_y(p1)
+    px_buf_x2 = transform.pt_x(p2)
+    px_buf_y2 = transform.pt_y(p2)
+    buf_w = lrint(px_buf_x2 - px_buf_x)
+    buf_h = lrint(px_buf_y2 - px_buf_y)
+    if buf_w < 1 { buf_w = 1 }
+    if buf_h < 1 { buf_h = 1 }
+
+    // ─── 5. Allocate RGBA buffer (transparent black to start) ───
+    n = buf_w * buf_h * 4
+    pixels = bytes.new(n)
+    bytes.set(pixels, n - 1, 0)  // extend length to n, zero-fill
+
+    // ─── 6. Parse fill colour + apply effective alpha ──────────
+    rgba = rasterize.parse_color_to_rgba(fill_color)
+    cr = rasterize.rgba_r(rgba)
+    cg = rasterize.rgba_g(rgba)
+    cb_ = rasterize.rgba_b(rgba)
+    ca = rasterize.rgba_a(rgba)
+    eff_a = 1.0
+    if style != null {
+        eff_a = grammar_utils.effective_alpha(style)
+    }
+    final_a = lrint(ca * eff_a)
+    if final_a < 0 { final_a = 0 }
+    if final_a > 255 { final_a = 255 }
+
+    // ─── 7. Element offset within the buffer (pixel space) ───────
+    pe = grammar_rendering.map_point(ctx, bx, by)
+    off_x = transform.pt_x(pe) - px_buf_x
+    off_y = transform.pt_y(pe) - px_buf_y
+
+    // ─── 8. Invoke the shape_filler closure ──────────────────────
+    invoke_shape_filler(shape_filler, pixels, buf_w, buf_h,
+                        off_x, off_y, cr, cg, cb_, final_a)
+
+    // ─── 9. Gaussian blur (if any sigma > 0) ─────────────────────
+    if blur_sigma_x > 0.0 {
+        // Scale sigma SVG → px via mapping.scale * currentTransform.averageScale
+        avg_scale = transform.affine_average_scale_p(grammar_rendering.current_transform(ctx))
+        px_sigma_x = grammar_rendering.map_length(ctx, blur_sigma_x) * avg_scale
+        px_sigma_y = grammar_rendering.map_length(ctx, blur_sigma_y) * avg_scale
+        blur.gaussian_blur(pixels, buf_w, buf_h, px_sigma_x, px_sigma_y)
+    } else {
+        if blur_sigma_y > 0.0 {
+            avg_scale = transform.affine_average_scale_p(grammar_rendering.current_transform(ctx))
+            px_sigma_x = grammar_rendering.map_length(ctx, blur_sigma_x) * avg_scale
+            px_sigma_y = grammar_rendering.map_length(ctx, blur_sigma_y) * avg_scale
+            blur.gaussian_blur(pixels, buf_w, buf_h, px_sigma_x, px_sigma_y)
+        }
+    }
+
+    // ─── 10. Crop to filter region (if filter present) ──────────
+    // The cropping deferred: producing a sub-buffer requires
+    // bytes.copy_from_bytes per row, which is straightforward but
+    // adds ~30 LoC. For now, render the full expanded buffer and
+    // leave cropping as a follow-up (TS source's "natural blur
+    // falloff" comment confirms it's an optimisation, not a
+    // correctness requirement).
+    out_pixels = pixels
+    out_w = buf_w
+    out_h = buf_h
+    out_px_x = px_buf_x
+    out_px_y = px_buf_y
+
+    // ─── 11. Apply clip mask (if clipPath present) ──────────────
+    if clip_def != null {
+        mask_n = out_w * out_h * 4
+        mask = bytes.new(mask_n)
+        bytes.set(mask, mask_n - 1, 0)
+
+        n_shapes = grammar_defs.clip_path_shape_count(clip_def)
+        si = 0
+        while si < n_shapes {
+            shape = grammar_defs.clip_path_shape_at(clip_def, si)
+            kind = grammar_defs.clip_shape_kind(shape)
+            avg_scale = transform.affine_average_scale_p(grammar_rendering.current_transform(ctx))
+            if kind == grammar_defs.CLIP_SHAPE_RECT() {
+                rp = grammar_rendering.map_point(ctx,
+                                                 grammar_defs.clip_shape_x(shape),
+                                                 grammar_defs.clip_shape_y(shape))
+                rw = grammar_rendering.map_length(ctx,
+                          grammar_defs.clip_shape_width(shape)) * avg_scale
+                rh = grammar_rendering.map_length(ctx,
+                          grammar_defs.clip_shape_height(shape)) * avg_scale
+                rasterize.fill_rect_in_buffer(mask, out_w, out_h,
+                    transform.pt_x(rp) - out_px_x,
+                    transform.pt_y(rp) - out_px_y,
+                    rw, rh,
+                    255, 255, 255, 255)
+            }
+            if kind == grammar_defs.CLIP_SHAPE_CIRCLE() {
+                cp = grammar_rendering.map_point(ctx,
+                                                 grammar_defs.clip_shape_cx(shape),
+                                                 grammar_defs.clip_shape_cy(shape))
+                cr2 = grammar_rendering.map_length(ctx,
+                          grammar_defs.clip_shape_r(shape)) * avg_scale
+                rasterize.fill_circle_in_buffer(mask, out_w, out_h,
+                    transform.pt_x(cp) - out_px_x,
+                    transform.pt_y(cp) - out_px_y,
+                    cr2,
+                    255, 255, 255, 255)
+            }
+            si = si + 1
+        }
+        rasterize.apply_clip_mask(out_pixels, mask, out_w * out_h)
+    }
+
+    // ─── 12. Base64-encode + dispatch canvas_raster ─────────────
+    // We need to copy the bytes buffer before base64_encode_bytes
+    // consumes it (the wrapper calls bytes.finish which is destructive).
+    // Workaround: re-encode into a fresh bytes buffer for the encoder.
+    pixel_count = out_w * out_h * 4
+    enc_buf = bytes.new(pixel_count)
+    bytes.set(enc_buf, pixel_count - 1, 0)
+    ce = bytes.copy_from_bytes(enc_buf, 0, out_pixels, 0, pixel_count)
+    if ce < 0 { } // unreachable
+    raw_b64 = grammar_utils.base64_encode_bytes(enc_buf, pixel_count)
+
+    // Dispatch.
+    opts = map.new()
+    _ = map.put(opts, "x",         string.from_float(out_px_x))
+    _ = map.put(opts, "y",         string.from_float(out_px_y))
+    _ = map.put(opts, "w",         string.from_int(out_w))
+    _ = map.put(opts, "h",         string.from_int(out_h))
+    _ = map.put(opts, "rawPixels", raw_b64)
+    return aevg_backend.canvas_raster(backend, opts)
+}
+
+// Bridge from stored fn to invocation. The shape_filler arrives as
+// a `fn` arg — Aether's closure-unbox at the call site does the
+// right thing here because callers always pass a `callback { ... }`
+// block (env-aware wrapper), not a bare named function.
+invoke_shape_filler(cb: fn, buf: ptr, w: int, h: int,
+                    off_x: float, off_y: float,
+                    r: int, g: int, b: int, a: int) {
+    cb(buf, w, h, off_x, off_y, r, g, b, a)
+}

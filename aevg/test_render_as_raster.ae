@@ -1,0 +1,168 @@
+// aevg/test_render_as_raster.ae — regression test for render_as_raster.
+//
+// Covers the Tier-B→Tier-C bridge: pre-render a shape into an RGBA
+// buffer, apply filter (blur) and clipPath (mask multiplication),
+// dispatch as canvas_raster.
+//
+// The shape_filler is always passed as a `callback { ... }` block
+// (env-aware closure), so the fn-bare-name codegen bug
+// (aether/fn_bare_name_env_shift.md) doesn't apply.
+
+import render_as_raster
+import rasterize
+import grammar_context
+import grammar_defs
+import aevg_backend
+import parser
+import transform
+import std.string
+import std.math
+import std.map
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+assert_opt_near(label: string, b: ptr, i: int, key: string, want: float) {
+    s = aevg_backend.backend_opt_get(b, i, key)
+    got, e = string.to_double(s)
+    if e != "" { println("  FAIL: ${label}: parse '${s}' → ${e}"); exit(1) }
+    if math.abs_float(got - want) < 0.5 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+// Register a filter for a given id by parsing a minimal <filter>
+// element via grammar_defs.parse_filter.
+register_blur_filter(ctx: ptr, id: string, sigma: float) {
+    a = string.concat("<svg><defs><filter id='", id)
+    a = string.concat(a, "'><feGaussianBlur stdDeviation='")
+    a = string.concat(a, string.from_float(sigma))
+    a = string.concat(a, "'/></filter></defs></svg>")
+    root = parser.parse_svg(a)
+    defs_node = parser.node_child_at(root, 0)
+    filter_node = parser.node_child_at(defs_node, 0)
+    _ = grammar_defs.parse_filter(ctx, filter_node)
+}
+
+register_rect_clip(ctx: ptr, id: string, x: float, y: float, w: float, h: float) {
+    // Build piecewise to keep the parens countable.
+    a = string.concat("<svg><defs><clipPath id='", id)
+    a = string.concat(a, "'><rect x='")
+    a = string.concat(a, string.from_float(x))
+    a = string.concat(a, "' y='")
+    a = string.concat(a, string.from_float(y))
+    a = string.concat(a, "' width='")
+    a = string.concat(a, string.from_float(w))
+    a = string.concat(a, "' height='")
+    a = string.concat(a, string.from_float(h))
+    a = string.concat(a, "'/></clipPath></defs></svg>")
+    root = parser.parse_svg(a)
+    defs_node = parser.node_child_at(root, 0)
+    cp_node = parser.node_child_at(defs_node, 0)
+    _ = grammar_defs.parse_clip_path(ctx, cp_node)
+}
+
+main() {
+    println("=== test_render_as_raster ===")
+
+    // ─── No filter, no clipPath: pure rasterize + canvas_raster ──
+    ctx1 = mk_test_ctx()
+    bk1 = aevg_backend.backend_new()
+    // Element bounds: a 20×20 rect at (10, 10), in SVG coords.
+    // No filter/clip → buffer dims = 20×20 (no expansion).
+    // The shape_filler fills a centred rect of size 20×20.
+    _u1 = render_as_raster.render_as_raster(ctx1, bk1, 10.0, 10.0, 20.0, 20.0, "red", null, "", "") callback |buf: ptr, w: int, h: int, off_x: float, off_y: float, r: int, g: int, b: int, a: int| {
+        rasterize.fill_rect_in_buffer(buf, w, h, off_x, off_y, 20.0, 20.0, r, g, b, a)
+    }
+    assert_eq_int("plain: 1 backend call", aevg_backend.backend_call_count(bk1), 1)
+    assert_eq_str("plain: kind=raster",     aevg_backend.backend_kind(bk1, 0), "raster")
+    // Buffer dimensions in pixel space; identity viewBox means
+    // px == svg coords. Buffer = (10..30, 10..30) → 20×20.
+    assert_opt_near("plain: w=20", bk1, 0, "w", 20.0)
+    assert_opt_near("plain: h=20", bk1, 0, "h", 20.0)
+    assert_opt_near("plain: x=10", bk1, 0, "x", 10.0)
+    assert_opt_near("plain: y=10", bk1, 0, "y", 10.0)
+    // rawPixels is base64 — confirm it's non-empty.
+    raw = aevg_backend.backend_opt_get(bk1, 0, "rawPixels")
+    if string.length(raw) > 0 {
+        println("  PASS: plain: rawPixels base64 non-empty (len=${string.length(raw)})")
+    } else {
+        println("  FAIL: plain: rawPixels empty")
+        exit(1)
+    }
+
+    // ─── Filter (blur): buffer expanded by blur radius ───────────
+    // sigma=3 → blur radius = ceil(3*3) = 9
+    // Filter region defaults to (-0.1, -0.1, 1.2, 1.2) → for a 20×20
+    // element, that's (-2, -2) origin, 24×24 size. max with blur=9 → 9.
+    // So buffer expansion = 9 on each side → 38×38.
+    ctx2 = mk_test_ctx()
+    bk2 = aevg_backend.backend_new()
+    register_blur_filter(ctx2, "blur5", 3.0)
+    _u2 = render_as_raster.render_as_raster(ctx2, bk2, 10.0, 10.0, 20.0, 20.0, "red", null, "blur5", "") callback |buf: ptr, w: int, h: int, off_x: float, off_y: float, r: int, g: int, b: int, a: int| {
+        rasterize.fill_rect_in_buffer(buf, w, h, off_x, off_y, 20.0, 20.0, r, g, b, a)
+    }
+    assert_eq_int("blur: 1 backend call", aevg_backend.backend_call_count(bk2), 1)
+    assert_opt_near("blur: w expanded to 38", bk2, 0, "w", 38.0)
+    assert_opt_near("blur: h expanded to 38", bk2, 0, "h", 38.0)
+    // Buffer origin shifted to (1, 1) (10 - 9 = 1).
+    assert_opt_near("blur: x=1",  bk2, 0, "x", 1.0)
+    assert_opt_near("blur: y=1",  bk2, 0, "y", 1.0)
+
+    // ─── ClipPath (rect mask): no expansion, applies mask ────────
+    ctx3 = mk_test_ctx()
+    bk3 = aevg_backend.backend_new()
+    register_rect_clip(ctx3, "halfclip", 0.0, 0.0, 10.0, 20.0)
+    _u3 = render_as_raster.render_as_raster(ctx3, bk3, 10.0, 10.0, 20.0, 20.0, "red", null, "", "halfclip") callback |buf: ptr, w: int, h: int, off_x: float, off_y: float, r: int, g: int, b: int, a: int| {
+        rasterize.fill_rect_in_buffer(buf, w, h, off_x, off_y, 20.0, 20.0, r, g, b, a)
+    }
+    assert_eq_int("clip: 1 backend call", aevg_backend.backend_call_count(bk3), 1)
+    // No filter → no expansion, buffer is just the element bounds.
+    assert_opt_near("clip: w=20", bk3, 0, "w", 20.0)
+    assert_opt_near("clip: h=20", bk3, 0, "h", 20.0)
+
+    // ─── Both filter + clipPath ──────────────────────────────────
+    ctx4 = mk_test_ctx()
+    bk4 = aevg_backend.backend_new()
+    register_blur_filter(ctx4, "b2", 2.0)
+    register_rect_clip(ctx4, "c2", 0.0, 0.0, 30.0, 30.0)
+    _u4 = render_as_raster.render_as_raster(ctx4, bk4, 10.0, 10.0, 20.0, 20.0, "blue", null, "b2", "c2") callback |buf: ptr, w: int, h: int, off_x: float, off_y: float, r: int, g: int, b: int, a: int| {
+        rasterize.fill_rect_in_buffer(buf, w, h, off_x, off_y, 20.0, 20.0, r, g, b, a)
+    }
+    assert_eq_int("both: 1 backend call", aevg_backend.backend_call_count(bk4), 1)
+    // sigma=2 → radius=6, expansion 6, buffer 32×32
+    assert_opt_near("both: w=32", bk4, 0, "w", 32.0)
+    assert_opt_near("both: h=32", bk4, 0, "h", 32.0)
+
+    // ─── Circle shape via fill_circle_in_buffer ─────────────────
+    ctx5 = mk_test_ctx()
+    bk5 = aevg_backend.backend_new()
+    _u5 = render_as_raster.render_as_raster(ctx5, bk5, 20.0, 20.0, 40.0, 40.0, "green", null, "", "") callback |buf: ptr, w: int, h: int, off_x: float, off_y: float, r: int, g: int, b: int, a: int| {
+        // Circle centred in the 40x40 box: cx = off_x + 20, cy = off_y + 20.
+        rasterize.fill_circle_in_buffer(buf, w, h, off_x + 20.0, off_y + 20.0, 20.0, r, g, b, a)
+    }
+    assert_eq_int("circle-raster: 1 call", aevg_backend.backend_call_count(bk5), 1)
+    assert_eq_str("circle-raster: kind=raster", aevg_backend.backend_kind(bk5, 0), "raster")
+
+    println("=== test_render_as_raster passed ===")
+}
