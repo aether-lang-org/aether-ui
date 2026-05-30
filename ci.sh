@@ -129,7 +129,7 @@ run_smoke_test() {
 # CVG port unit tests — pure Aether (no GTK/display), so they run even
 # under SKIP_RUNTIME. Each is a self-contained `main()` that exits non-zero
 # on the first failed assertion. Append new modules' tests here as they land.
-CVG_TESTS=(test_transform test_normalizer)
+CVG_TESTS=(test_transform test_normalizer test_easing)
 
 # `ae cflags` doesn't currently emit transitive link flags for stdlib's
 # optional deps (libpcre2-8 / openssl / zlib / nghttp2). Modules that

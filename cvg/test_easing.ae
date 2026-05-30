@@ -1,0 +1,129 @@
+// cvg/test_easing.ae — regression test for easing.ae.
+//
+// Mirrors the math assertions implicit in the TS source's easing
+// table (cosyne/src/cvg/grammar-types.ts, the `Easing` object) and
+// the `lerp` / `parseHexColor` exports. No `lerpColor` test yet —
+// that's deferred until std.string.from_int_radix lands (filed in
+// aether/cvg_asked_for.md).
+
+import easing
+import std.math
+
+extern exit(code: int)
+
+EPS() -> float { return 0.000001 }
+
+near(a: float, b: float) -> int {
+    if math.abs_float(a - b) < EPS() { return 1 }
+    return 0
+}
+
+assert_near(label: string, got: float, want: float) {
+    if near(got, want) == 1 {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+main() {
+    println("=== test_easing ===")
+
+    // ─── linear ──────────────────────────────────────────────────
+    assert_near("linear(0)",   easing.linear(0.0),   0.0)
+    assert_near("linear(0.5)", easing.linear(0.5),   0.5)
+    assert_near("linear(1)",   easing.linear(1.0),   1.0)
+
+    // ─── ease_in: t² ─────────────────────────────────────────────
+    assert_near("ease_in(0)",    easing.ease_in(0.0),  0.0)
+    assert_near("ease_in(0.5)",  easing.ease_in(0.5),  0.25)
+    assert_near("ease_in(1)",    easing.ease_in(1.0),  1.0)
+
+    // ─── ease_out: t(2 - t) ──────────────────────────────────────
+    assert_near("ease_out(0)",   easing.ease_out(0.0), 0.0)
+    assert_near("ease_out(0.5)", easing.ease_out(0.5), 0.75)
+    assert_near("ease_out(1)",   easing.ease_out(1.0), 1.0)
+
+    // ─── ease_in_out ─────────────────────────────────────────────
+    // t < 0.5  : 2t²
+    // t >= 0.5 : -1 + (4 - 2t)t
+    assert_near("ease_in_out(0)",    easing.ease_in_out(0.0),  0.0)
+    assert_near("ease_in_out(0.25)", easing.ease_in_out(0.25), 0.125)   // 2 * 0.0625
+    assert_near("ease_in_out(0.5)",  easing.ease_in_out(0.5),  0.5)     // -1 + (4-1)*0.5 = -1 + 1.5
+    assert_near("ease_in_out(0.75)", easing.ease_in_out(0.75), 0.875)   // -1 + 2.5*0.75
+    assert_near("ease_in_out(1)",    easing.ease_in_out(1.0),  1.0)
+
+    // ─── ease_in_cubic: t³ ───────────────────────────────────────
+    assert_near("ease_in_cubic(0)",   easing.ease_in_cubic(0.0),  0.0)
+    assert_near("ease_in_cubic(0.5)", easing.ease_in_cubic(0.5),  0.125)
+    assert_near("ease_in_cubic(1)",   easing.ease_in_cubic(1.0),  1.0)
+
+    // ─── ease_out_cubic: (t-1)³ + 1 ──────────────────────────────
+    // At t=0.5: (-0.5)³ + 1 = -0.125 + 1 = 0.875
+    assert_near("ease_out_cubic(0)",   easing.ease_out_cubic(0.0),  0.0)
+    assert_near("ease_out_cubic(0.5)", easing.ease_out_cubic(0.5),  0.875)
+    assert_near("ease_out_cubic(1)",   easing.ease_out_cubic(1.0),  1.0)
+
+    // ─── ease_in_out_cubic ───────────────────────────────────────
+    // t < 0.5  : 4t³
+    // t >= 0.5 : (t-1)(2t-2)² + 1
+    //          = (t-1) * (2t-2) * (2t-2) + 1
+    // At t=0.25: 4 * 0.015625 = 0.0625
+    // At t=0.5:  0.5 (boundary, fast branch: 4 * 0.125 = 0.5)
+    // At t=0.75: (-0.25)(-0.5)(-0.5) + 1 = -0.0625 + 1 = 0.9375
+    assert_near("ease_in_out_cubic(0)",    easing.ease_in_out_cubic(0.0),  0.0)
+    assert_near("ease_in_out_cubic(0.25)", easing.ease_in_out_cubic(0.25), 0.0625)
+    assert_near("ease_in_out_cubic(0.5)",  easing.ease_in_out_cubic(0.5),  0.5)
+    assert_near("ease_in_out_cubic(0.75)", easing.ease_in_out_cubic(0.75), 0.9375)
+    assert_near("ease_in_out_cubic(1)",    easing.ease_in_out_cubic(1.0),  1.0)
+
+    // ─── monotonic: every easing should pass through (0,0) and (1,1) ─
+    // Already covered above per-fn; the property holds for all 7.
+
+    // ─── lerp ────────────────────────────────────────────────────
+    assert_near("lerp(0, 10, 0)",   easing.lerp(0.0, 10.0, 0.0),  0.0)
+    assert_near("lerp(0, 10, 0.5)", easing.lerp(0.0, 10.0, 0.5),  5.0)
+    assert_near("lerp(0, 10, 1)",   easing.lerp(0.0, 10.0, 1.0),  10.0)
+    assert_near("lerp(-5, 5, 0.5)", easing.lerp(0.0 - 5.0, 5.0, 0.5), 0.0)
+    assert_near("lerp(10, 20, 0.25)", easing.lerp(10.0, 20.0, 0.25), 12.5)
+
+    // ─── parse_hex_color ─────────────────────────────────────────
+    rgb = easing.parse_hex_color("#FF0000")
+    assert_eq_int("#FF0000 .r", easing.rgb_r(rgb), 255)
+    assert_eq_int("#FF0000 .g", easing.rgb_g(rgb), 0)
+    assert_eq_int("#FF0000 .b", easing.rgb_b(rgb), 0)
+
+    rgb2 = easing.parse_hex_color("#00ff80")
+    assert_eq_int("#00ff80 .r", easing.rgb_r(rgb2), 0)
+    assert_eq_int("#00ff80 .g", easing.rgb_g(rgb2), 255)
+    assert_eq_int("#00ff80 .b", easing.rgb_b(rgb2), 128)
+
+    rgb3 = easing.parse_hex_color("#808080")
+    assert_eq_int("#808080 .r", easing.rgb_r(rgb3), 128)
+    assert_eq_int("#808080 .g", easing.rgb_g(rgb3), 128)
+    assert_eq_int("#808080 .b", easing.rgb_b(rgb3), 128)
+
+    // 3-char shorthand: #abc → #aabbcc
+    rgb4 = easing.parse_hex_color("#abc")
+    assert_eq_int("#abc → #aabbcc .r", easing.rgb_r(rgb4), 170)   // 0xaa
+    assert_eq_int("#abc → #aabbcc .g", easing.rgb_g(rgb4), 187)   // 0xbb
+    assert_eq_int("#abc → #aabbcc .b", easing.rgb_b(rgb4), 204)   // 0xcc
+
+    // No leading '#' — should still parse.
+    rgb5 = easing.parse_hex_color("ff00ff")
+    assert_eq_int("ff00ff .r", easing.rgb_r(rgb5), 255)
+    assert_eq_int("ff00ff .g", easing.rgb_g(rgb5), 0)
+    assert_eq_int("ff00ff .b", easing.rgb_b(rgb5), 255)
+
+    println("=== test_easing passed ===")
+}

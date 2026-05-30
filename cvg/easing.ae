@@ -1,0 +1,138 @@
+// cvg/easing.ae — animation easing functions, lerp, color parsing.
+//
+// Extracted from cosyne/src/cvg/grammar-types.ts. That file in TS is a
+// mixed-concern bag (type declarations + easing fns + lerp + color
+// helpers + a per-shape geom-key dispatch table). The Aether port
+// splits it: this file is the pure-math helpers; the various structs
+// (CvgEvent, GradientDef, ViewBoxMapping, AnimationOptions) are
+// declared by their consuming modules at the time they're needed —
+// Aether struct types don't cross module boundaries, so a shared
+// `types.ae` would be useless.
+//
+// Out of scope here:
+//   - lerp_color(c1, c2, t) — needs string.from_int_radix with
+//     zero-padding for `#RRGGBB` emit. Filed as aether/cvg_asked_for.md.
+//     parse_hex_color is in scope (uses the v0.193 to_int_radix).
+//   - resolve_easing(name) — name→fn dispatch lands when Tier C wires
+//     up animation transitions (consumer-side concern).
+
+exports (
+    linear, ease_in, ease_out, ease_in_out,
+    ease_in_cubic, ease_out_cubic, ease_in_out_cubic,
+    lerp,
+    parse_hex_color
+)
+
+import std.string
+import std.math
+
+extern malloc(size: int) -> ptr
+
+// ─── Easing functions ────────────────────────────────────────────
+//
+// Each takes a normalised t in [0, 1] and returns an eased value in
+// [0, 1]. All match the TS-source formulas exactly so animations are
+// frame-by-frame identical with the reference.
+
+linear(t: float) -> float {
+    return t
+}
+
+ease_in(t: float) -> float {
+    return t * t
+}
+
+ease_out(t: float) -> float {
+    return t * (2.0 - t)
+}
+
+ease_in_out(t: float) -> float {
+    if t < 0.5 { return 2.0 * t * t }
+    // t < 0.5 ? 2tt : -1 + (4 - 2t)t
+    return 0.0 - 1.0 + (4.0 - 2.0 * t) * t
+}
+
+ease_in_cubic(t: float) -> float {
+    return t * t * t
+}
+
+// TS source: `(--t) * t * t + 1` — predecrement and reuse t.
+// Translate by introducing the decremented value as a local.
+ease_out_cubic(t: float) -> float {
+    u = t - 1.0
+    return u * u * u + 1.0
+}
+
+// TS source: `t < 0.5 ? 4tttt : (t-1)*(2t-2)*(2t-2) + 1` —
+// fast branch and the cubed-decrement branch.
+ease_in_out_cubic(t: float) -> float {
+    if t < 0.5 { return 4.0 * t * t * t }
+    u = 2.0 * t - 2.0
+    return (t - 1.0) * u * u + 1.0
+}
+
+// ─── lerp ────────────────────────────────────────────────────────
+
+// Linear interpolation between `from` and `to` by t in [0, 1].
+lerp(from: float, to: float, t: float) -> float {
+    return from + (to - from) * t
+}
+
+// ─── parse_hex_color ─────────────────────────────────────────────
+//
+// Accept "#RGB" or "#RRGGBB" (case-insensitive). Returns the three
+// channel ints packed into a small *RGB struct (Aether can't return
+// float/int tuples cleanly across float-bearing function boundaries,
+// per the inventory; a struct is the right shape and consumers read
+// .r / .g / .b directly).
+
+struct RGB {
+    r: int
+    g: int
+    b: int
+}
+
+// Accessor functions — RGB doesn't cross module boundaries as a type.
+exports (rgb_r, rgb_g, rgb_b)
+
+rgb_r(p: ptr) -> int { c = p as *RGB; return c.r }
+rgb_g(p: ptr) -> int { c = p as *RGB; return c.g }
+rgb_b(p: ptr) -> int { c = p as *RGB; return c.b }
+
+// Parse one 2-char hex byte from `hex` at offset `i`. Returns 0 on
+// any parse failure (matches TS behaviour: parseInt("zz", 16) = NaN
+// which the TS source happily round-trips; we collapse to 0 since
+// downstream consumers don't observe NaN-vs-0 difference for
+// well-formed CSS colour input).
+hex2(hex: string, i: int) -> int {
+    pair = string.substring(hex, i, i + 2)
+    v, e = string.to_int_radix(pair, 16)
+    if e != "" { return 0 }
+    return v
+}
+
+parse_hex_color(color: string) -> *RGB {
+    // Strip leading '#' if present.
+    hex = color
+    if string.starts_with(hex, "#") == 1 {
+        hex = string.substring(hex, 1, string.length(hex))
+    }
+
+    // Expand 3-char shorthand to 6 chars by duplicating each.
+    if string.length(hex) == 3 {
+        c0 = string.substring(hex, 0, 1)
+        c1 = string.substring(hex, 1, 2)
+        c2 = string.substring(hex, 2, 3)
+        hex = string.concat(c0, c0)
+        hex = string.concat(hex, c1)
+        hex = string.concat(hex, c1)
+        hex = string.concat(hex, c2)
+        hex = string.concat(hex, c2)
+    }
+
+    out = malloc(24) as *RGB
+    out.r = hex2(hex, 0)
+    out.g = hex2(hex, 2)
+    out.b = hex2(hex, 4)
+    return out
+}

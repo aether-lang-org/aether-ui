@@ -15,9 +15,17 @@ are wired into `ci.sh` as **Phase 0** (runs even with no display).
 |--------|-------------|--------|------|-------|
 | transform | `transform.ts` (346 LoC) | `transform.ae` | `test_transform.ae` (30 asserts) | ✅ matrix algebra + factories + projective. `parseTransform` (string→matrix) deferred — unblocked by `std.regex` v0.191; lands alongside `parser.ae`. |
 | normalizer | `normalizer.ts` (427 LoC) | `normalizer.ae` | `test_normalizer.ae` (60 asserts) | ✅ `parse_path` (regex-based tokenizer) + `normalize_commands` (rel→abs, H/V→L, S/Q/T→C, arc→cubic via SVG F.6). `serialize_commands` deferred until `string.from_float` has caller-controlled precision (the librsvg parity gate wants fixed-point output). |
+| easing | `grammar-types.ts` (subset, ~80 LoC) | `easing.ae` | `test_easing.ae` (44 asserts) | ✅ 7 easing fns (linear, in/out/inOut quad + cubic), `lerp`, `parse_hex_color` (with 3-char shorthand expansion). First downstream consumer of v0.193's `string.to_int_radix`. `lerp_color` deferred — needs `string.from_int_radix` with zero-padding, filed as `aether/cvg_asked_for.md`. |
 
-Next per the inventory's Tier A order: `types`, `grammar-types` (easing),
-`bbox`, then `parser`.
+`types.ts` is **not ported** — it's a TS-only idiom (12 type-only
+`interface` declarations). Aether struct types don't cross module
+boundaries, so a shared `types.ae` would be dead weight; each
+consumer declares the structs it uses locally and exposes accessor
+functions for cross-module reads.
+
+Next per the inventory's Tier A order: `bbox`, then `parser`. The
+`parser.ts` regex shape is the same as `parse_path`'s tokenizer, so it
+should fall out quickly.
 
 ## Running a test by hand
 
