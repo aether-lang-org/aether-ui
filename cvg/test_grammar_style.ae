@@ -1,0 +1,135 @@
+// cvg/test_grammar_style.ae — regression test for grammar_style.ae.
+//
+// Covers the four-way cascade (attrs → inline style → CSS class →
+// parent), push/pop semantics, and the convenience accessors.
+
+import grammar_style
+import grammar_context
+import transform
+import std.string
+import std.map
+
+extern exit(code: int)
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("  PASS: ${label} ('${got}')")
+    } else {
+        println("  FAIL: ${label}: got '${got}' want '${want}'")
+        exit(1)
+    }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0, 200.0, 200.0, 2.0, 0.0, 0.0, id
+    )
+    return grammar_context.new_context(m)
+}
+
+// Build a *map of attribute key→value pairs.
+mk_attrs(k1: string, v1: string) -> ptr {
+    m = map.new()
+    _ = map.put(m, k1, v1)
+    return m
+}
+
+mk_attrs2(k1: string, v1: string, k2: string, v2: string) -> ptr {
+    m = map.new()
+    _ = map.put(m, k1, v1)
+    _ = map.put(m, k2, v2)
+    return m
+}
+
+main() {
+    println("=== test_grammar_style ===")
+
+    ctx = mk_test_ctx()
+
+    // ─── Initial: empty style stack ─────────────────────────────
+    assert_eq_int("initial style depth = 0",
+                   grammar_context.style_depth(ctx), 0)
+
+    // ─── Push a style with just element attrs ───────────────────
+    a1 = mk_attrs("fill", "red")
+    grammar_style.push_style(ctx, a1, "rect", "")
+    s1 = grammar_style.current_style(ctx)
+    assert_eq_str("attrs fill=red", grammar_style.style_get(s1, "fill"), "red")
+    assert_eq_int("only fill set so far",
+                   grammar_style.style_has(s1, "stroke"), 0)
+
+    // ─── Push a child with stroke override; fill inherits ───────
+    a2 = mk_attrs("stroke", "blue")
+    grammar_style.push_style(ctx, a2, "rect", "")
+    s2 = grammar_style.current_style(ctx)
+    assert_eq_str("child stroke=blue",  grammar_style.style_get(s2, "stroke"), "blue")
+    assert_eq_str("child inherits fill", grammar_style.style_get(s2, "fill"), "red")
+    assert_eq_int("style depth = 2", grammar_context.style_depth(ctx), 2)
+
+    // ─── Pop child: stack returns to parent ─────────────────────
+    grammar_style.pop_style(ctx)
+    s3 = grammar_style.current_style(ctx)
+    assert_eq_str("after pop, fill still red", grammar_style.style_get(s3, "fill"), "red")
+    assert_eq_int("after pop, stroke unset", grammar_style.style_has(s3, "stroke"), 0)
+    assert_eq_int("depth = 1 after pop", grammar_context.style_depth(ctx), 1)
+
+    // ─── attrs beats inline style ───────────────────────────────
+    // attrs.fill=green, style="fill:purple" → fill should be green
+    a4 = mk_attrs2("fill", "green", "style", "fill:purple;opacity:0.4")
+    grammar_style.push_style(ctx, a4, "rect", "")
+    s4 = grammar_style.current_style(ctx)
+    assert_eq_str("attrs beats inline style for fill",
+                   grammar_style.style_get(s4, "fill"), "green")
+    // But opacity from style is picked up since attrs.opacity absent
+    assert_eq_str("inline style opacity wins (no attrs override)",
+                   grammar_style.style_get(s4, "opacity"), "0.4")
+    grammar_style.pop_style(ctx)
+
+    // ─── Inline style beats inherited ────────────────────────────
+    // parent has fill=red; child has only style="fill:purple"
+    a5 = mk_attrs("style", "fill:purple")
+    grammar_style.push_style(ctx, a5, "rect", "")
+    s5 = grammar_style.current_style(ctx)
+    assert_eq_str("inline-style fill=purple overrides inherited red",
+                   grammar_style.style_get(s5, "fill"), "purple")
+    grammar_style.pop_style(ctx)
+
+    // ─── Multi-property inline style ────────────────────────────
+    a6 = mk_attrs("style", "fill:#ff0000;stroke:#00ff00;stroke-width:2.5")
+    grammar_style.push_style(ctx, a6, "path", "")
+    s6 = grammar_style.current_style(ctx)
+    assert_eq_str("multi-prop fill",         grammar_style.style_get(s6, "fill"),         "#ff0000")
+    assert_eq_str("multi-prop stroke",       grammar_style.style_get(s6, "stroke"),       "#00ff00")
+    assert_eq_str("multi-prop stroke-width", grammar_style.style_get(s6, "stroke-width"), "2.5")
+    grammar_style.pop_style(ctx)
+
+    // ─── pop_style preserves bottom on over-pop ─────────────────
+    // Currently depth = 1 (the very first push). Pop once → depth 1
+    // is preserved (TS source: "if length > 1, pop").
+    grammar_style.pop_style(ctx)
+    assert_eq_int("pop_style preserves bottom",
+                   grammar_context.style_depth(ctx), 1)
+
+    // ─── resolve_style: same cascade, no push ───────────────────
+    // From the current state (depth=1, top has fill=red), build a
+    // synthetic resolution for a child with stroke=blue without
+    // pushing.
+    a7 = mk_attrs("stroke", "blue")
+    rs = grammar_style.resolve_style(ctx, a7, "rect", "")
+    assert_eq_str("resolved stroke", grammar_style.style_get(rs, "stroke"), "blue")
+    assert_eq_str("resolved inherits fill", grammar_style.style_get(rs, "fill"), "red")
+    assert_eq_int("resolve_style did NOT push",
+                   grammar_context.style_depth(ctx), 1)
+
+    println("=== test_grammar_style passed ===")
+}
