@@ -26,20 +26,15 @@
 //   element_on_click(el, my_click_handler)
 //   element_bind_fill(el, my_fill_fn)
 //
-// All callback fields are stored as `ptr`. Setters declare their
-// callback param as `ptr` too. Why not `fn`? The v0.193+1 fn ↔ ptr
-// coercion fix landed for *function-call argument positions* but NOT
-// for *struct-field assignment* — `e.handler = h` where `h: fn`
-// fails type-check ("Type mismatch in assignment"). Filed as a
-// follow-up to aether/fn_ptr_coercion.md.
-//
-// Workaround / call-site shape: callers pass a bare function name
-// (the named-fn → ptr coercion still fires at the setter call site),
-// e.g. `element_on_click(el, my_click_handler)`. Closures created
-// inline via `callback { … }` need to go through a list/map first
-// (which box via the v0.193+1 fix) and be fetched back as ptr.
-// Getters return the stored ptr; invoking via a `fn`-typed param
-// auto-unboxes at that call site.
+// All callback fields are stored as `ptr` (boxed `_AeClosure` under
+// the hood). Setters declare their param as `fn` for the idiomatic
+// call-site shape. The `fn → ptr` coercion at struct-field assignment
+// landed in Aether `[current]` (closing the follow-up gap on
+// aether/fn_ptr_coercion.md), so `e.cb = h` with `h: fn` boxes
+// correctly. Callers pass either a bare function name or an inline
+// `callback { … }` closure; both survive the round-trip with
+// captured state intact. Getters return the stored ptr; invoking
+// via a `fn`-typed param auto-unboxes at that call site.
 //
 // Out of scope this commit (defer until backend wiring lands):
 //   - text() / fill() / stroke() / opacity() — reach through to
@@ -216,12 +211,12 @@ element_context(p: ptr) -> ptr {
 
 // ─── Event handlers ──────────────────────────────────────────────
 //
-// Setters take `ptr` (the v0.193+1 fix doesn't reach struct-field
-// assignment; see file header). Bare function-name args still
-// coerce at the call site. Getters return the stored ptr; invoking
-// via a `fn`-typed param auto-unboxes at that call site.
+// Setters take `fn`; the value is boxed and stored in the struct's
+// `ptr` field via Aether's `[current]` coercion fix. Getters return
+// the stored ptr; invoking via a `fn`-typed param auto-unboxes at
+// that call site.
 
-element_on_click(p: ptr, h: ptr) {
+element_on_click(p: ptr, h: fn) {
     e = p as *AevgElement
     e.click_handler = h
 }
@@ -231,7 +226,7 @@ element_click_handler(p: ptr) -> ptr {
     return e.click_handler
 }
 
-element_on_hover(p: ptr, h: ptr) {
+element_on_hover(p: ptr, h: fn) {
     e = p as *AevgElement
     e.hover_handler = h
 }
@@ -241,7 +236,7 @@ element_hover_handler(p: ptr) -> ptr {
     return e.hover_handler
 }
 
-element_on_drag(p: ptr, h: ptr) {
+element_on_drag(p: ptr, h: fn) {
     e = p as *AevgElement
     e.drag_handler = h
 }
@@ -251,7 +246,7 @@ element_drag_handler(p: ptr) -> ptr {
     return e.drag_handler
 }
 
-element_on_drag_end(p: ptr, h: ptr) {
+element_on_drag_end(p: ptr, h: fn) {
     e = p as *AevgElement
     e.drag_end_handler = h
 }
@@ -261,7 +256,7 @@ element_drag_end_handler(p: ptr) -> ptr {
     return e.drag_end_handler
 }
 
-element_on_scroll(p: ptr, h: ptr) {
+element_on_scroll(p: ptr, h: fn) {
     e = p as *AevgElement
     e.scroll_handler = h
 }
@@ -271,7 +266,7 @@ element_scroll_handler(p: ptr) -> ptr {
     return e.scroll_handler
 }
 
-element_on_double_click(p: ptr, h: ptr) {
+element_on_double_click(p: ptr, h: fn) {
     e = p as *AevgElement
     e.double_click_handler = h
 }
@@ -281,7 +276,7 @@ element_double_click_handler(p: ptr) -> ptr {
     return e.double_click_handler
 }
 
-element_on_right_click(p: ptr, h: ptr) {
+element_on_right_click(p: ptr, h: fn) {
     e = p as *AevgElement
     e.right_click_handler = h
 }
@@ -313,7 +308,7 @@ element_cursor(p: ptr) -> string {
     return e.cursor_str
 }
 
-element_set_when(p: ptr, pred: ptr) {
+element_set_when(p: ptr, pred: fn) {
     e = p as *AevgElement
     e.when_predicate = pred
 }
@@ -345,7 +340,7 @@ element_is_destroyed(p: ptr) -> int {
 
 // ─── Reactive bindings ───────────────────────────────────────────
 
-element_bind_fill(p: ptr, f: ptr) {
+element_bind_fill(p: ptr, f: fn) {
     e = p as *AevgElement
     e.fill_binding = f
 }
@@ -355,7 +350,7 @@ element_fill_binding(p: ptr) -> ptr {
     return e.fill_binding
 }
 
-element_bind_stroke(p: ptr, f: ptr) {
+element_bind_stroke(p: ptr, f: fn) {
     e = p as *AevgElement
     e.stroke_binding = f
 }
@@ -365,7 +360,7 @@ element_stroke_binding(p: ptr) -> ptr {
     return e.stroke_binding
 }
 
-element_bind_opacity(p: ptr, f: ptr) {
+element_bind_opacity(p: ptr, f: fn) {
     e = p as *AevgElement
     e.opacity_binding = f
 }
@@ -375,7 +370,7 @@ element_opacity_binding(p: ptr) -> ptr {
     return e.opacity_binding
 }
 
-element_bind_text(p: ptr, f: ptr) {
+element_bind_text(p: ptr, f: fn) {
     e = p as *AevgElement
     e.text_binding = f
 }
@@ -385,7 +380,7 @@ element_text_binding(p: ptr) -> ptr {
     return e.text_binding
 }
 
-element_bind_pos(p: ptr, f: ptr) {
+element_bind_pos(p: ptr, f: fn) {
     e = p as *AevgElement
     e.pos_binding = f
 }
