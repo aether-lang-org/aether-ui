@@ -40,6 +40,7 @@ import grammar_utils
 import grammar_defs
 import grammar_style
 import grammar_rendering
+import grammar_css
 
 extern malloc(size: int) -> ptr
 
@@ -158,7 +159,15 @@ walk_node(ctx: ptr, backend: ptr, node_h: ptr) {
         return
     }
 
-    if string.equals(tag, "style") == 1 { return }
+    if string.equals(tag, "style") == 1 {
+        // <style> body is the CSS rule text (often wrapped in CDATA,
+        // unwrapped by parser.ae's tokenizer into node.text).
+        css_text = parser.node_text(node_h)
+        if string.length(css_text) > 0 {
+            grammar_css.register_css_style(ctx, css_text)
+        }
+        return
+    }
     if string.equals(tag, "text") == 1 {
         _ = grammar_shapes.shape_text(ctx, backend, node_h)
         return

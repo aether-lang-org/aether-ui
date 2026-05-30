@@ -1,0 +1,144 @@
+// aevg/test_grammar_css.ae — regression test for grammar_css.ae.
+//
+// Covers register_css_style + get_css_props, including end-to-end
+// through loader's <style> handling.
+
+import grammar_css
+import grammar_context
+import grammar_style
+import loader
+import aevg_backend
+import transform
+import std.string
+import std.map
+
+extern exit(code: int)
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+// Pull a property out of a get_css_props result map.
+mp_get(m: ptr, k: string) -> string {
+    v, _ = map.get(m, k)
+    if v == null { return "" }
+    return v
+}
+
+main() {
+    println("=== test_grammar_css ===")
+
+    // ─── Basic single-rule parse ────────────────────────────────
+    ctx1 = mk_test_ctx()
+    grammar_css.register_css_style(ctx1, "text { fill: red; font-size: 14; }")
+    props_text = grammar_css.get_css_props(ctx1, "text", "")
+    assert_eq_str("text fill",       mp_get(props_text, "fill"), "red")
+    assert_eq_str("text font-size",  mp_get(props_text, "font-size"), "14")
+
+    // No-match returns empty map
+    props_rect = grammar_css.get_css_props(ctx1, "rect", "")
+    assert_eq_int("rect (no rule) → empty map", map.size(props_rect), 0)
+
+    // ─── Class selector ─────────────────────────────────────────
+    ctx2 = mk_test_ctx()
+    grammar_css.register_css_style(ctx2, ".big { font-size: 24; } .red { fill: #ff0000; }")
+    props_big = grammar_css.get_css_props(ctx2, "text", "big")
+    assert_eq_str("class .big → font-size 24", mp_get(props_big, "font-size"), "24")
+    props_red = grammar_css.get_css_props(ctx2, "text", "red")
+    assert_eq_str("class .red → fill",          mp_get(props_red, "fill"), "#ff0000")
+
+    // ─── Multiple classes, later overwrites earlier ─────────────
+    ctx3 = mk_test_ctx()
+    grammar_css.register_css_style(ctx3, ".a { fill: red; } .b { fill: blue; }")
+    // class="a b" → b wins
+    props_ab = grammar_css.get_css_props(ctx3, "text", "a b")
+    assert_eq_str("class 'a b' → b wins (blue)", mp_get(props_ab, "fill"), "blue")
+    // class="b a" → a wins
+    props_ba = grammar_css.get_css_props(ctx3, "text", "b a")
+    assert_eq_str("class 'b a' → a wins (red)",  mp_get(props_ba, "fill"), "red")
+
+    // ─── Tag + class merge: class beats tag ─────────────────────
+    ctx4 = mk_test_ctx()
+    grammar_css.register_css_style(ctx4, "text { fill: black; font-size: 12; } .accent { fill: gold; }")
+    props_tc = grammar_css.get_css_props(ctx4, "text", "accent")
+    assert_eq_str("class beats tag for fill",    mp_get(props_tc, "fill"),       "gold")
+    assert_eq_str("tag-only props still inherit", mp_get(props_tc, "font-size"), "12")
+
+    // ─── Comma-separated selectors share one block ──────────────
+    ctx5 = mk_test_ctx()
+    grammar_css.register_css_style(ctx5, "rect, circle { fill: green; }")
+    props_r = grammar_css.get_css_props(ctx5, "rect", "")
+    props_c = grammar_css.get_css_props(ctx5, "circle", "")
+    assert_eq_str("rect from shared block",   mp_get(props_r, "fill"), "green")
+    assert_eq_str("circle from shared block", mp_get(props_c, "fill"), "green")
+
+    // ─── Multiple register_css_style calls accumulate + merge ───
+    ctx6 = mk_test_ctx()
+    grammar_css.register_css_style(ctx6, "text { fill: red; }")
+    grammar_css.register_css_style(ctx6, "text { stroke: blue; }")
+    props_acc = grammar_css.get_css_props(ctx6, "text", "")
+    assert_eq_str("accumulated fill",   mp_get(props_acc, "fill"),   "red")
+    assert_eq_str("accumulated stroke", mp_get(props_acc, "stroke"), "blue")
+
+    // Same selector, second call overrides on conflict
+    ctx7 = mk_test_ctx()
+    grammar_css.register_css_style(ctx7, "text { fill: red; }")
+    grammar_css.register_css_style(ctx7, "text { fill: blue; }")
+    props_ov = grammar_css.get_css_props(ctx7, "text", "")
+    assert_eq_str("override on conflict", mp_get(props_ov, "fill"), "blue")
+
+    // ─── Multi-line and extra whitespace tolerated ──────────────
+    ctx8 = mk_test_ctx()
+    grammar_css.register_css_style(ctx8, "  .x  {\n  fill : purple ;\n  opacity : 0.5 ;\n  }  ")
+    props_ws = grammar_css.get_css_props(ctx8, "rect", "x")
+    assert_eq_str("whitespace-tolerant fill", mp_get(props_ws, "fill"), "purple")
+    assert_eq_str("whitespace-tolerant opacity", mp_get(props_ws, "opacity"), "0.5")
+
+    // ─── Empty input → no-op ─────────────────────────────────────
+    ctx9 = mk_test_ctx()
+    grammar_css.register_css_style(ctx9, "")
+    props_empty = grammar_css.get_css_props(ctx9, "text", "")
+    assert_eq_int("empty CSS → no rules", map.size(props_empty), 0)
+
+    // ─── End-to-end via loader: <style> block + class on shape ───
+    bk = aevg_backend.backend_new()
+    svg_e2e = "<svg viewBox='0 0 100 100' width='100' height='100'><style>text { fill: red; } .big { font-size: 24; }</style><text x='10' y='20' class='big'>hi</text></svg>"
+    _ctx_e2e = loader.load_svg(bk, svg_e2e, 100.0, 100.0)
+    assert_eq_int("e2e: 1 backend call (text)", aevg_backend.backend_call_count(bk), 1)
+    // Style cascade: attrs (none for fill) → inline style (none) →
+    // CSS (text { fill: red; } .big { font-size: 24; }) → parent (none).
+    // class="big" picks up font-size=24 from .big; fill from tag rule.
+    assert_eq_str("e2e: text color from tag CSS",
+                   aevg_backend.backend_opt_get(bk, 0, "color"), "red")
+    // textSize = font-size from .big class = 24 (identity viewBox).
+    sz = aevg_backend.backend_opt_get(bk, 0, "textSize")
+    assert_eq_str("e2e: text size from class CSS = 24", sz, "24")
+
+    // ─── e2e: CDATA-wrapped style block (real-world SVG idiom) ──
+    bk2 = aevg_backend.backend_new()
+    svg_cdata = "<svg viewBox='0 0 100 100' width='100' height='100'><style><![CDATA[circle { fill: lime; }]]></style><circle cx='50' cy='50' r='25'/></svg>"
+    _ctx_cdata = loader.load_svg(bk2, svg_cdata, 100.0, 100.0)
+    assert_eq_int("CDATA: 1 backend call (circle)",
+                   aevg_backend.backend_call_count(bk2), 1)
+    assert_eq_str("CDATA: circle fill from CSS = lime",
+                   aevg_backend.backend_opt_get(bk2, 0, "fillColor"), "lime")
+
+    println("=== test_grammar_css passed ===")
+}

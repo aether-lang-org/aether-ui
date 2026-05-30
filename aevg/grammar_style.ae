@@ -91,15 +91,16 @@ cascade_one(out: ptr, key: string, attrs: ptr, inline_style: ptr, css: ptr, pare
 
 // ─── get_css_props ───────────────────────────────────────────────
 //
-// Look up CSS-class properties for (tag, class_name) from the
-// context's css_rules registry. Currently always returns an empty
-// map — registerCssStyle / selector parsing is a separate commit.
-// Once that lands, this becomes: read context.css_rules[selector]
-// where selector matches tag and/or class_name.
+// Delegates to grammar_css.get_css_props, which reads from
+// ctx.css_rules (populated by grammar_css.register_css_style when
+// the loader encounters a <style> element). Lookup order: tag
+// selector first, then each space-separated class in class_name —
+// later lookups overwrite earlier ones.
+
+import grammar_css
 
 get_css_props(ctx: ptr, tag: string, class_name: string) -> ptr {
-    // Stub: empty map. Real impl needs CSS selector matching.
-    return map.new()
+    return grammar_css.get_css_props(ctx, tag, class_name)
 }
 
 // ─── push_style + pop_style + current_style ──────────────────────

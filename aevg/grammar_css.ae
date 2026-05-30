@@ -1,0 +1,206 @@
+// aevg/grammar_css.ae — CSS rule parser + lookup (Tier C).
+//
+// Port of registerCssStyle / getCssProps from
+// cosyne/src/cvg/grammar-rendering.ts. Provides the real
+// implementation that grammar_style.ae's get_css_props stub
+// currently returns an empty map for.
+//
+// CSS support is intentionally minimal — the TS source's parser
+// matches "selector { prop: value; … }" blocks via one regex, with
+// comma-separated selectors. No specificity computation, no media
+// queries, no nested rules. SVG inline CSS is shallow by convention
+// and this covers it.
+//
+// Storage: context.css_rules registry (already in grammar_context),
+// keyed by selector string ("text", ".my-class"). Each value is a
+// std.map string→string of property declarations.
+//
+// Lookup precedence (matching TS):
+//   1. Element tag selector ("text", "rect", etc.)
+//   2. Each class in attrs.class (space-separated), most-specific
+//      last. Later classes overwrite earlier ones.
+//
+// Style attrs on the element + inline style="..." beat all CSS class
+// rules — that priority is handled by grammar_style.cascade_one,
+// where css is layer 3 of 4 (attrs > style > css > parent).
+
+exports (
+    register_css_style, get_css_props
+)
+
+import std.regex
+import std.string
+import std.map
+import grammar_context
+
+// ─── register_css_style ──────────────────────────────────────────
+//
+// Parse a CSS text blob (typically the contents of <style>) and
+// register every rule in ctx.css_rules. Multiple calls accumulate.
+
+register_css_style(ctx: ptr, css_text: string) {
+    if string.length(css_text) == 0 { return }
+
+    // Match "selector { body }" blocks. The body is everything
+    // between { and }; we re-parse it for "prop: val;" pairs.
+    rule_re, e = regex.compile("([^{}]+)\\{([^}]*)\\}")
+    if e != "" { return }
+    fa, fe = regex.find_all(rule_re, css_text)
+    if fe != "" { regex.free(rule_re); return }
+
+    n = regex.find_all_count(fa)
+    i = 0
+    while i < n {
+        // For each match, extract selector and body via captures.
+        // find_all gives whole-match spans only; we run captures on
+        // the substring to recover the parenthesised groups.
+        ms = regex.find_all_start(fa, i)
+        me = regex.find_all_end(fa, i)
+        rule_str = string.substring(css_text, ms, me)
+
+        caps, ce = regex.captures(rule_re, rule_str)
+        if ce == "" {
+            if caps != null {
+                if regex.capture_count(caps) >= 3 {
+                    selector_str = string.copy(regex.capture(caps, 1))
+                    body_str = string.copy(regex.capture(caps, 2))
+                    string_retain(selector_str)
+                    string_retain(body_str)
+                    process_rule(ctx, selector_str, body_str)
+                }
+                regex.captures_free(caps)
+            }
+        }
+        i = i + 1
+    }
+    regex.find_all_free(fa)
+    regex.free(rule_re)
+}
+
+// Process a single "sel1, sel2 { prop: val; ... }" rule:
+// parse the prop:val pairs, then attach to each comma-separated
+// selector. Existing rules for the same selector are merged
+// (new properties overwrite same-keyed old ones).
+process_rule(ctx: ptr, selectors_str: string, body_str: string) {
+    // Parse the body into a fresh prop→val map.
+    props = parse_decl_block(body_str)
+    if map.size(props) == 0 { return }
+
+    // Walk selectors split on ",". Comma-separated, with optional
+    // whitespace around each. Use std.string.split.
+    arr = string_split(selectors_str, ",")
+    n = string_array_size(arr)
+    i = 0
+    while i < n {
+        sel_raw = string_array_get(arr, i)
+        sel = string.trim(sel_raw)
+        if string.length(sel) > 0 {
+            // Merge into existing rules, if any.
+            existing = grammar_context.get_css_rule(ctx, sel)
+            if existing == null {
+                grammar_context.register_css_rule(ctx, sel, props)
+            } else {
+                merge_into(existing, props)
+            }
+        }
+        i = i + 1
+    }
+    string_array_free(arr)
+}
+
+// Parse a CSS declaration block body: "prop1: val1; prop2: val2; …"
+// into a fresh std.map.
+parse_decl_block(body: string) -> ptr {
+    out = map.new()
+    arr = string_split(body, ";")
+    n = string_array_size(arr)
+    i = 0
+    while i < n {
+        decl_raw = string_array_get(arr, i)
+        decl = string.trim(decl_raw)
+        colon = string.index_of(decl, ":")
+        if colon >= 0 {
+            prop = string.trim(string.substring(decl, 0, colon))
+            val = string.trim(string.substring(decl, colon + 1, string.length(decl)))
+            if string.length(prop) > 0 {
+                if string.length(val) > 0 {
+                    e = map.put(out, prop, val)
+                    if string.length(e) > 0 { } // ignore
+                }
+            }
+        }
+        i = i + 1
+    }
+    string_array_free(arr)
+    return out
+}
+
+// Merge `src`'s keys into `dst`, overwriting on conflict. Used to
+// accumulate when the same selector appears in multiple <style>
+// blocks or rule-list positions.
+//
+// std.map's keys handle is a string-array-shaped opaque ptr —
+// uses the same C-level surface as string_split's return
+// (string_array_size / string_array_get / string_array_free). The
+// qualified wrapper map.keys() returns the ptr but doesn't surface
+// the walker; reach through via the string_array_* raw externs.
+merge_into(dst: ptr, src: ptr) {
+    keys = map_keys_raw(src)
+    if keys == null { return }
+    nk = string_array_size(keys)
+    i = 0
+    while i < nk {
+        k = string_array_get(keys, i)
+        v, _ = map.get(src, k)
+        if v != null {
+            e = map.put(dst, k, v)
+            if string.length(e) > 0 { }
+        }
+        i = i + 1
+    }
+    map_keys_free(keys)
+}
+
+// ─── get_css_props ───────────────────────────────────────────────
+//
+// Return a fresh std.map of resolved properties for (tag, class_attr).
+// Lookups: tag selector first, then each class (space-separated).
+// Each later lookup's properties overwrite earlier ones.
+
+get_css_props(ctx: ptr, tag: string, class_attr: string) -> ptr {
+    out = map.new()
+
+    // 1. Element selector
+    if string.length(tag) > 0 {
+        tag_rules = grammar_context.get_css_rule(ctx, tag)
+        if tag_rules != null {
+            merge_into(out, tag_rules)
+        }
+    }
+
+    // 2. Class selectors, in source order.
+    if string.length(class_attr) > 0 {
+        // Split on whitespace.
+        re, _ = regex.compile("\\s+")
+        normalised, _ = regex.replace_all(re, string.trim(class_attr), " ")
+        regex.free(re)
+
+        cls_arr = string_split(normalised, " ")
+        ncls = string_array_size(cls_arr)
+        i = 0
+        while i < ncls {
+            cls = string_array_get(cls_arr, i)
+            if string.length(cls) > 0 {
+                sel = string.concat(".", cls)
+                cls_rules = grammar_context.get_css_rule(ctx, sel)
+                if cls_rules != null {
+                    merge_into(out, cls_rules)
+                }
+            }
+            i = i + 1
+        }
+        string_array_free(cls_arr)
+    }
+
+    return out
+}
