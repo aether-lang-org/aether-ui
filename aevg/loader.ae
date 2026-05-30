@@ -129,11 +129,19 @@ walk_node(ctx: ptr, backend: ptr, node_h: ptr) {
         return
     }
 
+    // ─── Filter / ClipPath: parse + register ─────────────────────
+    if string.equals(tag, "filter") == 1 {
+        _ = grammar_defs.parse_filter(ctx, node_h)
+        return
+    }
+    if string.equals(tag, "clipPath") == 1 {
+        _ = grammar_defs.parse_clip_path(ctx, node_h)
+        return
+    }
+
     // ─── Deferred (need more of grammar_defs): skip but walk
     //     children where appropriate.
     if string.equals(tag, "defs") == 1 { walk_children(ctx, backend, node_h); return }
-    if string.equals(tag, "filter") == 1 { return }
-    if string.equals(tag, "clipPath") == 1 { return }
     if string.equals(tag, "style") == 1 { return }
     if string.equals(tag, "text") == 1 { return }
     if string.equals(tag, "use") == 1 { return }

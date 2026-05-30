@@ -173,6 +173,98 @@ main() {
         exit(1)
     }
 
+    // ─── Filter: <filter id='f1' x='-10%' y='-10%' width='120%' height='120%'> ──
+    ctx_f1 = mk_test_ctx()
+    svg_f1 = "<svg><defs><filter id='f1' x='-10%' y='-10%' width='120%' height='120%'><feGaussianBlur stdDeviation='3'/></filter></defs></svg>"
+    root_f1 = parser.parse_svg(svg_f1)
+    f1 = grammar_defs.parse_filter(ctx_f1,
+        parser.node_child_at(parser.node_child_at(root_f1, 0), 0))
+    assert_not_null("filter f1 returned", f1)
+    assert_eq_int("f1 registered", grammar_context.has_filter(ctx_f1, "f1"), 1)
+    assert_near("f1 region_x = -0.1",  grammar_defs.filter_region_x(f1),      0.0 - 0.1)
+    assert_near("f1 region_w = 1.2",   grammar_defs.filter_region_width(f1),  1.2)
+    assert_eq_int("f1 has blur",       grammar_defs.filter_has_blur(f1),      1)
+    assert_near("f1 blur sigma_x = 3", grammar_defs.filter_blur_sigma_x(f1),  3.0)
+    assert_near("f1 blur sigma_y = 3 (default = x)",
+                                       grammar_defs.filter_blur_sigma_y(f1),  3.0)
+
+    // Filter with separate x/y sigmas: "5 2"
+    ctx_f2 = mk_test_ctx()
+    svg_f2 = "<svg><defs><filter id='f2'><feGaussianBlur stdDeviation='5 2'/></filter></defs></svg>"
+    root_f2 = parser.parse_svg(svg_f2)
+    f2 = grammar_defs.parse_filter(ctx_f2,
+        parser.node_child_at(parser.node_child_at(root_f2, 0), 0))
+    assert_near("f2 sigma_x = 5", grammar_defs.filter_blur_sigma_x(f2), 5.0)
+    assert_near("f2 sigma_y = 2", grammar_defs.filter_blur_sigma_y(f2), 2.0)
+
+    // Filter with no feGaussianBlur child: region defaults applied,
+    // has_blur stays 0.
+    ctx_f3 = mk_test_ctx()
+    svg_f3 = "<svg><defs><filter id='f3'/></defs></svg>"
+    root_f3 = parser.parse_svg(svg_f3)
+    f3 = grammar_defs.parse_filter(ctx_f3,
+        parser.node_child_at(parser.node_child_at(root_f3, 0), 0))
+    assert_eq_int("f3 has_blur = 0 (no fe child)", grammar_defs.filter_has_blur(f3), 0)
+    assert_near("f3 default region_x = -0.1", grammar_defs.filter_region_x(f3),     0.0 - 0.1)
+    assert_near("f3 default region_w = 1.2",  grammar_defs.filter_region_width(f3), 1.2)
+
+    // Filter region with fractional (non-%) values
+    ctx_f4 = mk_test_ctx()
+    svg_f4 = "<svg><defs><filter id='f4' x='0' y='0' width='1' height='1'><feGaussianBlur stdDeviation='1'/></filter></defs></svg>"
+    root_f4 = parser.parse_svg(svg_f4)
+    f4 = grammar_defs.parse_filter(ctx_f4,
+        parser.node_child_at(parser.node_child_at(root_f4, 0), 0))
+    assert_near("f4 region_x = 0",  grammar_defs.filter_region_x(f4),     0.0)
+    assert_near("f4 region_w = 1",  grammar_defs.filter_region_width(f4), 1.0)
+
+    // ─── ClipPath: <clipPath><rect/></clipPath> ──────────────────
+    ctx_cp1 = mk_test_ctx()
+    svg_cp1 = "<svg><defs><clipPath id='cp1'><rect x='10' y='20' width='30' height='40'/></clipPath></defs></svg>"
+    root_cp1 = parser.parse_svg(svg_cp1)
+    cp1 = grammar_defs.parse_clip_path(ctx_cp1,
+        parser.node_child_at(parser.node_child_at(root_cp1, 0), 0))
+    assert_not_null("clipPath cp1 returned", cp1)
+    assert_eq_int("cp1 registered",          grammar_context.has_clip_path(ctx_cp1, "cp1"), 1)
+    assert_eq_int("cp1 shape count = 1",     grammar_defs.clip_path_shape_count(cp1), 1)
+    cp1_shape0 = grammar_defs.clip_path_shape_at(cp1, 0)
+    assert_eq_int("cp1[0] is rect",          grammar_defs.clip_shape_kind(cp1_shape0),
+                                              grammar_defs.CLIP_SHAPE_RECT())
+    assert_near("cp1[0].x",                  grammar_defs.clip_shape_x(cp1_shape0),      10.0)
+    assert_near("cp1[0].y",                  grammar_defs.clip_shape_y(cp1_shape0),      20.0)
+    assert_near("cp1[0].width",              grammar_defs.clip_shape_width(cp1_shape0),  30.0)
+    assert_near("cp1[0].height",             grammar_defs.clip_shape_height(cp1_shape0), 40.0)
+
+    // ClipPath with a circle + a rect + a polygon (ignored)
+    ctx_cp2 = mk_test_ctx()
+    svg_cp2 = "<svg><defs><clipPath id='cp2'><circle cx='5' cy='6' r='7'/><polygon points='0,0 1,1'/><rect x='0' y='0' width='10' height='10'/></clipPath></defs></svg>"
+    root_cp2 = parser.parse_svg(svg_cp2)
+    cp2 = grammar_defs.parse_clip_path(ctx_cp2,
+        parser.node_child_at(parser.node_child_at(root_cp2, 0), 0))
+    assert_eq_int("cp2 shape count = 2 (polygon skipped)",
+                   grammar_defs.clip_path_shape_count(cp2), 2)
+    cp2_s0 = grammar_defs.clip_path_shape_at(cp2, 0)
+    assert_eq_int("cp2[0] is circle", grammar_defs.clip_shape_kind(cp2_s0),
+                                       grammar_defs.CLIP_SHAPE_CIRCLE())
+    assert_near("cp2[0].cx", grammar_defs.clip_shape_cx(cp2_s0), 5.0)
+    assert_near("cp2[0].cy", grammar_defs.clip_shape_cy(cp2_s0), 6.0)
+    assert_near("cp2[0].r",  grammar_defs.clip_shape_r(cp2_s0),  7.0)
+    cp2_s1 = grammar_defs.clip_path_shape_at(cp2, 1)
+    assert_eq_int("cp2[1] is rect", grammar_defs.clip_shape_kind(cp2_s1),
+                                     grammar_defs.CLIP_SHAPE_RECT())
+
+    // Missing id → null returned
+    ctx_cp3 = mk_test_ctx()
+    svg_cp3 = "<svg><defs><clipPath><rect/></clipPath></defs></svg>"
+    root_cp3 = parser.parse_svg(svg_cp3)
+    cp3 = grammar_defs.parse_clip_path(ctx_cp3,
+        parser.node_child_at(parser.node_child_at(root_cp3, 0), 0))
+    if cp3 == null {
+        println("  PASS: clipPath no id → null")
+    } else {
+        println("  FAIL: clipPath no id → expected null")
+        exit(1)
+    }
+
     // ─── End-to-end via loader: <defs><linearGradient/></defs> ───
     bk = aevg_backend.backend_new()
     svg_e2e = "<svg viewBox='0 0 100 100' width='100' height='100'><defs><linearGradient id='myGrad' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient></defs><rect x='10' y='10' width='30' height='30' fill='green'/></svg>"
@@ -183,6 +275,20 @@ main() {
     g_e2e = grammar_context.get_gradient(ctx_e2e, "myGrad")
     assert_not_null("e2e: gradient lookup",     g_e2e)
     assert_eq_int("e2e: gradient stop count",  grammar_defs.gradient_stop_count(g_e2e), 2)
+
+    // ─── End-to-end with filter + clipPath ───────────────────────
+    bk2 = aevg_backend.backend_new()
+    svg_e2e2 = "<svg viewBox='0 0 100 100' width='100' height='100'><defs><filter id='blur5'><feGaussianBlur stdDeviation='5'/></filter><clipPath id='clip1'><rect x='10' y='10' width='80' height='80'/></clipPath></defs><rect x='0' y='0' width='100' height='100' fill='black'/></svg>"
+    ctx_e2e2 = loader.load_svg(bk2, svg_e2e2, 100.0, 100.0)
+    assert_eq_int("e2e2: filter registered",     grammar_context.has_filter(ctx_e2e2, "blur5"), 1)
+    assert_eq_int("e2e2: clipPath registered",   grammar_context.has_clip_path(ctx_e2e2, "clip1"), 1)
+    assert_eq_int("e2e2: rect rendered",         aevg_backend.backend_call_count(bk2), 1)
+
+    f_e2e = grammar_context.get_filter(ctx_e2e2, "blur5")
+    assert_near("e2e2: filter sigma_x = 5",      grammar_defs.filter_blur_sigma_x(f_e2e), 5.0)
+
+    cp_e2e = grammar_context.get_clip_path(ctx_e2e2, "clip1")
+    assert_eq_int("e2e2: clipPath 1 shape",      grammar_defs.clip_path_shape_count(cp_e2e), 1)
 
     println("=== test_grammar_defs passed ===")
 }

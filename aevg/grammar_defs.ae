@@ -34,7 +34,19 @@ exports (
     gradient_x1, gradient_y1, gradient_x2, gradient_y2,
     gradient_cx, gradient_cy, gradient_r, gradient_fx, gradient_fy,
     gradient_stops, gradient_stop_count,
-    stop_offset, stop_color
+    stop_offset, stop_color,
+
+    parse_filter,
+    filter_region_x, filter_region_y,
+    filter_region_width, filter_region_height,
+    filter_has_blur, filter_blur_sigma_x, filter_blur_sigma_y,
+
+    parse_clip_path,
+    CLIP_SHAPE_RECT, CLIP_SHAPE_CIRCLE,
+    clip_path_shape_count, clip_path_shape_at,
+    clip_shape_kind,
+    clip_shape_x, clip_shape_y, clip_shape_width, clip_shape_height,
+    clip_shape_cx, clip_shape_cy, clip_shape_r
 )
 
 import std.string
@@ -278,4 +290,214 @@ parse_gradient(ctx: ptr, node: ptr) -> ptr {
 
     grammar_context.register_gradient(ctx, id, g)
     return g
+}
+
+// ─── FilterDef ───────────────────────────────────────────────────
+//
+// SVG <filter> with optional <feGaussianBlur> child. Region attrs
+// (x/y/width/height) are percentages or unit fractions — defaults
+// per SVG spec: -10% offset, 120% size (so the filter region
+// extends slightly past the element bounds, accommodating the
+// blur halo).
+
+struct FilterDef {
+    region_x: float
+    region_y: float
+    region_w: float
+    region_h: float
+    has_blur: int
+    blur_sigma_x: float
+    blur_sigma_y: float
+}
+
+mk_filter_def() -> *FilterDef {
+    // 7 float + 1 int + padding ≈ 64 bytes
+    f = malloc(64) as *FilterDef
+    f.region_x = 0.0 - 0.1
+    f.region_y = 0.0 - 0.1
+    f.region_w = 1.2
+    f.region_h = 1.2
+    f.has_blur = 0
+    f.blur_sigma_x = 0.0
+    f.blur_sigma_y = 0.0
+    return f
+}
+
+filter_region_x(p: ptr) -> float      { f = p as *FilterDef; return f.region_x }
+filter_region_y(p: ptr) -> float      { f = p as *FilterDef; return f.region_y }
+filter_region_width(p: ptr) -> float  { f = p as *FilterDef; return f.region_w }
+filter_region_height(p: ptr) -> float { f = p as *FilterDef; return f.region_h }
+filter_has_blur(p: ptr) -> int        { f = p as *FilterDef; return f.has_blur }
+filter_blur_sigma_x(p: ptr) -> float  { f = p as *FilterDef; return f.blur_sigma_x }
+filter_blur_sigma_y(p: ptr) -> float  { f = p as *FilterDef; return f.blur_sigma_y }
+
+// Parse stdDeviation: one or two space-separated numbers.
+// Returns (sigma_x, sigma_y) packed into a 2-float buffer at out[0..1].
+// (Tuple float returns are broken on Aether's multi-return path —
+// see the AeVG idiom log — so we use a small out param.)
+parse_std_deviation(s: string, out: *FilterDef) {
+    re, e = regex.compile("[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?")
+    if e != "" { return }
+    fa, fe = regex.find_all(re, s)
+    if fe != "" { regex.free(re); return }
+    n = regex.find_all_count(fa)
+    if n >= 1 {
+        s0 = regex.find_all_start(fa, 0); e0 = regex.find_all_end(fa, 0)
+        sx, _ = string.to_double(string.substring(s, s0, e0))
+        out.blur_sigma_x = sx
+        out.blur_sigma_y = sx   // default y = x
+    }
+    if n >= 2 {
+        s1 = regex.find_all_start(fa, 1); e1 = regex.find_all_end(fa, 1)
+        sy, _ = string.to_double(string.substring(s, s1, e1))
+        out.blur_sigma_y = sy
+    }
+    regex.find_all_free(fa)
+    regex.free(re)
+}
+
+parse_filter(ctx: ptr, node: ptr) -> ptr {
+    if parser.node_has_attr(node, "id") == 0 { return null }
+    id = parser.node_attr(node, "id")
+
+    f = mk_filter_def()
+
+    if parser.node_has_attr(node, "x") == 1 {
+        f.region_x = grammar_utils.parse_filter_region(parser.node_attr(node, "x"), 0.0 - 0.1)
+    }
+    if parser.node_has_attr(node, "y") == 1 {
+        f.region_y = grammar_utils.parse_filter_region(parser.node_attr(node, "y"), 0.0 - 0.1)
+    }
+    if parser.node_has_attr(node, "width") == 1 {
+        f.region_w = grammar_utils.parse_filter_region(parser.node_attr(node, "width"), 1.2)
+    }
+    if parser.node_has_attr(node, "height") == 1 {
+        f.region_h = grammar_utils.parse_filter_region(parser.node_attr(node, "height"), 1.2)
+    }
+
+    // Walk children for <feGaussianBlur stdDeviation="...">.
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        child = parser.node_child_at(node, i)
+        if string.equals(parser.node_tag(child), "feGaussianBlur") == 1 {
+            if parser.node_has_attr(child, "stdDeviation") == 1 {
+                std_dev = parser.node_attr(child, "stdDeviation")
+                parse_std_deviation(std_dev, f)
+                f.has_blur = 1
+                // Match TS: take the first feGaussianBlur, break.
+                grammar_context.register_filter(ctx, id, f)
+                return f
+            }
+        }
+        i = i + 1
+    }
+
+    grammar_context.register_filter(ctx, id, f)
+    return f
+}
+
+// ─── ClipPathDef ─────────────────────────────────────────────────
+//
+// <clipPath> with <rect> or <circle> child shapes. Each shape is
+// stored as a ClipPathShape with a kind discriminator. Other clip
+// shapes (path, polygon, ellipse) are silently skipped — same
+// behaviour as the TS source.
+
+CLIP_SHAPE_RECT()   -> int { return 0 }
+CLIP_SHAPE_CIRCLE() -> int { return 1 }
+
+struct ClipPathShape {
+    kind: int       // CLIP_SHAPE_RECT or CLIP_SHAPE_CIRCLE
+    // Rect fields
+    x: float
+    y: float
+    w: float
+    h: float
+    // Circle fields
+    cx: float
+    cy: float
+    r: float
+}
+
+mk_clip_shape() -> *ClipPathShape {
+    // 1 int + 7 float ≈ 64 bytes
+    s = malloc(64) as *ClipPathShape
+    s.kind = 0
+    s.x = 0.0; s.y = 0.0; s.w = 0.0; s.h = 0.0
+    s.cx = 0.0; s.cy = 0.0; s.r = 0.0
+    return s
+}
+
+clip_shape_kind(p: ptr) -> int     { s = p as *ClipPathShape; return s.kind }
+clip_shape_x(p: ptr) -> float       { s = p as *ClipPathShape; return s.x }
+clip_shape_y(p: ptr) -> float       { s = p as *ClipPathShape; return s.y }
+clip_shape_width(p: ptr) -> float   { s = p as *ClipPathShape; return s.w }
+clip_shape_height(p: ptr) -> float  { s = p as *ClipPathShape; return s.h }
+clip_shape_cx(p: ptr) -> float      { s = p as *ClipPathShape; return s.cx }
+clip_shape_cy(p: ptr) -> float      { s = p as *ClipPathShape; return s.cy }
+clip_shape_r(p: ptr) -> float       { s = p as *ClipPathShape; return s.r }
+
+struct ClipPathDef {
+    shapes: ptr     // std.list of *ClipPathShape
+}
+
+mk_clip_path_def() -> *ClipPathDef {
+    cp = malloc(16) as *ClipPathDef
+    cp.shapes = list.new()
+    return cp
+}
+
+clip_path_shape_count(p: ptr) -> int {
+    cp = p as *ClipPathDef
+    return list.size(cp.shapes)
+}
+
+clip_path_shape_at(p: ptr, i: int) -> ptr {
+    cp = p as *ClipPathDef
+    item, _ = list.get(cp.shapes, i)
+    return item
+}
+
+// Helper: read a length-attr as float, defaulting if absent.
+attr_num(node: ptr, name: string, default_val: float) -> float {
+    if parser.node_has_attr(node, name) == 0 { return default_val }
+    return grammar_utils.parse_length_to_px(parser.node_attr(node, name))
+}
+
+parse_clip_path(ctx: ptr, node: ptr) -> ptr {
+    if parser.node_has_attr(node, "id") == 0 { return null }
+    id = parser.node_attr(node, "id")
+
+    cp = mk_clip_path_def()
+
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        child = parser.node_child_at(node, i)
+        tag = parser.node_tag(child)
+        if string.equals(tag, "rect") == 1 {
+            s = mk_clip_shape()
+            s.kind = CLIP_SHAPE_RECT()
+            s.x = attr_num(child, "x", 0.0)
+            s.y = attr_num(child, "y", 0.0)
+            s.w = attr_num(child, "width", 0.0)
+            s.h = attr_num(child, "height", 0.0)
+            _ = list.add(cp.shapes, s)
+        }
+        if string.equals(tag, "circle") == 1 {
+            s = mk_clip_shape()
+            s.kind = CLIP_SHAPE_CIRCLE()
+            s.cx = attr_num(child, "cx", 0.0)
+            s.cy = attr_num(child, "cy", 0.0)
+            s.r  = attr_num(child, "r",  0.0)
+            _ = list.add(cp.shapes, s)
+        }
+        // Other clip children (path, polygon, ellipse) ignored —
+        // matches TS source's silent skip.
+        i = i + 1
+    }
+
+    grammar_context.register_clip_path(ctx, id, cp)
+    return cp
 }
