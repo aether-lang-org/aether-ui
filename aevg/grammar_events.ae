@@ -1,0 +1,313 @@
+// aevg/grammar_events.ae — event dispatch (Tier C).
+//
+// Port of dispatchHover / dispatchClick / dispatchDrag / dispatchDragEnd
+// / dispatchScroll / dispatchDoubleClick / dispatchRightClick from
+// grammar-context.ts. Wires AevgElement's stored *_handler closures
+// to actual invocation.
+//
+// Event-manager state (hovered_element, dragged_element, last drag
+// coords) lives in a separate *EventState struct rather than being
+// bolted onto AevgContext — same pattern as grammar_animations.ae's
+// AnimationManager. Keeps the context lean; events are an optional
+// sub-system that activates when a real backend wires up.
+//
+// Dispatch shape (matches TS source):
+//   - Iterate tracked_elements in REVERSE (top-most first).
+//   - For each, call element_hit_test(el, x, y). If hit AND the
+//     element has the relevant handler stored, fire the handler.
+//   - Stop after the first match (events don't bubble).
+//
+// Hover is stateful (enter/leave transitions vs. the previous
+// hovered element). Drag is sticky (first dispatch_drag captures a
+// target; subsequent dispatch_drag events route to it until
+// dispatch_drag_end clears it).
+//
+// All handlers are void-returning (the codegen bug in
+// fn_return_float_cast.md only affects float-returning closures —
+// none here).
+//
+// API:
+//   event_state_new() -> *EventState
+//   track_element(ctx, el)             — append el to ctx.tracked_elements
+//   dispatch_click(es, ctx, x, y)      — topmost-with-click_handler hit
+//   dispatch_hover(es, ctx, x, y)      — stateful enter/leave
+//   dispatch_drag(es, ctx, x, y, dx, dy) — sticky capture
+//   dispatch_drag_end(es, ctx)         — fire & release dragged target
+//   dispatch_scroll(es, ctx, dx, dy, x, y)
+//   dispatch_double_click(es, ctx, x, y)
+//   dispatch_right_click(es, ctx, x, y)
+//
+// Plus accessors on event state for testing:
+//   event_state_hovered(es) -> ptr  (current hovered element, or null)
+//   event_state_dragged(es) -> ptr
+
+exports (
+    event_state_new,
+    event_state_hovered, event_state_dragged,
+    track_element,
+    dispatch_click, dispatch_hover,
+    dispatch_drag, dispatch_drag_end,
+    dispatch_scroll,
+    dispatch_double_click, dispatch_right_click
+)
+
+import std.list
+import grammar_context
+import grammar_element
+
+extern malloc(size: int) -> ptr
+
+// ─── EventState ──────────────────────────────────────────────────
+
+struct EventState {
+    hovered_element: ptr      // currently hovered *AevgElement (or null)
+    dragged_element: ptr      // currently captured drag target (or null)
+    last_drag_x: float
+    last_drag_y: float
+}
+
+event_state_new() -> ptr {
+    s = malloc(32) as *EventState
+    s.hovered_element = null
+    s.dragged_element = null
+    s.last_drag_x = 0.0
+    s.last_drag_y = 0.0
+    return s
+}
+
+event_state_hovered(p: ptr) -> ptr { s = p as *EventState; return s.hovered_element }
+event_state_dragged(p: ptr) -> ptr { s = p as *EventState; return s.dragged_element }
+
+// ─── track_element ───────────────────────────────────────────────
+//
+// Append an element to the context's tracked_elements list. Called
+// by shape factories on every element that has an event handler or
+// might be hit-tested.
+
+track_element(ctx: ptr, el: ptr) {
+    list_p = grammar_context.ctx_tracked_elements(ctx)
+    _ = list.add(list_p, el)
+}
+
+// Local alias for the in-this-module callsites.
+ctx_tracked_elements(ctx: ptr) -> ptr {
+    return grammar_context.ctx_tracked_elements(ctx)
+}
+
+// ─── Topmost-hit lookup ──────────────────────────────────────────
+//
+// Iterate tracked_elements in reverse, returning the first element
+// that hit-tests true AND has the handler indicated by the caller's
+// `has_handler` test. Caller provides a `predicate: fn(ptr) -> int`
+// that returns 1 if the element has the right handler.
+
+// Specialised forms — using direct field accessors via grammar_element.
+// This avoids passing a `fn` predicate (which would risk the
+// fn-returning-int codegen subtleties).
+
+find_topmost_with_click(ctx: ptr, x: float, y: float) -> ptr {
+    list_p = ctx_tracked_elements(ctx)
+    n = list.size(list_p)
+    i = n - 1
+    while i >= 0 {
+        item, _ = list.get(list_p, i)
+        if grammar_element.element_click_handler(item) != null {
+            if grammar_element.element_hit_test(item, x, y) == 1 {
+                return item
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
+find_topmost_with_hover(ctx: ptr, x: float, y: float) -> ptr {
+    list_p = ctx_tracked_elements(ctx)
+    n = list.size(list_p)
+    i = n - 1
+    while i >= 0 {
+        item, _ = list.get(list_p, i)
+        if grammar_element.element_hover_handler(item) != null {
+            if grammar_element.element_hit_test(item, x, y) == 1 {
+                return item
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
+find_topmost_with_drag(ctx: ptr, x: float, y: float) -> ptr {
+    list_p = ctx_tracked_elements(ctx)
+    n = list.size(list_p)
+    i = n - 1
+    while i >= 0 {
+        item, _ = list.get(list_p, i)
+        if grammar_element.element_drag_handler(item) != null {
+            if grammar_element.element_hit_test(item, x, y) == 1 {
+                return item
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
+find_topmost_with_scroll(ctx: ptr, x: float, y: float) -> ptr {
+    list_p = ctx_tracked_elements(ctx)
+    n = list.size(list_p)
+    i = n - 1
+    while i >= 0 {
+        item, _ = list.get(list_p, i)
+        if grammar_element.element_scroll_handler(item) != null {
+            if grammar_element.element_hit_test(item, x, y) == 1 {
+                return item
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
+find_topmost_with_double_click(ctx: ptr, x: float, y: float) -> ptr {
+    list_p = ctx_tracked_elements(ctx)
+    n = list.size(list_p)
+    i = n - 1
+    while i >= 0 {
+        item, _ = list.get(list_p, i)
+        if grammar_element.element_double_click_handler(item) != null {
+            if grammar_element.element_hit_test(item, x, y) == 1 {
+                return item
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
+find_topmost_with_right_click(ctx: ptr, x: float, y: float) -> ptr {
+    list_p = ctx_tracked_elements(ctx)
+    n = list.size(list_p)
+    i = n - 1
+    while i >= 0 {
+        item, _ = list.get(list_p, i)
+        if grammar_element.element_right_click_handler(item) != null {
+            if grammar_element.element_hit_test(item, x, y) == 1 {
+                return item
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
+// ─── Invokers (the bridge from stored ptr to call via fn-typed
+//     param). All handlers are void-returning. ────────────────────
+
+invoke_click(handler_ptr: ptr, x: float, y: float) {
+    inner_call_xy(handler_ptr, x, y)
+}
+inner_call_xy(cb: fn, x: float, y: float) { cb(x, y) }
+
+invoke_hover(handler_ptr: ptr, hovered: int) {
+    inner_call_int(handler_ptr, hovered)
+}
+inner_call_int(cb: fn, v: int) { cb(v) }
+
+invoke_drag(handler_ptr: ptr, x: float, y: float, dx: float, dy: float) {
+    inner_call_drag(handler_ptr, x, y, dx, dy)
+}
+inner_call_drag(cb: fn, x: float, y: float, dx: float, dy: float) {
+    cb(x, y, dx, dy)
+}
+
+invoke_scroll(handler_ptr: ptr, dx: float, dy: float, x: float, y: float) {
+    inner_call_scroll(handler_ptr, dx, dy, x, y)
+}
+inner_call_scroll(cb: fn, dx: float, dy: float, x: float, y: float) {
+    cb(dx, dy, x, y)
+}
+
+// ─── Dispatchers ─────────────────────────────────────────────────
+
+dispatch_click(es: ptr, ctx: ptr, x: float, y: float) {
+    target = find_topmost_with_click(ctx, x, y)
+    if target != null {
+        invoke_click(grammar_element.element_click_handler(target), x, y)
+    }
+}
+
+dispatch_hover(es: ptr, ctx: ptr, x: float, y: float) {
+    state = es as *EventState
+    new_hovered = find_topmost_with_hover(ctx, x, y)
+    if new_hovered == state.hovered_element { return }
+
+    // Fire hover-out on the previous hovered element.
+    if state.hovered_element != null {
+        prev_handler = grammar_element.element_hover_handler(state.hovered_element)
+        if prev_handler != null {
+            invoke_hover(prev_handler, 0)
+        }
+    }
+
+    // Fire hover-in on the new one.
+    if new_hovered != null {
+        new_handler = grammar_element.element_hover_handler(new_hovered)
+        if new_handler != null {
+            invoke_hover(new_handler, 1)
+        }
+    }
+
+    state.hovered_element = new_hovered
+}
+
+dispatch_drag(es: ptr, ctx: ptr, x: float, y: float, dx: float, dy: float) {
+    state = es as *EventState
+    state.last_drag_x = x
+    state.last_drag_y = y
+
+    // First call captures a target. Subsequent calls reuse it.
+    if state.dragged_element == null {
+        state.dragged_element = find_topmost_with_drag(ctx, x, y)
+    }
+    if state.dragged_element != null {
+        h = grammar_element.element_drag_handler(state.dragged_element)
+        if h != null {
+            invoke_drag(h, x, y, dx, dy)
+        }
+    }
+}
+
+dispatch_drag_end(es: ptr, ctx: ptr) {
+    state = es as *EventState
+    if state.dragged_element == null { return }
+
+    target = state.dragged_element
+    state.dragged_element = null
+    h = grammar_element.element_drag_end_handler(target)
+    if h != null {
+        invoke_click(h, state.last_drag_x, state.last_drag_y)
+    }
+}
+
+dispatch_scroll(es: ptr, ctx: ptr, dx: float, dy: float, x: float, y: float) {
+    target = find_topmost_with_scroll(ctx, x, y)
+    if target != null {
+        invoke_scroll(grammar_element.element_scroll_handler(target),
+                      dx, dy, x, y)
+    }
+}
+
+dispatch_double_click(es: ptr, ctx: ptr, x: float, y: float) {
+    target = find_topmost_with_double_click(ctx, x, y)
+    if target != null {
+        invoke_click(grammar_element.element_double_click_handler(target), x, y)
+    }
+}
+
+dispatch_right_click(es: ptr, ctx: ptr, x: float, y: float) {
+    target = find_topmost_with_right_click(ctx, x, y)
+    if target != null {
+        invoke_click(grammar_element.element_right_click_handler(target), x, y)
+    }
+}

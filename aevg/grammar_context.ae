@@ -34,7 +34,7 @@ exports (
     mapping_canvas_width, mapping_canvas_height,
     mapping_scale, mapping_offset_x, mapping_offset_y,
     mapping_vb_min_x, mapping_vb_min_y, mapping_vb_width, mapping_vb_height,
-    mapping_transform, ctx_mapping,
+    mapping_transform, ctx_mapping, ctx_tracked_elements,
 
     // Gradient registry
     register_gradient, get_gradient, has_gradient,
@@ -156,6 +156,7 @@ new_context(mapping_handle: ptr) -> ptr {
 }
 
 ctx_mapping(c: ptr) -> ptr { x = c as *AevgContext; return x.mapping }
+ctx_tracked_elements(c: ptr) -> ptr { x = c as *AevgContext; return x.tracked_elements }
 
 // ─── Gradient / Filter / ClipPath / Node / CSS registries ────────
 //

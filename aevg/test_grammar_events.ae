@@ -1,0 +1,275 @@
+// aevg/test_grammar_events.ae — regression test for grammar_events.ae.
+//
+// Builds a small scene with overlapping elements, registers handlers
+// via inline `callback { ... }` closures capturing per-test state,
+// fires synthetic dispatch_* events, and verifies the right handlers
+// fired in the right order.
+//
+// Topmost-hit ordering: tracked_elements iterates in reverse, so the
+// most-recently-added element wins when shapes overlap. Test
+// exercises this explicitly.
+//
+// All handlers here are void-returning; the float-return codegen bug
+// (fn_return_float_cast.md) doesn't affect this surface.
+
+import grammar_events
+import grammar_context
+import grammar_element
+import transform
+import std.string
+import std.math
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_near(label: string, got: float, want: float) {
+    if math.abs_float(got - want) < 0.001 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+// Mutable recorder a closure can write to.
+struct Recorder {
+    n_calls: int
+    last_x: float
+    last_y: float
+    last_dx: float
+    last_dy: float
+    last_hovered: int
+}
+
+mk_recorder() -> *Recorder {
+    r = malloc(48) as *Recorder
+    r.n_calls = 0
+    r.last_x = 0.0
+    r.last_y = 0.0
+    r.last_dx = 0.0
+    r.last_dy = 0.0
+    r.last_hovered = 0 - 1
+    return r
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+// Make a tracked element with bounds [(x, y), (x+w, y+h)] — no
+// backend wiring, just bounds + handlers.
+mk_tracked(ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
+    sentinel = malloc(8)
+    el = grammar_element.element_new(sentinel)
+    grammar_element.element_set_bounds(el, x, y, w, h)
+    grammar_events.track_element(ctx, el)
+    return el
+}
+
+main() {
+    println("=== test_grammar_events ===")
+
+    // ─── Click: topmost-with-handler is hit ──────────────────────
+    ctx1 = mk_test_ctx()
+    es1 = grammar_events.event_state_new()
+    rec_a = mk_recorder()
+    rec_b = mk_recorder()
+
+    // Two overlapping elements at (0..50, 0..50). 'b' is added
+    // later, so it should win on topmost-hit (reverse iteration).
+    el_a = mk_tracked(ctx1, 0.0, 0.0, 50.0, 50.0)
+    grammar_element.element_on_click(el_a) callback |x: float, y: float| {
+        rec_a.n_calls = rec_a.n_calls + 1
+        rec_a.last_x = x
+        rec_a.last_y = y
+    }
+    el_b = mk_tracked(ctx1, 0.0, 0.0, 50.0, 50.0)
+    grammar_element.element_on_click(el_b) callback |x: float, y: float| {
+        rec_b.n_calls = rec_b.n_calls + 1
+        rec_b.last_x = x
+        rec_b.last_y = y
+    }
+
+    grammar_events.dispatch_click(es1, ctx1, 25.0, 25.0)
+    assert_eq_int("click: a not called (b is topmost)", rec_a.n_calls, 0)
+    assert_eq_int("click: b called once",                rec_b.n_calls, 1)
+    assert_near("click: b last_x",                       rec_b.last_x, 25.0)
+    assert_near("click: b last_y",                       rec_b.last_y, 25.0)
+
+    // Click outside both → neither fires.
+    grammar_events.dispatch_click(es1, ctx1, 100.0, 100.0)
+    assert_eq_int("click outside: a still 0", rec_a.n_calls, 0)
+    assert_eq_int("click outside: b still 1", rec_b.n_calls, 1)
+
+    // Click in 'a' region but outside 'b'? Make a non-overlapping
+    // element 'c' to demonstrate.
+    rec_c = mk_recorder()
+    el_c = mk_tracked(ctx1, 60.0, 60.0, 20.0, 20.0)
+    grammar_element.element_on_click(el_c) callback |x: float, y: float| {
+        rec_c.n_calls = rec_c.n_calls + 1
+    }
+    grammar_events.dispatch_click(es1, ctx1, 70.0, 70.0)
+    assert_eq_int("click in c: c fires", rec_c.n_calls, 1)
+
+    // ─── Click element with no handler → no-op (no crash) ──────
+    _el_d = mk_tracked(ctx1, 80.0, 80.0, 10.0, 10.0)
+    // no on_click registered
+    grammar_events.dispatch_click(es1, ctx1, 85.0, 85.0)
+    // None of the recorders ticked.
+    assert_eq_int("no-handler click: c unchanged", rec_c.n_calls, 1)
+
+    // ─── Hover: enter/leave state machine ────────────────────────
+    ctx2 = mk_test_ctx()
+    es2 = grammar_events.event_state_new()
+    rec_h1 = mk_recorder()
+    rec_h2 = mk_recorder()
+
+    el_h1 = mk_tracked(ctx2, 0.0, 0.0, 40.0, 40.0)
+    grammar_element.element_on_hover(el_h1) callback |hovered: int| {
+        rec_h1.n_calls = rec_h1.n_calls + 1
+        rec_h1.last_hovered = hovered
+    }
+    el_h2 = mk_tracked(ctx2, 50.0, 0.0, 40.0, 40.0)
+    grammar_element.element_on_hover(el_h2) callback |hovered: int| {
+        rec_h2.n_calls = rec_h2.n_calls + 1
+        rec_h2.last_hovered = hovered
+    }
+
+    // Hover into h1.
+    grammar_events.dispatch_hover(es2, ctx2, 20.0, 20.0)
+    assert_eq_int("hover into h1: 1 call",       rec_h1.n_calls, 1)
+    assert_eq_int("hover into h1: hovered=1",    rec_h1.last_hovered, 1)
+    if grammar_events.event_state_hovered(es2) == el_h1 {
+        println("  PASS: state.hovered = el_h1")
+    } else {
+        println("  FAIL: state.hovered mismatch")
+        exit(1)
+    }
+
+    // Repeat hover at the same spot → no new event.
+    grammar_events.dispatch_hover(es2, ctx2, 22.0, 22.0)
+    assert_eq_int("re-hover in h1: still 1 call", rec_h1.n_calls, 1)
+
+    // Move into h2.
+    grammar_events.dispatch_hover(es2, ctx2, 70.0, 20.0)
+    assert_eq_int("hover h1 → h2: h1 leave",  rec_h1.n_calls, 2)
+    assert_eq_int("h1 leave: hovered=0",      rec_h1.last_hovered, 0)
+    assert_eq_int("h2 enter: 1 call",          rec_h2.n_calls, 1)
+    assert_eq_int("h2 enter: hovered=1",       rec_h2.last_hovered, 1)
+
+    // Move into empty space.
+    grammar_events.dispatch_hover(es2, ctx2, 200.0, 200.0)
+    assert_eq_int("hover off h2: h2 leave",   rec_h2.n_calls, 2)
+    assert_eq_int("h2 leave: hovered=0",       rec_h2.last_hovered, 0)
+    if grammar_events.event_state_hovered(es2) == null {
+        println("  PASS: state.hovered cleared")
+    } else {
+        println("  FAIL: state.hovered should be null")
+        exit(1)
+    }
+
+    // ─── Drag: sticky capture across multiple events ─────────────
+    ctx3 = mk_test_ctx()
+    es3 = grammar_events.event_state_new()
+    rec_d = mk_recorder()
+
+    el_d1 = mk_tracked(ctx3, 0.0, 0.0, 50.0, 50.0)
+    grammar_element.element_on_drag(el_d1) callback |x: float, y: float, dx: float, dy: float| {
+        rec_d.n_calls = rec_d.n_calls + 1
+        rec_d.last_x = x
+        rec_d.last_y = y
+        rec_d.last_dx = dx
+        rec_d.last_dy = dy
+    }
+    rec_de = mk_recorder()
+    grammar_element.element_on_drag_end(el_d1) callback |x: float, y: float| {
+        rec_de.n_calls = rec_de.n_calls + 1
+        rec_de.last_x = x
+        rec_de.last_y = y
+    }
+
+    // First dispatch: hits and captures.
+    grammar_events.dispatch_drag(es3, ctx3, 10.0, 10.0, 1.0, 2.0)
+    assert_eq_int("drag init: 1 call", rec_d.n_calls, 1)
+    assert_near("drag x",  rec_d.last_x,  10.0)
+    assert_near("drag dx", rec_d.last_dx, 1.0)
+    if grammar_events.event_state_dragged(es3) == el_d1 {
+        println("  PASS: drag captured el_d1")
+    } else {
+        println("  FAIL: drag did not capture")
+        exit(1)
+    }
+
+    // Subsequent dispatch_drag, now OUTSIDE el_d1's bounds.
+    // Sticky capture means el_d1 still gets the drag.
+    grammar_events.dispatch_drag(es3, ctx3, 200.0, 200.0, 5.0, 7.0)
+    assert_eq_int("drag past bounds: 2 calls (sticky)", rec_d.n_calls, 2)
+    assert_near("drag last_x (out of bounds)",            rec_d.last_x, 200.0)
+
+    // drag_end fires on captured target, clears capture.
+    grammar_events.dispatch_drag_end(es3, ctx3)
+    assert_eq_int("drag_end: 1 call",         rec_de.n_calls, 1)
+    assert_near("drag_end last_x",             rec_de.last_x, 200.0)
+    if grammar_events.event_state_dragged(es3) == null {
+        println("  PASS: drag capture cleared")
+    } else {
+        println("  FAIL: drag should be cleared")
+        exit(1)
+    }
+
+    // drag_end again with nothing captured → no-op.
+    grammar_events.dispatch_drag_end(es3, ctx3)
+    assert_eq_int("drag_end x2: still 1 call", rec_de.n_calls, 1)
+
+    // ─── Scroll: topmost-with-handler ────────────────────────────
+    ctx4 = mk_test_ctx()
+    es4 = grammar_events.event_state_new()
+    rec_s = mk_recorder()
+    el_s = mk_tracked(ctx4, 10.0, 10.0, 30.0, 30.0)
+    grammar_element.element_on_scroll(el_s) callback |dx: float, dy: float, x: float, y: float| {
+        rec_s.n_calls = rec_s.n_calls + 1
+        rec_s.last_dx = dx
+        rec_s.last_dy = dy
+        rec_s.last_x = x
+        rec_s.last_y = y
+    }
+    grammar_events.dispatch_scroll(es4, ctx4, 0.0, 5.0, 20.0, 20.0)
+    assert_eq_int("scroll: 1 call",  rec_s.n_calls, 1)
+    assert_near("scroll dy",          rec_s.last_dy, 5.0)
+    assert_near("scroll x",           rec_s.last_x, 20.0)
+
+    // Scroll outside → no-op.
+    grammar_events.dispatch_scroll(es4, ctx4, 0.0, 5.0, 100.0, 100.0)
+    assert_eq_int("scroll outside: still 1", rec_s.n_calls, 1)
+
+    // ─── Double-click and right-click ────────────────────────────
+    ctx5 = mk_test_ctx()
+    es5 = grammar_events.event_state_new()
+    rec_dc = mk_recorder()
+    rec_rc = mk_recorder()
+    el_5 = mk_tracked(ctx5, 0.0, 0.0, 50.0, 50.0)
+    grammar_element.element_on_double_click(el_5) callback |x: float, y: float| {
+        rec_dc.n_calls = rec_dc.n_calls + 1
+        rec_dc.last_x = x
+    }
+    grammar_element.element_on_right_click(el_5) callback |x: float, y: float| {
+        rec_rc.n_calls = rec_rc.n_calls + 1
+        rec_rc.last_x = x
+    }
+    grammar_events.dispatch_double_click(es5, ctx5, 25.0, 25.0)
+    assert_eq_int("double-click: 1",    rec_dc.n_calls, 1)
+    assert_near("double-click x",        rec_dc.last_x, 25.0)
+    grammar_events.dispatch_right_click(es5, ctx5, 30.0, 30.0)
+    assert_eq_int("right-click: 1",     rec_rc.n_calls, 1)
+    assert_near("right-click x",         rec_rc.last_x, 30.0)
+
+    println("=== test_grammar_events passed ===")
+}
