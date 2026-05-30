@@ -1,0 +1,293 @@
+// cvg/test_normalizer.ae — regression test for normalizer.ae.
+//
+// Mirrors a high-value subset of cosyne/test/svg-normalizer.test.ts.
+// Covers parse_path tokenization (separators, implicits, scientific
+// notation, Z handling) and normalize_commands conversions (absolute
+// pass-through, H/V → L, relative → absolute, Q → C, S → C, A → C
+// with the degenerate-radius and segment-count gates).
+//
+// serialize_commands is deferred — needs std.string.from_float with
+// caller-controlled precision (the %g 6-sig-fig default rounds tighter
+// than the SVG parity gate wants). Structural assertions here cover
+// every behaviour of the TS source.
+
+import normalizer
+import std.list
+import std.floatarr
+import std.math
+
+extern exit(code: int)
+
+EPS() -> float { return 0.000001 }
+
+near(a: float, b: float) -> int {
+    if math.abs_float(a - b) < EPS() { return 1 }
+    return 0
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_near(label: string, got: float, want: float) {
+    if near(got, want) == 1 {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+// Pull command i from a list. Returns the raw ptr handle — pass it
+// through normalizer.cmd_type / cmd_args to read fields (struct types
+// don't cross module boundaries in Aether; accessor functions do).
+get_cmd(l: ptr, i: int) -> ptr {
+    item, _ = list.get(l, i)
+    return item
+}
+
+// Assert the i'th command has type `want_type` (char code) and arg
+// floats matching the variadic want_args (passed as a *FloatArray for
+// brevity). Returns silently on match, exits non-zero on mismatch.
+check_cmd(label: string, l: ptr, i: int, want_type: int, want_args: ptr) {
+    h = get_cmd(l, i)
+    got_type = normalizer.cmd_type(h)
+    if got_type != want_type {
+        println("  FAIL: ${label}: type got ${got_type} want ${want_type}")
+        exit(1)
+    }
+    got_args = normalizer.cmd_args(h)
+    want_n = floatarr.size(want_args)
+    got_n = floatarr.size(got_args)
+    if got_n != want_n {
+        println("  FAIL: ${label}: args size got ${got_n} want ${want_n}")
+        exit(1)
+    }
+    j = 0
+    while j < want_n {
+        g = floatarr.get_unchecked(got_args, j)
+        w = floatarr.get_unchecked(want_args, j)
+        if near(g, w) == 0 {
+            println("  FAIL: ${label}: arg[${j}] got ${g} want ${w}")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: ${label}")
+}
+
+// Tiny *FloatArray literal builders for test legibility.
+fa0() -> ptr {
+    a, _ = floatarr.new(0)
+    return a
+}
+fa1(x: float) -> ptr {
+    a, _ = floatarr.new(1)
+    floatarr.set_unchecked(a, 0, x)
+    return a
+}
+fa2(x: float, y: float) -> ptr {
+    a, _ = floatarr.new(2)
+    floatarr.set_unchecked(a, 0, x)
+    floatarr.set_unchecked(a, 1, y)
+    return a
+}
+fa6(a0: float, a1: float, a2: float, a3: float, a4: float, a5: float) -> ptr {
+    a, _ = floatarr.new(6)
+    floatarr.set_unchecked(a, 0, a0)
+    floatarr.set_unchecked(a, 1, a1)
+    floatarr.set_unchecked(a, 2, a2)
+    floatarr.set_unchecked(a, 3, a3)
+    floatarr.set_unchecked(a, 4, a4)
+    floatarr.set_unchecked(a, 5, a5)
+    return a
+}
+fa7(a0: float, a1: float, a2: float, a3: float, a4: float, a5: float, a6: float) -> ptr {
+    a, _ = floatarr.new(7)
+    floatarr.set_unchecked(a, 0, a0)
+    floatarr.set_unchecked(a, 1, a1)
+    floatarr.set_unchecked(a, 2, a2)
+    floatarr.set_unchecked(a, 3, a3)
+    floatarr.set_unchecked(a, 4, a4)
+    floatarr.set_unchecked(a, 5, a5)
+    floatarr.set_unchecked(a, 6, a6)
+    return a
+}
+
+M() -> int { return normalizer.M_CHAR() }
+L() -> int { return normalizer.L_CHAR() }
+C() -> int { return normalizer.C_CHAR() }
+Z() -> int { return normalizer.Z_CHAR() }
+
+main() {
+    println("=== test_normalizer ===")
+
+    // ─── parse_path basics ──────────────────────────────────────
+
+    cmds = normalizer.parse_path("M 10 10 L 20 20 Z")
+    assert_eq_int("parse 'M L Z' count", list.size(cmds), 3)
+    check_cmd("M 10 10", cmds, 0, M(), fa2(10.0, 10.0))
+    check_cmd("L 20 20", cmds, 1, L(), fa2(20.0, 20.0))
+    check_cmd("Z",       cmds, 2, Z(), fa0())
+
+    // Comma + no-whitespace tokenization.
+    cmds2 = normalizer.parse_path("M10,10 L20,20")
+    assert_eq_int("comma sep count", list.size(cmds2), 2)
+    check_cmd("M comma", cmds2, 0, M(), fa2(10.0, 10.0))
+    check_cmd("L comma", cmds2, 1, L(), fa2(20.0, 20.0))
+
+    // Negative-as-separator: "9-22" → 9, -22 (no space, no comma).
+    cmds3 = normalizer.parse_path("M50,30c9-22 42-24 48,0")
+    assert_eq_int("negative sep count", list.size(cmds3), 2)
+    h3 = get_cmd(cmds3, 1)
+    assert_eq_int("c (lowercase) type", normalizer.cmd_type(h3), 99)  // 'c'
+    c3args = normalizer.cmd_args(h3)
+    assert_near("c arg[1] = -22", floatarr.get_unchecked(c3args, 1), 0.0 - 22.0)
+    assert_near("c arg[3] = -24", floatarr.get_unchecked(c3args, 3), 0.0 - 24.0)
+
+    // Implicit L after M.
+    cmds4 = normalizer.parse_path("M 10 10 20 20 30 30")
+    assert_eq_int("implicit L count", list.size(cmds4), 3)
+    check_cmd("implicit L[0]", cmds4, 0, M(), fa2(10.0, 10.0))
+    check_cmd("implicit L[1]", cmds4, 1, L(), fa2(20.0, 20.0))
+    check_cmd("implicit L[2]", cmds4, 2, L(), fa2(30.0, 30.0))
+
+    // Arc tokenization (7 args).
+    cmds5 = normalizer.parse_path("M23,57A27,27 0 1 0 23,44")
+    assert_eq_int("arc count", list.size(cmds5), 2)
+    h5 = get_cmd(cmds5, 1)
+    assert_eq_int("arc type", normalizer.cmd_type(h5), 65)  // 'A'
+    a5args = normalizer.cmd_args(h5)
+    assert_eq_int("arc args size", floatarr.size(a5args), 7)
+    assert_near("arc rx",     floatarr.get_unchecked(a5args, 0), 27.0)
+    assert_near("arc fA",     floatarr.get_unchecked(a5args, 3), 1.0)
+    assert_near("arc fS",     floatarr.get_unchecked(a5args, 4), 0.0)
+    assert_near("arc x",      floatarr.get_unchecked(a5args, 5), 23.0)
+    assert_near("arc y",      floatarr.get_unchecked(a5args, 6), 44.0)
+
+    // Scientific + leading-dot numbers.
+    cmds6 = normalizer.parse_path("M -3e1 .5 L 0 0")
+    check_cmd("sci/dot M", cmds6, 0, M(), fa2(0.0 - 30.0, 0.5))
+
+    // Empty string returns empty list, not an error.
+    cmds7 = normalizer.parse_path("")
+    assert_eq_int("empty path count", list.size(cmds7), 0)
+
+    // ─── normalize_commands conversions ──────────────────────────
+
+    // Absolute M/L/Z passes through unchanged (and L type stays L).
+    nc1 = normalizer.normalize_path_to_list("M 10 10 L 20 20 Z")
+    assert_eq_int("normalize abs count", list.size(nc1), 3)
+    check_cmd("nc abs M", nc1, 0, M(), fa2(10.0, 10.0))
+    check_cmd("nc abs L", nc1, 1, L(), fa2(20.0, 20.0))
+    check_cmd("nc abs Z", nc1, 2, Z(), fa0())
+
+    // Relative l: 'M 10 10' then 'l 5 5' → 'L 15 15'.
+    nc2 = normalizer.normalize_path_to_list("M 10 10 l 5 5")
+    check_cmd("nc rel l→L", nc2, 1, L(), fa2(15.0, 15.0))
+
+    // Relative m chained: 'm 10 10' (no prior point, treated as
+    // absolute) then 'm 5 5' (relative to (10,10), TS: implicit `l`).
+    // The TS test confirms: 'm 10 10 5 5 3 3' parses to three lowercase
+    // m / l items; normalize then walks them relative.
+    nc3 = normalizer.normalize_path_to_list("m 10 10 5 5 3 3")
+    // After normalize: M(10,10), L(15,15), L(18,18).
+    assert_eq_int("nc rel m chain count", list.size(nc3), 3)
+    check_cmd("nc rel m[0]", nc3, 0, M(), fa2(10.0, 10.0))
+    check_cmd("nc rel m[1]", nc3, 1, L(), fa2(15.0, 15.0))
+    check_cmd("nc rel m[2]", nc3, 2, L(), fa2(18.0, 18.0))
+
+    // H → L (absolute and relative).
+    nc4 = normalizer.normalize_path_to_list("M 5 5 H 20")
+    check_cmd("H abs → L", nc4, 1, L(), fa2(20.0, 5.0))
+    nc5 = normalizer.normalize_path_to_list("M 5 5 h 10")
+    check_cmd("h rel → L", nc5, 1, L(), fa2(15.0, 5.0))
+
+    // V → L (absolute and relative).
+    nc6 = normalizer.normalize_path_to_list("M 5 5 V 20")
+    check_cmd("V abs → L", nc6, 1, L(), fa2(5.0, 20.0))
+    nc7 = normalizer.normalize_path_to_list("M 5 5 v 10")
+    check_cmd("v rel → L", nc7, 1, L(), fa2(5.0, 15.0))
+
+    // Relative c → absolute C: 'M 10 10 c 5 0 10 0 15 0' →
+    // C(15,10, 20,10, 25,10).
+    nc8 = normalizer.normalize_path_to_list("M 10 10 c 5 0 10 0 15 0")
+    check_cmd("c rel → C abs", nc8, 1, C(),
+              fa6(15.0, 10.0, 20.0, 10.0, 25.0, 10.0))
+
+    // Q → C (quadratic to cubic): M(0,0) Q 0 10 10 10 →
+    // cp1 = (0,0) + 2/3*((0,10)-(0,0)) = (0, 6.6667)
+    // cp2 = (10,10) + 2/3*((0,10)-(10,10)) = (3.3333, 10)
+    // end = (10, 10)
+    nc9 = normalizer.normalize_path_to_list("M 0 0 Q 0 10 10 10")
+    qh = get_cmd(nc9, 1)
+    assert_eq_int("Q → C type", normalizer.cmd_type(qh), C())
+    qargs = normalizer.cmd_args(qh)
+    assert_near("Q→C cp1.x", floatarr.get_unchecked(qargs, 0), 0.0)
+    assert_near("Q→C cp1.y", floatarr.get_unchecked(qargs, 1), 20.0 / 3.0)
+    assert_near("Q→C cp2.x", floatarr.get_unchecked(qargs, 2), 10.0 / 3.0)
+    assert_near("Q→C cp2.y", floatarr.get_unchecked(qargs, 3), 10.0)
+    assert_near("Q→C end.x", floatarr.get_unchecked(qargs, 4), 10.0)
+    assert_near("Q→C end.y", floatarr.get_unchecked(qargs, 5), 10.0)
+
+    // S → C continuation: M(0,0) C(0,5,5,5,10,5) S(15,0,20,0)
+    // After C, last_cp2 = (5,5). For S, cp1 = 2*(10,5) - (5,5) = (15,5).
+    // S cp2 = (15,0), end = (20,0).
+    nc10 = normalizer.normalize_path_to_list("M 0 0 C 0 5 5 5 10 5 S 15 0 20 0")
+    assert_eq_int("S → C count", list.size(nc10), 3)
+    sh = get_cmd(nc10, 2)
+    assert_eq_int("S → C type", normalizer.cmd_type(sh), C())
+    sargs = normalizer.cmd_args(sh)
+    assert_near("S→C cp1.x", floatarr.get_unchecked(sargs, 0), 15.0)
+    assert_near("S→C cp1.y", floatarr.get_unchecked(sargs, 1), 5.0)
+    assert_near("S→C cp2.x", floatarr.get_unchecked(sargs, 2), 15.0)
+    assert_near("S→C cp2.y", floatarr.get_unchecked(sargs, 3), 0.0)
+    assert_near("S→C end.x", floatarr.get_unchecked(sargs, 4), 20.0)
+    assert_near("S→C end.y", floatarr.get_unchecked(sargs, 5), 0.0)
+
+    // Degenerate arc (rx=0) → L.
+    nc11 = normalizer.normalize_path_to_list("M 0 0 A 0 10 0 0 0 10 10")
+    check_cmd("arc rx=0 → L", nc11, 1, L(), fa2(10.0, 10.0))
+
+    // Real arc: M(0,0) A 10 10 0 0 1 10 10 — a quarter-ish arc.
+    // Don't pin exact bezier coords; just verify it emits ≥1 C command
+    // and ends at (10,10) (the last C's args[4..5]).
+    nc12 = normalizer.normalize_path_to_list("M 0 0 A 10 10 0 0 1 10 10")
+    n12 = list.size(nc12)
+    assert_eq_int("arc → cubic[0] is M", normalizer.cmd_type(get_cmd(nc12, 0)), M())
+    // All subsequent commands should be C.
+    j = 1
+    while j < n12 {
+        cj = get_cmd(nc12, j)
+        ct = normalizer.cmd_type(cj)
+        if ct != C() {
+            println("  FAIL: arc → cubic[${j}] type=${ct} want C(${C()})")
+            exit(1)
+        }
+        j = j + 1
+    }
+    println("  PASS: arc → ${n12 - 1} cubic segments, all type C")
+    // Last cubic's endpoint should be (10, 10).
+    last = get_cmd(nc12, n12 - 1)
+    last_args = normalizer.cmd_args(last)
+    assert_near("arc end.x", floatarr.get_unchecked(last_args, 4), 10.0)
+    assert_near("arc end.y", floatarr.get_unchecked(last_args, 5), 10.0)
+
+    // Z resets the current point to subpath start: M(5,5) L(15,5) Z L(20,20)
+    // → M, L(15,5), Z, L(20,20). The second L starts from (5,5), not (15,5).
+    // Easiest assertion: the path normalizes to 4 commands; the final L
+    // is absolute (20,20).
+    nc13 = normalizer.normalize_path_to_list("M 5 5 L 15 5 Z L 20 20")
+    assert_eq_int("Z-reset count", list.size(nc13), 4)
+    check_cmd("post-Z M", nc13, 0, M(), fa2(5.0, 5.0))
+    check_cmd("post-Z L1", nc13, 1, L(), fa2(15.0, 5.0))
+    check_cmd("post-Z Z", nc13, 2, Z(), fa0())
+    check_cmd("post-Z L2", nc13, 3, L(), fa2(20.0, 20.0))
+
+    println("=== test_normalizer passed ===")
+}

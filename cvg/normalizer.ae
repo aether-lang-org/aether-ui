@@ -1,0 +1,632 @@
+// cvg/normalizer.ae — SVG path data → absolute M/L/C/Z normalizer.
+//
+// Port of cosyne/src/cvg/normalizer.ts (Tier A, pure — depends on
+// std.regex + std.floatarr + std.math, no host coupling).
+// See PORT_INVENTORY.md §1 row 4.
+//
+// Pipeline:
+//   parse_path(d: string)         -> list of PathCommand (raw, mixed case)
+//   normalize_commands(cmds)      -> list of NormalizedCommand (M/L/C/Z, absolute)
+//   normalize_path(d)             -> convenience: parse + normalize
+//
+// Conversions performed by normalize_commands:
+//   - Relative (lowercase) → absolute (uppercase)
+//   - H / V → L
+//   - S → C  (reflect previous C/S cp2 through current point)
+//   - Q → C  (quadratic → cubic via 2/3 lerp)
+//   - T → C  (reflect previous Q/T cp1 through current point)
+//   - A → C  (arc → 1..N cubic Béziers via SVG spec F.6)
+//
+// serialize_commands(cmds) lands when std.string.from_float has wider
+// precision than %g's default 6 sig figs (the librsvg parity gate needs
+// fixed-point output). The structured-comparison tests below work today.
+//
+// Data model (see README.md for the Aether idioms this leans on):
+//   - Command type stored as an ASCII char code int (M=77, m=109, …).
+//   - Args stored as `*FloatArray` (std.floatarr) per command — typed,
+//     length-aware, no per-arg heap box.
+//   - Sequence stored as `std.list` of `*PathCommand` / `*NormalizedCommand`.
+
+exports (
+    M_CHAR, L_CHAR, C_CHAR, Z_CHAR,
+    param_count, is_relative,
+    parse_path, normalize_commands, normalize_path_to_list,
+    // Accessor functions — cross-module callers receive ptr handles
+    // (struct types don't cross module boundaries in Aether) and
+    // read fields through these.
+    cmd_type, cmd_args
+)
+
+import std.regex
+import std.string
+import std.floatarr
+import std.list
+import std.math
+
+extern malloc(size: int) -> ptr
+
+// ─── ASCII char codes for command letters ────────────────────────
+//
+// Used as the `type` field everywhere. Function-constants so they
+// inline; see math.pi() / deg_to_rad() for the same pattern.
+M_CHAR() -> int { return 77 }   // 'M'
+m_CHAR() -> int { return 109 }  // 'm'
+L_CHAR() -> int { return 76 }   // 'L'
+l_CHAR() -> int { return 108 }  // 'l'
+H_CHAR() -> int { return 72 }   // 'H'
+h_CHAR() -> int { return 104 }  // 'h'
+V_CHAR() -> int { return 86 }   // 'V'
+v_CHAR() -> int { return 118 }  // 'v'
+C_CHAR() -> int { return 67 }   // 'C'
+c_CHAR() -> int { return 99 }   // 'c'
+S_CHAR() -> int { return 83 }   // 'S'
+s_CHAR() -> int { return 115 }  // 's'
+Q_CHAR() -> int { return 81 }   // 'Q'
+q_CHAR() -> int { return 113 }  // 'q'
+T_CHAR() -> int { return 84 }   // 'T'
+t_CHAR() -> int { return 116 }  // 't'
+A_CHAR() -> int { return 65 }   // 'A'
+a_CHAR() -> int { return 97 }   // 'a'
+Z_CHAR() -> int { return 90 }   // 'Z'
+z_CHAR() -> int { return 122 }  // 'z'
+
+// Map any command char to its uppercase counterpart.
+to_upper_cmd(c: int) -> int {
+    if c >= 97 {        // lowercase a..z
+        if c <= 122 { return c - 32 }
+    }
+    return c
+}
+
+// Returns 1 if `c` is the lowercase form of a path command (relative),
+// 0 otherwise. Z/z are NOT considered relative (no coords to relate to).
+is_relative(c: int) -> int {
+    if c == m_CHAR() { return 1 }
+    if c == l_CHAR() { return 1 }
+    if c == h_CHAR() { return 1 }
+    if c == v_CHAR() { return 1 }
+    if c == c_CHAR() { return 1 }
+    if c == s_CHAR() { return 1 }
+    if c == q_CHAR() { return 1 }
+    if c == t_CHAR() { return 1 }
+    if c == a_CHAR() { return 1 }
+    return 0
+}
+
+// Number of numeric parameters each command consumes. -1 for unknown.
+param_count(c: int) -> int {
+    abs = to_upper_cmd(c)
+    if abs == M_CHAR() { return 2 }
+    if abs == L_CHAR() { return 2 }
+    if abs == H_CHAR() { return 1 }
+    if abs == V_CHAR() { return 1 }
+    if abs == C_CHAR() { return 6 }
+    if abs == S_CHAR() { return 4 }
+    if abs == Q_CHAR() { return 4 }
+    if abs == T_CHAR() { return 2 }
+    if abs == A_CHAR() { return 7 }
+    if abs == Z_CHAR() { return 0 }
+    return 0 - 1
+}
+
+// ─── PathCommand / NormalizedCommand ─────────────────────────────
+
+struct PathCommand {
+    type: int       // ASCII char code
+    args: ptr       // *FloatArray, length = param_count(type)
+}
+
+struct NormalizedCommand {
+    type: int       // M, L, C, or Z (uppercase only)
+    args: ptr       // *FloatArray, length = 2 (M/L), 6 (C), or 0 (Z)
+}
+
+// Opaque-handle accessors. Both PathCommand and NormalizedCommand
+// have identical layout {type:int, args:ptr}, so a single pair of
+// accessors works for either kind. Callers pass the `ptr` they got
+// from list.get() unchanged.
+cmd_type(handle: ptr) -> int {
+    c = handle as *PathCommand
+    return c.type
+}
+
+cmd_args(handle: ptr) -> ptr {
+    c = handle as *PathCommand
+    return c.args
+}
+
+mk_path_cmd(type_code: int, args: ptr) -> *PathCommand {
+    c = malloc(16) as *PathCommand
+    c.type = type_code
+    c.args = args
+    return c
+}
+
+mk_norm_cmd(type_code: int, args: ptr) -> *NormalizedCommand {
+    c = malloc(16) as *NormalizedCommand
+    c.type = type_code
+    c.args = args
+    return c
+}
+
+// Helper: allocate a *FloatArray of the given size and zero contents.
+new_args(size: int) -> ptr {
+    a, _ = floatarr.new(size)
+    return a
+}
+
+// ─── parse_path: tokenize d-string into PathCommands ─────────────
+//
+// Tokenization handles:
+//   - Negative signs as implicit separators ("50-30" → 50, -30) —
+//     the regex's `[+-]?` prefix on the number alternation does this.
+//   - Commas and whitespace as separators (regex skips them).
+//   - Implicit lineTo after moveTo ("M 10 10 20 20" → M(10,10), L(20,20)).
+//   - Repeated implicit commands ("L 0 0 1 1 2 2" → three L commands).
+
+parse_path(d: string) -> ptr {
+    out = list.new()
+    if string.length(d) == 0 { return out }
+
+    // Same regex as TS: command letter OR signed/decimal/scientific number.
+    re, e = regex.compile("([MmLlHhVvCcSsQqTtAaZz])|([+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?)")
+    if e != "" { return out }
+
+    fa, fe = regex.find_all(re, d)
+    if fe != "" {
+        regex.free(re)
+        return out
+    }
+    n_matches = regex.find_all_count(fa)
+
+    // Walk the matches as a token stream. Each match is either:
+    //   - a single command letter (start..end span = 1 char), OR
+    //   - a number (anything else the regex captured).
+    // Classify by inspecting the first char of the matched substring.
+
+    current_cmd = 0 - 1   // -1 = no current command
+    i = 0
+    while i < n_matches {
+        tok_start = regex.find_all_start(fa, i)
+        // tok_end intentionally unused at the letter/Z dispatch — we
+        // only need the first char. The number-args inner loop below
+        // reads its own start/end pair via substring().
+        first_char = string_char_at(d, tok_start)
+
+        // Is `first_char` an SVG command letter?
+        is_letter = 0
+        if param_count(first_char) >= 0 { is_letter = 1 }
+
+        if is_letter == 1 {
+            current_cmd = first_char
+            i = i + 1
+
+            // Z / z: zero-arg, emit immediately.
+            if current_cmd == Z_CHAR() {
+                empty_args = new_args(0)
+                list.add(out, mk_path_cmd(Z_CHAR(), empty_args))
+                current_cmd = 0 - 1
+                continue
+            }
+            if current_cmd == z_CHAR() {
+                empty_args = new_args(0)
+                list.add(out, mk_path_cmd(z_CHAR(), empty_args))
+                current_cmd = 0 - 1
+                continue
+            }
+            continue
+        }
+
+        // It's a number. Without a current command, just skip
+        // (malformed SVG — TS source does the same).
+        if current_cmd == 0 - 1 {
+            i = i + 1
+            continue
+        }
+
+        pc = param_count(current_cmd)
+        if pc <= 0 {
+            i = i + 1
+            continue
+        }
+
+        // Collect `pc` numbers. Bail early if we hit a letter before
+        // consuming enough numbers (matches TS source's behaviour).
+        args = new_args(pc)
+        consumed = 0
+        ok = 1
+        while consumed < pc {
+            if i >= n_matches { ok = 0; break }
+            s2 = regex.find_all_start(fa, i)
+            e2 = regex.find_all_end(fa, i)
+            fc = string_char_at(d, s2)
+            if param_count(fc) >= 0 { ok = 0; break }  // hit a letter
+            num_str = string.substring(d, s2, e2)
+            v, ve = string.to_double(num_str)
+            if ve != "" { ok = 0; break }
+            floatarr.set_unchecked(args, consumed, v)
+            consumed = consumed + 1
+            i = i + 1
+        }
+
+        if ok == 0 {
+            floatarr.free(args)
+            break
+        }
+
+        list.add(out, mk_path_cmd(current_cmd, args))
+
+        // After M/m, implicit subsequent coord pairs are L/l.
+        if current_cmd == M_CHAR() { current_cmd = L_CHAR() }
+        if current_cmd == m_CHAR() { current_cmd = l_CHAR() }
+    }
+
+    regex.find_all_free(fa)
+    regex.free(re)
+    return out
+}
+
+// ─── normalize_commands: → absolute M/L/C/Z only ─────────────────
+
+// Mutable cursor state threaded through the walk.
+struct NormState {
+    cx: float           // current point x
+    cy: float           // current point y
+    sx: float           // subpath start x (target of Z)
+    sy: float           // subpath start y
+    last_cp2x: float    // last C/S cp2 x (for S smoothing)
+    last_cp2y: float
+    last_qx: float      // last Q/T qcp x (for T smoothing)
+    last_qy: float
+    last_cmd: int       // ASCII code of previous command (for S/T continuation)
+}
+
+mk_state() -> *NormState {
+    s = malloc(72) as *NormState
+    s.cx = 0.0
+    s.cy = 0.0
+    s.sx = 0.0
+    s.sy = 0.0
+    s.last_cp2x = 0.0
+    s.last_cp2y = 0.0
+    s.last_qx = 0.0
+    s.last_qy = 0.0
+    s.last_cmd = 0
+    return s
+}
+
+// Convenience: read floatarr[i] discarding the err.
+fa_get(a: ptr, i: int) -> float {
+    return floatarr.get_unchecked(a, i)
+}
+
+// Allocate a 2-float args array for M/L emission.
+emit_args2(x: float, y: float) -> ptr {
+    a = new_args(2)
+    floatarr.set_unchecked(a, 0, x)
+    floatarr.set_unchecked(a, 1, y)
+    return a
+}
+
+// Allocate a 6-float args array for C emission.
+emit_args6(cp1x: float, cp1y: float, cp2x: float, cp2y: float, x: float, y: float) -> ptr {
+    a = new_args(6)
+    floatarr.set_unchecked(a, 0, cp1x)
+    floatarr.set_unchecked(a, 1, cp1y)
+    floatarr.set_unchecked(a, 2, cp2x)
+    floatarr.set_unchecked(a, 3, cp2y)
+    floatarr.set_unchecked(a, 4, x)
+    floatarr.set_unchecked(a, 5, y)
+    return a
+}
+
+normalize_commands(cmds: ptr) -> ptr {
+    out = list.new()
+    st = mk_state()
+    n = list.size(cmds)
+    i = 0
+    while i < n {
+        item, _ = list.get(cmds, i)
+        cmd = item as *PathCommand
+        ty = cmd.type
+        rel = is_relative(ty)
+        abs = to_upper_cmd(ty)
+        args = cmd.args
+
+        if abs == M_CHAR() {
+            x = fa_get(args, 0)
+            y = fa_get(args, 1)
+            if rel == 1 { x = st.cx + x; y = st.cy + y }
+            list.add(out, mk_norm_cmd(M_CHAR(), emit_args2(x, y)))
+            st.cx = x; st.cy = y
+            st.sx = x; st.sy = y
+        }
+        if abs == L_CHAR() {
+            x = fa_get(args, 0)
+            y = fa_get(args, 1)
+            if rel == 1 { x = st.cx + x; y = st.cy + y }
+            list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(x, y)))
+            st.cx = x; st.cy = y
+        }
+        if abs == H_CHAR() {
+            x = fa_get(args, 0)
+            if rel == 1 { x = st.cx + x }
+            list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(x, st.cy)))
+            st.cx = x
+        }
+        if abs == V_CHAR() {
+            y = fa_get(args, 0)
+            if rel == 1 { y = st.cy + y }
+            list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(st.cx, y)))
+            st.cy = y
+        }
+        if abs == C_CHAR() {
+            ox = 0.0
+            oy = 0.0
+            if rel == 1 { ox = st.cx; oy = st.cy }
+            cp1x = ox + fa_get(args, 0)
+            cp1y = oy + fa_get(args, 1)
+            cp2x = ox + fa_get(args, 2)
+            cp2y = oy + fa_get(args, 3)
+            x = ox + fa_get(args, 4)
+            y = oy + fa_get(args, 5)
+            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            st.last_cp2x = cp2x; st.last_cp2y = cp2y
+            st.cx = x; st.cy = y
+        }
+        if abs == S_CHAR() {
+            // Reflect previous cp2 through current point, if previous was C/S.
+            cp1x = st.cx
+            cp1y = st.cy
+            prev = to_upper_cmd(st.last_cmd)
+            if prev == C_CHAR() {
+                cp1x = 2.0 * st.cx - st.last_cp2x
+                cp1y = 2.0 * st.cy - st.last_cp2y
+            }
+            if prev == S_CHAR() {
+                cp1x = 2.0 * st.cx - st.last_cp2x
+                cp1y = 2.0 * st.cy - st.last_cp2y
+            }
+            ox = 0.0
+            oy = 0.0
+            if rel == 1 { ox = st.cx; oy = st.cy }
+            cp2x = ox + fa_get(args, 0)
+            cp2y = oy + fa_get(args, 1)
+            x = ox + fa_get(args, 2)
+            y = oy + fa_get(args, 3)
+            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            st.last_cp2x = cp2x; st.last_cp2y = cp2y
+            st.cx = x; st.cy = y
+        }
+        if abs == Q_CHAR() {
+            // Quadratic → cubic: cp1 = current + 2/3 (qcp - current),
+            //                    cp2 = end     + 2/3 (qcp - end).
+            ox = 0.0
+            oy = 0.0
+            if rel == 1 { ox = st.cx; oy = st.cy }
+            qx = ox + fa_get(args, 0)
+            qy = oy + fa_get(args, 1)
+            x = ox + fa_get(args, 2)
+            y = oy + fa_get(args, 3)
+            two_thirds = 2.0 / 3.0
+            cp1x = st.cx + two_thirds * (qx - st.cx)
+            cp1y = st.cy + two_thirds * (qy - st.cy)
+            cp2x = x + two_thirds * (qx - x)
+            cp2y = y + two_thirds * (qy - y)
+            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            st.last_qx = qx; st.last_qy = qy
+            st.last_cp2x = cp2x; st.last_cp2y = cp2y
+            st.cx = x; st.cy = y
+        }
+        if abs == T_CHAR() {
+            // Smooth quadratic: reflect previous Q cp through current.
+            qx = st.cx
+            qy = st.cy
+            prev = to_upper_cmd(st.last_cmd)
+            if prev == Q_CHAR() {
+                qx = 2.0 * st.cx - st.last_qx
+                qy = 2.0 * st.cy - st.last_qy
+            }
+            if prev == T_CHAR() {
+                qx = 2.0 * st.cx - st.last_qx
+                qy = 2.0 * st.cy - st.last_qy
+            }
+            ox = 0.0
+            oy = 0.0
+            if rel == 1 { ox = st.cx; oy = st.cy }
+            x = ox + fa_get(args, 0)
+            y = oy + fa_get(args, 1)
+            two_thirds = 2.0 / 3.0
+            cp1x = st.cx + two_thirds * (qx - st.cx)
+            cp1y = st.cy + two_thirds * (qy - st.cy)
+            cp2x = x + two_thirds * (qx - x)
+            cp2y = y + two_thirds * (qy - y)
+            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            st.last_qx = qx; st.last_qy = qy
+            st.cx = x; st.cy = y
+        }
+        if abs == A_CHAR() {
+            ox = 0.0
+            oy = 0.0
+            if rel == 1 { ox = st.cx; oy = st.cy }
+            rx = math.abs_float(fa_get(args, 0))
+            ry = math.abs_float(fa_get(args, 1))
+            phi = fa_get(args, 2)
+            large_arc = fa_get(args, 3)
+            sweep = fa_get(args, 4)
+            ex = ox + fa_get(args, 5)
+            ey = oy + fa_get(args, 6)
+
+            // Degenerate: zero radius → straight line.
+            if rx == 0.0 {
+                list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(ex, ey)))
+                st.cx = ex; st.cy = ey
+            } else {
+                if ry == 0.0 {
+                    list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(ex, ey)))
+                    st.cx = ex; st.cy = ey
+                } else {
+                    // Zero-length arc: skip entirely.
+                    if st.cx == ex {
+                        if st.cy == ey {
+                            // skip
+                            st.last_cmd = ty
+                            i = i + 1
+                            continue
+                        }
+                    }
+                    arc_to_cubics_emit(out, st.cx, st.cy, rx, ry, phi, large_arc, sweep, ex, ey)
+                    st.cx = ex; st.cy = ey
+                }
+            }
+        }
+        if abs == Z_CHAR() {
+            list.add(out, mk_norm_cmd(Z_CHAR(), new_args(0)))
+            st.cx = st.sx; st.cy = st.sy
+        }
+
+        st.last_cmd = ty
+        i = i + 1
+    }
+    return out
+}
+
+// Convenience: parse + normalize in one call.
+normalize_path_to_list(d: string) -> ptr {
+    return normalize_commands(parse_path(d))
+}
+
+// ─── Arc → Cubic Bézier (SVG spec F.6) ───────────────────────────
+//
+// Endpoint-to-center parameterisation, then one cubic per ≤90° segment.
+
+// Helper: angle between vectors (u, v) with sign, used to compute theta1
+// and dtheta in the F.6.5.5/6 step.
+angle_between(ux: float, uy: float, vx: float, vy: float) -> float {
+    n = math.sqrt(ux * ux + uy * uy) * math.sqrt(vx * vx + vy * vy)
+    if n == 0.0 { return 0.0 }
+    cosv = (ux * vx + uy * vy) / n
+    if cosv < 0.0 - 1.0 { cosv = 0.0 - 1.0 }
+    if cosv > 1.0 { cosv = 1.0 }
+    a = math.acos(cosv)
+    if ux * vy - uy * vx < 0.0 { return 0.0 - a }
+    return a
+}
+
+// Emit one cubic for the arc segment t1..t2 (≤90° span) into `out`.
+arc_segment_emit(out: ptr, cx: float, cy: float,
+                  rx: float, ry: float, phi: float,
+                  t1: float, t2: float) {
+    dt = t2 - t1
+    alpha = (4.0 / 3.0) * math.tan(dt / 4.0)
+
+    cos_phi = math.cos(phi)
+    sin_phi = math.sin(phi)
+
+    cos_t1 = math.cos(t1)
+    sin_t1 = math.sin(t1)
+    cos_t2 = math.cos(t2)
+    sin_t2 = math.sin(t2)
+
+    // Endpoint p1, p2.
+    p1x = cos_phi * rx * cos_t1 - sin_phi * ry * sin_t1 + cx
+    p1y = sin_phi * rx * cos_t1 + cos_phi * ry * sin_t1 + cy
+    p2x = cos_phi * rx * cos_t2 - sin_phi * ry * sin_t2 + cx
+    p2y = sin_phi * rx * cos_t2 + cos_phi * ry * sin_t2 + cy
+
+    // Tangents at t1, t2.
+    d1x = 0.0 - cos_phi * rx * sin_t1 - sin_phi * ry * cos_t1
+    d1y = 0.0 - sin_phi * rx * sin_t1 + cos_phi * ry * cos_t1
+    d2x = 0.0 - cos_phi * rx * sin_t2 - sin_phi * ry * cos_t2
+    d2y = 0.0 - sin_phi * rx * sin_t2 + cos_phi * ry * cos_t2
+
+    cp1x = p1x + alpha * d1x
+    cp1y = p1y + alpha * d1y
+    cp2x = p2x - alpha * d2x
+    cp2y = p2y - alpha * d2y
+
+    list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, p2x, p2y)))
+}
+
+// SVG arc → 1..N cubic Béziers, emitted into `out`.
+// phi_deg is the x-axis rotation in degrees; large_arc/sweep are
+// the SVG flag values (0 or 1).
+arc_to_cubics_emit(out: ptr,
+                    x1: float, y1: float,
+                    rx_in: float, ry_in: float,
+                    phi_deg: float,
+                    fa: float, fs: float,
+                    x2: float, y2: float) {
+    phi = phi_deg * math.deg_to_rad()
+    cos_phi = math.cos(phi)
+    sin_phi = math.sin(phi)
+
+    // F.6.5.1: (x1', y1')
+    dx = (x1 - x2) / 2.0
+    dy = (y1 - y2) / 2.0
+    x1p = cos_phi * dx + sin_phi * dy
+    y1p = (0.0 - sin_phi) * dx + cos_phi * dy
+
+    rx = math.abs_float(rx_in)
+    ry = math.abs_float(ry_in)
+    x1p2 = x1p * x1p
+    y1p2 = y1p * y1p
+    rx2 = rx * rx
+    ry2 = ry * ry
+
+    // F.6.6.2/3: correct radii if too small.
+    lambda = x1p2 / rx2 + y1p2 / ry2
+    if lambda > 1.0 {
+        sl = math.sqrt(lambda)
+        rx = rx * sl
+        ry = ry * sl
+        rx2 = rx * rx
+        ry2 = ry * ry
+    }
+
+    // F.6.5.2: (cx', cy')
+    num = rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2
+    den = rx2 * y1p2 + ry2 * x1p2
+    if num < 0.0 { num = 0.0 }
+    sq = math.sqrt(num / den)
+    if fa == fs { sq = 0.0 - sq }
+
+    cxp = sq * (rx * y1p) / ry
+    cyp = sq * ((0.0 - (ry * x1p)) / rx)
+
+    // F.6.5.3: (cx, cy)
+    cx = cos_phi * cxp - sin_phi * cyp + (x1 + x2) / 2.0
+    cy = sin_phi * cxp + cos_phi * cyp + (y1 + y2) / 2.0
+
+    // F.6.5.5/6: theta1 and dtheta.
+    theta1 = angle_between(1.0, 0.0, (x1p - cxp) / rx, (y1p - cyp) / ry)
+    dtheta = angle_between((x1p - cxp) / rx, (y1p - cyp) / ry,
+                           (0.0 - x1p - cxp) / rx, (0.0 - y1p - cyp) / ry)
+
+    two_pi = math.tau()
+    if fs == 0.0 {
+        if dtheta > 0.0 { dtheta = dtheta - two_pi }
+    }
+    if fs == 1.0 {
+        if dtheta < 0.0 { dtheta = dtheta + two_pi }
+    }
+
+    // Split into ≤90° segments.
+    half_pi = math.pi() / 2.0
+    segments_f = math.ceil(math.abs_float(dtheta) / half_pi)
+    if segments_f < 1.0 { segments_f = 1.0 }
+    seg_angle = dtheta / segments_f
+
+    // Loop on a float counter (no float→int cast available with `as`).
+    // segments_f is a whole-number float from math.ceil, so decrementing
+    // by 1.0 reaches exactly 0.0 in `segments_f` steps.
+    t = theta1
+    remaining = segments_f
+    while remaining > 0.5 {
+        t1 = t
+        t2 = t + seg_angle
+        arc_segment_emit(out, cx, cy, rx, ry, phi, t1, t2)
+        t = t2
+        remaining = remaining - 1.0
+    }
+}

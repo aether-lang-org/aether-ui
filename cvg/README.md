@@ -13,10 +13,11 @@ are wired into `ci.sh` as **Phase 0** (runs even with no display).
 
 | Module | Source (TS) | Aether | Test | State |
 |--------|-------------|--------|------|-------|
-| transform | `transform.ts` (346 LoC) | `transform.ae` | `test_transform.ae` (30 asserts) | ✅ matrix algebra + factories + projective. `parseTransform` (string→matrix) **not yet** — needs a hand-rolled tokenizer (no regex in Aether). |
+| transform | `transform.ts` (346 LoC) | `transform.ae` | `test_transform.ae` (30 asserts) | ✅ matrix algebra + factories + projective. `parseTransform` (string→matrix) deferred — unblocked by `std.regex` v0.191; lands alongside `parser.ae`. |
+| normalizer | `normalizer.ts` (427 LoC) | `normalizer.ae` | `test_normalizer.ae` (60 asserts) | ✅ `parse_path` (regex-based tokenizer) + `normalize_commands` (rel→abs, H/V→L, S/Q/T→C, arc→cubic via SVG F.6). `serialize_commands` deferred until `string.from_float` has caller-controlled precision (the librsvg parity gate wants fixed-point output). |
 
 Next per the inventory's Tier A order: `types`, `grammar-types` (easing),
-`normalizer` (path data → absolute M/L/C/Z), `bbox`, then `parser`.
+`bbox`, then `parser`.
 
 ## Running a test by hand
 
@@ -55,3 +56,18 @@ reference. Capturing them here so the next module doesn't rediscover them.
   Go-style wrappers: `a, err = floatarr.new(n)`, `v, _ = floatarr.get(a, i)`;
   `floatarr.set(a, i, v)` returns just an error string. `_unchecked`
   variants are tuple-free for hot loops.
+- **Struct types don't cross module boundaries.** `exports (...)` covers
+  functions, not struct *types*. `import normalizer` makes `normalizer.M_CHAR`
+  callable but `*normalizer.PathCommand` is rejected ("`normalizer` is not a
+  struct type"). The fix is to expose accessor functions (`cmd_type(h)`,
+  `cmd_args(h)`) and hand callers a raw `ptr` handle — same shape as
+  `std.list` / `std.regex` / `std.floatarr`. See `normalizer.ae`'s
+  `cmd_type` / `cmd_args` for the pattern.
+- **No `float as int` cast.** Loop on a float counter that decrements
+  by 1.0 instead (`math.ceil` produces whole-number floats — exact).
+- **Char-code interpolation gotcha.** `${string_char_at("M", 0)}` returns
+  empty when the literal `"M"` appears inside an `${...}` block — the
+  escaped quotes don't tokenize cleanly. Assign to a variable first.
+- **No `as ptr` cast.** Only `as *Struct` / `as fn(...)` / `as T[]` are
+  accepted. Functions that take `ptr` params accept `*Struct` values
+  directly (the C-side widens).
