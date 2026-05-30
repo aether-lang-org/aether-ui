@@ -27,6 +27,9 @@ are wired into `ci.sh` as **Phase 0** (runs even with no display).
 | grammar_element | `grammar-element.ts` (525 LoC, core subset) | `grammar_element.ae` | `test_grammar_element.ae` (43 asserts) | ✅ Per-shape wrapper. `CvgElement` struct (~17 fields), setter/getter pairs for all event handlers (click/hover/drag/dragEnd/scroll/dblclick/rclick), reactive bindings (fill/stroke/opacity/text/pos), tooltip/cursor/when/visibility/destroyed flags. Pure hit-test: bounds inside-check + invisible/destroyed guards. Backend reach-through (text/fill/stroke/opacity) and animation `transition()` deferred until the aether-ui widget surface is wired. Callback setters take `ptr` (v0.193+1 `fn ↔ ptr` fix doesn't reach struct-field assignment — filed as a follow-up to `aether/fn_ptr_coercion.md`); call sites still pass bare function names cleanly. |
 | grammar_rendering | `grammar-rendering.ts` (440 LoC, coordinate-mapping subset) | `grammar_rendering.ae` | `test_grammar_rendering.ae` (30 asserts) | ✅ Transform-stack push/pop with `parse_transform` composition; `map_point` (currentTransform ∘ viewBox); `map_x`/`map_y`/`map_length`; `parse_len_x`/`parse_len_y` resolving `"%"` against viewBox dimensions; `map_stroke_width` with sub-pixel opacity-factor fallback (raw=0.4 × scale=2 = 0.8 → returns (1.0, 0.8) to render at 1px with 80% alpha). Style cascade is `grammar_style.ae`; CSS class system, refresh() loop, gradient construction — separate follow-ups. |
 | grammar_style | `grammar-rendering.ts` (style-cascade subset) | `grammar_style.ae` | `test_grammar_style.ae` (19 asserts) | ✅ SVG-style cascade: `push_style` / `pop_style` / `current_style` / `resolve_style`. SvgStyle modelled as `std.map string→string` (sidesteps Aether's no-nullable-struct-fields constraint; matches what TS's `SvgStyle` interface does at runtime via `?? `chains). Four-way priority: element attrs → inline style → CSS class → inherited parent. 16 properties enumerated (fill, stroke, stroke-width, stroke-linecap, stroke-linejoin, stroke-opacity, fill-opacity, fill-rule, opacity, font-size, font-family, font-weight, font-style, text-anchor, filter, clip-path). CSS-class lookup currently stubbed (returns empty map) — `registerCssStyle` + selector parsing is a separate follow-up. |
+| cvg_backend | (new) | `cvg_backend.ae` | tested via `test_grammar_shapes` | ✅ Recording backend stub for Phase-0 testing. Seven entry points (`canvas_circle`, `canvas_rectangle`, `canvas_line`, `canvas_path`, `canvas_text`, `canvas_raster`, `canvas_tappable_raster`); each records the call kind + opts (as `std.map`) and returns a fresh handle. Tests inspect via `backend_kind(b, i)` and `backend_opt_get(b, i, key)`. Real backend wiring (to `aether_ui.canvas_*`) lives behind this same interface; the swap is one file. |
+| grammar_shapes | `grammar-shapes.ts` (525 LoC, happy-path subset) | `grammar_shapes.ae` | `test_grammar_shapes.ae` (34 asserts) | ✅ Shape factories: `shape_circle`, `shape_rectangle`, `shape_line`, `shape_path`, `shape_group`. End-to-end pipeline per call: maybe-push-transform → resolve_style → map_point + parse_len_x/y → resolve_fill/stroke_color → map_stroke_width → backend dispatch → wrap in *CvgElement with bounds → maybe-pop-transform. Path bounds computed by walking normalize_commands output. Group is unique (no backend call) — pushes style+transform, runs the body closure, pops. Projective-transform, raster-fallback, gradient, rounded-corner branches all deferred (need grammar_defs / projective glue). |
+| grammar_utils | (additions this commit) | `grammar_utils.ae` | (existing test still 49) | ✅ Adds `resolve_fill_color`, `resolve_stroke_color`, `effective_alpha`, `effective_stroke_alpha`, `style_num_default`. `url(#id)` gradient lookup deferred (needs grammar_defs); falls back to trailing color or "black". |
 
 Also landed: **`parse_transform`** (deferred since the first commit; ~22
 extra assertions in `test_transform.ae`, total 52) + cross-module
@@ -51,12 +54,12 @@ Tier C breakdown (per inventory):
   - ✅ `grammar_element.ae` (per-shape wrapper, hit-test, bindings)
   - ✅ `grammar_rendering.ae` (coordinate-mapping subset)
   - ✅ `grammar_style.ae` (style cascade)
+  - ✅ `cvg_backend.ae` (recording stub; real backend wiring deferred)
+  - ✅ `grammar_shapes.ae` (circle/rect/line/path/group factories)
   - ⬜ CSS class system (registerCssStyle/getCssProps)
   - ⬜ Event tracking & dispatch (context-side)
   - ⬜ Animation manager
   - ⬜ Binding regions
-  - ⬜ `grammar-shapes` (shape factories — now unblocked at the
-    pure side; underlying-widget surface still needs a stub)
   - ⬜ `grammar-defs` (gradient/filter/clipPath/text/use construction)
   - ⬜ `grammar-factories` (cvg() builder entry points)
 

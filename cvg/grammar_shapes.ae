@@ -1,0 +1,388 @@
+// cvg/grammar_shapes.ae — shape factories (Tier C).
+//
+// Port of the *happy path* of cosyne/src/cvg/grammar-shapes.ts's
+// shape methods. Each factory:
+//   1. Pushes the optional `transform=` attribute onto the context.
+//   2. Resolves the merged style via grammar_style.resolve_style.
+//   3. Computes screen-space coords via map_point / parse_len_x/y.
+//   4. Resolves fill/stroke colors with opacity bake-in.
+//   5. Computes mapped stroke-width with sub-pixel opacity factor.
+//   6. Dispatches to the backend's canvas_* with computed opts.
+//   7. Wraps the underlying handle in a *CvgElement, sets bounds.
+//   8. Pops the optional transform.
+//
+// Five factories this commit: circle, rectangle, line, path, group (g).
+// `g` is special — it's just a transform/style/when stack push, run
+// the builder closure, then pop. No backend call.
+//
+// Out of scope, deferred to later commits:
+//   - Projective-transform branches (every shape has an alternate
+//     path-emitting branch when the current transform is projective;
+//     rare in real SVG, big code surface)
+//   - Filter / clipPath rasterization branches (need full filter
+//     machinery from grammar_defs)
+//   - Gradient fill (gradient lookup needs grammar_defs)
+//   - Rounded rect (the rounded-corner branch in proto.rect)
+//   - text(), ellipse(), polyline(), polygon() — all delegate to
+//     path() in the TS source, will land alongside path-string
+//     emission utilities once needed
+//   - setShapeInfo / wireEventHandlers / trackElement / resize
+//     callbacks — separate concerns
+//
+// Attrs convention: each factory takes attrs as a std.map
+// string→string (the shape parser/builder is expected to populate
+// it; raw SVG attribute parsing already produces this shape in
+// parser.ae).
+
+exports (
+    shape_circle, shape_rectangle, shape_line, shape_path,
+    shape_group
+)
+
+import std.string
+import std.map
+import grammar_context
+import grammar_rendering
+import grammar_style
+import grammar_utils
+import grammar_element
+import transform
+import cvg_backend
+import normalizer
+
+extern malloc(size: int) -> ptr
+
+// ─── attr helpers ────────────────────────────────────────────────
+//
+// Each factory reads a few specific attrs. Hide the map.get → null
+// → default fallback in a small helper.
+
+attr_str_or(attrs: ptr, key: string, default_val: string) -> string {
+    v, _ = map.get(attrs, key)
+    if v == null { return default_val }
+    return v
+}
+
+attr_has(attrs: ptr, key: string) -> int {
+    return map.has(attrs, key)
+}
+
+// Float-to-string for opts (round-trips via parse_length_to_px on
+// the read side). Uses Aether's string.from_float — precision is
+// 6 sig figs per std.string convention, fine for opts inspection.
+
+import std.string
+ftos(f: float) -> string { return string.from_float(f) }
+
+int_to_str(i: int) -> string { return string.from_int(i) }
+
+// Build an opts map for backend calls. Each call only needs a
+// handful of keys, so we build directly inline.
+opt_set_f(opts: ptr, k: string, v: float) {
+    _ = map.put(opts, k, ftos(v))
+}
+
+opt_set_s(opts: ptr, k: string, v: string) {
+    if string.length(v) > 0 {
+        _ = map.put(opts, k, v)
+    }
+}
+
+// ─── Transform-push helper (push only if attrs has transform) ────
+
+maybe_push_transform(ctx: ptr, attrs: ptr) -> int {
+    t, _ = map.get(attrs, "transform")
+    if t == null { return 0 }
+    grammar_rendering.push_transform_str(ctx, t)
+    return 1
+}
+
+maybe_pop_transform(ctx: ptr, did_push: int) {
+    if did_push == 1 { grammar_rendering.pop_transform(ctx) }
+}
+
+// ─── shape_circle ────────────────────────────────────────────────
+
+shape_circle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
+    did_push = maybe_push_transform(ctx, attrs)
+    style = grammar_style.resolve_style(ctx, attrs, "circle",
+                                        attr_str_or(attrs, "class", ""))
+
+    cx_raw = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "cx", "0"))
+    cy_raw = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "cy", "0"))
+    r_raw  = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "r",  "0"))
+
+    p = grammar_rendering.map_point(ctx, cx_raw, cy_raw)
+    cx = transform.pt_x(p)
+    cy = transform.pt_y(p)
+    avg_scale = transform.affine_average_scale_p(grammar_rendering.current_transform(ctx))
+    r = grammar_rendering.map_length(ctx, r_raw) * avg_scale
+
+    fill_color = grammar_utils.resolve_fill_color(style)
+    stroke_color = grammar_utils.resolve_stroke_color(style)
+    sw = 0.0
+    if string.length(stroke_color) > 0 {
+        sw_raw = grammar_utils.style_num_default(style, "stroke-width", 1.0)
+        smap = grammar_rendering.map_stroke_width(ctx, sw_raw)
+        sw = grammar_rendering.stroke_width(smap)
+        op = grammar_rendering.stroke_opacity_factor(smap)
+        if op < 1.0 {
+            stroke_color = grammar_utils.apply_opacity_to_color(stroke_color, op)
+        }
+    }
+    half_sw = sw / 2.0
+
+    opts = map.new()
+    opt_set_f(opts, "x",  cx - r - half_sw)
+    opt_set_f(opts, "y",  cy - r - half_sw)
+    opt_set_f(opts, "x2", cx + r + half_sw)
+    opt_set_f(opts, "y2", cy + r + half_sw)
+    opt_set_s(opts, "fillColor",   fill_color)
+    opt_set_s(opts, "strokeColor", stroke_color)
+    opt_set_f(opts, "strokeWidth", sw)
+
+    underlying = cvg_backend.canvas_circle(backend, opts)
+
+    maybe_pop_transform(ctx, did_push)
+
+    el = grammar_element.element_new(underlying)
+    grammar_element.element_set_bounds(el, cx - r, cy - r, 2.0 * r, 2.0 * r)
+    return el
+}
+
+// ─── shape_rectangle ─────────────────────────────────────────────
+
+shape_rectangle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
+    did_push = maybe_push_transform(ctx, attrs)
+    style = grammar_style.resolve_style(ctx, attrs, "rect",
+                                        attr_str_or(attrs, "class", ""))
+
+    px = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "x", "0"))
+    py = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "y", "0"))
+    pw = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "width",  "0"))
+    ph = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "height", "0"))
+
+    // Project the four corners and compute axis-aligned bounds.
+    p1 = grammar_rendering.map_point(ctx, px, py)
+    p2 = grammar_rendering.map_point(ctx, px + pw, py)
+    p3 = grammar_rendering.map_point(ctx, px, py + ph)
+    p4 = grammar_rendering.map_point(ctx, px + pw, py + ph)
+    x1 = transform.pt_x(p1)
+    y1 = transform.pt_y(p1)
+    min_x = x1; max_x = x1
+    min_y = y1; max_y = y1
+    cand_x = transform.pt_x(p2); cand_y = transform.pt_y(p2)
+    if cand_x < min_x { min_x = cand_x }
+    if cand_x > max_x { max_x = cand_x }
+    if cand_y < min_y { min_y = cand_y }
+    if cand_y > max_y { max_y = cand_y }
+    cand_x = transform.pt_x(p3); cand_y = transform.pt_y(p3)
+    if cand_x < min_x { min_x = cand_x }
+    if cand_x > max_x { max_x = cand_x }
+    if cand_y < min_y { min_y = cand_y }
+    if cand_y > max_y { max_y = cand_y }
+    cand_x = transform.pt_x(p4); cand_y = transform.pt_y(p4)
+    if cand_x < min_x { min_x = cand_x }
+    if cand_x > max_x { max_x = cand_x }
+    if cand_y < min_y { min_y = cand_y }
+    if cand_y > max_y { max_y = cand_y }
+
+    fill_color = grammar_utils.resolve_fill_color(style)
+    stroke_color = grammar_utils.resolve_stroke_color(style)
+    sw = 0.0
+    if string.length(stroke_color) > 0 {
+        sw_raw = grammar_utils.style_num_default(style, "stroke-width", 1.0)
+        smap = grammar_rendering.map_stroke_width(ctx, sw_raw)
+        sw = grammar_rendering.stroke_width(smap)
+        op = grammar_rendering.stroke_opacity_factor(smap)
+        if op < 1.0 {
+            stroke_color = grammar_utils.apply_opacity_to_color(stroke_color, op)
+        }
+    }
+    half_sw = sw / 2.0
+
+    opts = map.new()
+    opt_set_f(opts, "x",  min_x - half_sw)
+    opt_set_f(opts, "y",  min_y - half_sw)
+    opt_set_f(opts, "x2", max_x + half_sw)
+    opt_set_f(opts, "y2", max_y + half_sw)
+    opt_set_s(opts, "fillColor",   fill_color)
+    opt_set_s(opts, "strokeColor", stroke_color)
+    opt_set_f(opts, "strokeWidth", sw)
+
+    underlying = cvg_backend.canvas_rectangle(backend, opts)
+
+    maybe_pop_transform(ctx, did_push)
+
+    el = grammar_element.element_new(underlying)
+    grammar_element.element_set_bounds(el, min_x, min_y, max_x - min_x, max_y - min_y)
+    return el
+}
+
+// ─── shape_line ──────────────────────────────────────────────────
+
+shape_line(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
+    did_push = maybe_push_transform(ctx, attrs)
+    style = grammar_style.resolve_style(ctx, attrs, "line",
+                                        attr_str_or(attrs, "class", ""))
+
+    x1_raw = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "x1", "0"))
+    y1_raw = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "y1", "0"))
+    x2_raw = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "x2", "0"))
+    y2_raw = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "y2", "0"))
+
+    p1 = grammar_rendering.map_point(ctx, x1_raw, y1_raw)
+    p2 = grammar_rendering.map_point(ctx, x2_raw, y2_raw)
+    mx1 = transform.pt_x(p1); my1 = transform.pt_y(p1)
+    mx2 = transform.pt_x(p2); my2 = transform.pt_y(p2)
+
+    stroke_color = grammar_utils.resolve_stroke_color(style)
+    sw = 0.0
+    if string.length(stroke_color) > 0 {
+        sw_raw = grammar_utils.style_num_default(style, "stroke-width", 1.0)
+        smap = grammar_rendering.map_stroke_width(ctx, sw_raw)
+        sw = grammar_rendering.stroke_width(smap)
+        op = grammar_rendering.stroke_opacity_factor(smap)
+        if op < 1.0 {
+            stroke_color = grammar_utils.apply_opacity_to_color(stroke_color, op)
+        }
+    }
+
+    opts = map.new()
+    opt_set_f(opts, "x1", mx1)
+    opt_set_f(opts, "y1", my1)
+    opt_set_f(opts, "x2", mx2)
+    opt_set_f(opts, "y2", my2)
+    opt_set_s(opts, "strokeColor", stroke_color)
+    opt_set_f(opts, "strokeWidth", sw)
+
+    underlying = cvg_backend.canvas_line(backend, opts)
+
+    maybe_pop_transform(ctx, did_push)
+
+    el = grammar_element.element_new(underlying)
+    // Bounds: AABB of the two endpoints.
+    lo_x = mx1; if mx2 < lo_x { lo_x = mx2 }
+    lo_y = my1; if my2 < lo_y { lo_y = my2 }
+    hi_x = mx1; if mx2 > hi_x { hi_x = mx2 }
+    hi_y = my1; if my2 > hi_y { hi_y = my2 }
+    grammar_element.element_set_bounds(el, lo_x, lo_y, hi_x - lo_x, hi_y - lo_y)
+    return el
+}
+
+// ─── shape_path ──────────────────────────────────────────────────
+//
+// Takes raw `d` attribute, normalises via normalizer.ae, computes
+// path-bounds, dispatches to canvas_path.
+
+shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
+    d, _ = map.get(attrs, "d")
+    if d == null {
+        // No d → return an empty CvgElement (no backend call).
+        return grammar_element.element_new(null)
+    }
+    did_push = maybe_push_transform(ctx, attrs)
+    style = grammar_style.resolve_style(ctx, attrs, "path",
+                                        attr_str_or(attrs, "class", ""))
+
+    // Normalise the path string; consumers see only M/L/C/Z.
+    cmds = normalizer.normalize_commands(normalizer.parse_path(d))
+
+    // Compute path bounds (over the normalised cmds — same logic as
+    // bbox.ae's path_bounds inner loop, simplified to walk floatarr
+    // args directly).
+    has_pt = 0
+    mnx = 0.0; mny = 0.0; mxx = 0.0; mxy = 0.0
+    n_cmds = list_size(cmds)
+    Z_code = 90
+    i = 0
+    while i < n_cmds {
+        item, _ = list.get(cmds, i)
+        cty = normalizer.cmd_type(item)
+        if cty != Z_code {
+            args = normalizer.cmd_args(item)
+            argn = floatarr_size(args)
+            j = 0
+            while j + 1 < argn {
+                cx = floatarr_get_unchecked(args, j)
+                cy = floatarr_get_unchecked(args, j + 1)
+                if has_pt == 0 {
+                    mnx = cx; mny = cy; mxx = cx; mxy = cy
+                    has_pt = 1
+                } else {
+                    if cx < mnx { mnx = cx }
+                    if cy < mny { mny = cy }
+                    if cx > mxx { mxx = cx }
+                    if cy > mxy { mxy = cy }
+                }
+                j = j + 2
+            }
+        }
+        i = i + 1
+    }
+
+    fill_color = grammar_utils.resolve_fill_color(style)
+    stroke_color = grammar_utils.resolve_stroke_color(style)
+    sw = 0.0
+    if string.length(stroke_color) > 0 {
+        sw_raw = grammar_utils.style_num_default(style, "stroke-width", 1.0)
+        smap = grammar_rendering.map_stroke_width(ctx, sw_raw)
+        sw = grammar_rendering.stroke_width(smap)
+        op = grammar_rendering.stroke_opacity_factor(smap)
+        if op < 1.0 {
+            stroke_color = grammar_utils.apply_opacity_to_color(stroke_color, op)
+        }
+    }
+
+    opts = map.new()
+    opt_set_s(opts, "d", d)   // pass-through; backend would normalise if it wanted
+    opt_set_s(opts, "fillColor",   fill_color)
+    opt_set_s(opts, "strokeColor", stroke_color)
+    opt_set_f(opts, "strokeWidth", sw)
+
+    underlying = cvg_backend.canvas_path(backend, opts)
+
+    maybe_pop_transform(ctx, did_push)
+
+    el = grammar_element.element_new(underlying)
+    if has_pt == 1 {
+        grammar_element.element_set_bounds(el, mnx, mny, mxx - mnx, mxy - mny)
+    }
+    return el
+}
+
+// std.list / std.floatarr externs we need (the qualified imports
+// can't reach in to call them on a path-args value from another
+// module; use raw extern access). std.list.size and floatarr.size
+// are already exported.
+import std.list
+import std.floatarr
+list_size(p: ptr) -> int { return list.size(p) }
+floatarr_size(p: ptr) -> int { return floatarr.size(p) }
+floatarr_get_unchecked(p: ptr, i: int) -> float { return floatarr.get_unchecked(p, i) }
+
+// ─── shape_group ─────────────────────────────────────────────────
+//
+// `g` is unique: it pushes context state (style + transform +
+// optional `when` predicate), runs the builder closure, then pops.
+// No backend call. The builder closure typically calls more
+// `shape_*` factories within it.
+
+// `builder` is a reserved keyword in Aether (DSL hangover); use `body`.
+shape_group(ctx: ptr, attrs: ptr, body: fn) {
+    // Style cascade: push the g's resolved style as a new top.
+    // The g's tag for CSS lookup is "g" (rare in practice, but
+    // the TS source threads it through).
+    grammar_style.push_style(ctx, attrs, "g", attr_str_or(attrs, "class", ""))
+    did_push_xform = maybe_push_transform(ctx, attrs)
+
+    // Optional when= predicate goes onto context's when stack.
+    // We can't accept a `fn` field from attrs (attrs is a string
+    // map). when handlers in the closure-DSL form would arrive
+    // through a separate API (see deferred work). Skip for now.
+
+    body()
+
+    maybe_pop_transform(ctx, did_push_xform)
+    grammar_style.pop_style(ctx)
+}

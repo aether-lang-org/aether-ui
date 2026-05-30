@@ -1,0 +1,253 @@
+// cvg/test_grammar_shapes.ae — regression test for grammar_shapes.ae.
+//
+// End-to-end exercises: build a context → call shape factory →
+// inspect the recorded backend call to confirm the factory computed
+// the right backend opts. Plus inspect the returned *CvgElement's
+// bounds (set by the factory after dispatch).
+
+import grammar_shapes
+import grammar_context
+import grammar_element
+import cvg_backend
+import transform
+import std.string
+import std.map
+import std.math
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("  PASS: ${label} ('${got}')")
+    } else {
+        println("  FAIL: ${label}: got '${got}' want '${want}'")
+        exit(1)
+    }
+}
+
+// Tolerance-based float→string compare: parse the recorded string
+// and assert |got - want| < 0.01. Handles string.from_float's
+// 6-sig-fig formatting.
+assert_opt_near(label: string, b: ptr, i: int, key: string, want: float) {
+    s = cvg_backend.backend_opt_get(b, i, key)
+    got, e = string.to_double(s)
+    if e != "" {
+        println("  FAIL: ${label}: backend opt '${key}' = '${s}' (parse err: ${e})")
+        exit(1)
+    }
+    if math.abs_float(got - want) < 0.01 {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_opt_str(label: string, b: ptr, i: int, key: string, want: string) {
+    got = cvg_backend.backend_opt_get(b, i, key)
+    if string.equals(got, want) == 1 {
+        println("  PASS: ${label} ('${got}')")
+    } else {
+        println("  FAIL: ${label}: got '${got}' want '${want}'")
+        exit(1)
+    }
+}
+
+// Identity-viewBox context: vb 0,0→100×100, canvas 100×100, scale 1.
+// So map_point(x, y) = (x, y).
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+mk_attrs1(k1: string, v1: string) -> ptr {
+    m = map.new()
+    _ = map.put(m, k1, v1)
+    return m
+}
+
+mk_attrs2(k1: string, v1: string, k2: string, v2: string) -> ptr {
+    m = map.new()
+    _ = map.put(m, k1, v1)
+    _ = map.put(m, k2, v2)
+    return m
+}
+
+mk_attrs3(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string) -> ptr {
+    m = map.new()
+    _ = map.put(m, k1, v1)
+    _ = map.put(m, k2, v2)
+    _ = map.put(m, k3, v3)
+    return m
+}
+
+mk_attrs4(k1: string, v1: string, k2: string, v2: string,
+          k3: string, v3: string, k4: string, v4: string) -> ptr {
+    m = map.new()
+    _ = map.put(m, k1, v1)
+    _ = map.put(m, k2, v2)
+    _ = map.put(m, k3, v3)
+    _ = map.put(m, k4, v4)
+    return m
+}
+
+// Sample group body: emits a single circle when called.
+group_body_circle() {
+    // The fixture in main() makes ctx + backend available via the
+    // simplest possible mechanism: file-scope globals would be
+    // ideal but Aether doesn't have them. For this test we use a
+    // separate test that doesn't need closure capture — see main().
+}
+
+main() {
+    println("=== test_grammar_shapes ===")
+
+    ctx = mk_test_ctx()
+    bk = cvg_backend.backend_new()
+
+    // ─── shape_circle ───────────────────────────────────────────
+    // attrs: cx=50, cy=50, r=25, fill=red
+    a1 = mk_attrs4("cx", "50", "cy", "50", "r", "25", "fill", "red")
+    el1 = grammar_shapes.shape_circle(ctx, bk, a1)
+    assert_eq_int("backend has 1 call after circle", cvg_backend.backend_call_count(bk), 1)
+    assert_eq_str("call kind=circle", cvg_backend.backend_kind(bk, 0), "circle")
+    // With identity viewBox + no stroke: bbox (cx-r .. cx+r) at the
+    // pre-stroke layer; backend opts include the half-stroke margin
+    // (0 since no stroke).
+    assert_opt_near("circle opts.x",  bk, 0, "x",  25.0)
+    assert_opt_near("circle opts.y",  bk, 0, "y",  25.0)
+    assert_opt_near("circle opts.x2", bk, 0, "x2", 75.0)
+    assert_opt_near("circle opts.y2", bk, 0, "y2", 75.0)
+    assert_opt_str("circle fillColor", bk, 0, "fillColor", "red")
+    // CvgElement bounds set from cx, cy, r.
+    assert_eq_int("el bounds set", grammar_element.element_has_bounds(el1), 1)
+
+    cvg_backend.backend_clear(bk)
+
+    // ─── shape_rectangle ────────────────────────────────────────
+    a2_with_fill = mk_attrs4("x", "10", "y", "20", "width", "30", "height", "40")
+    _ = map.put(a2_with_fill, "fill", "#00ff00")
+    _el2 = grammar_shapes.shape_rectangle(ctx, bk, a2_with_fill)
+    assert_eq_int("backend has 1 call after rect", cvg_backend.backend_call_count(bk), 1)
+    assert_eq_str("call kind=rectangle", cvg_backend.backend_kind(bk, 0), "rectangle")
+    // Identity viewBox: corners (10,20), (40,20), (10,60), (40,60).
+    // AABB = (10,20) to (40,60). No stroke → half_sw = 0.
+    assert_opt_near("rect opts.x",  bk, 0, "x",  10.0)
+    assert_opt_near("rect opts.y",  bk, 0, "y",  20.0)
+    assert_opt_near("rect opts.x2", bk, 0, "x2", 40.0)
+    assert_opt_near("rect opts.y2", bk, 0, "y2", 60.0)
+    assert_opt_str("rect fillColor", bk, 0, "fillColor", "#00ff00")
+
+    cvg_backend.backend_clear(bk)
+
+    // ─── shape_line ─────────────────────────────────────────────
+    a3 = mk_attrs4("x1", "0", "y1", "0", "x2", "100", "y2", "100")
+    _ = map.put(a3, "stroke", "blue")
+    _ = map.put(a3, "stroke-width", "2")
+    _el3 = grammar_shapes.shape_line(ctx, bk, a3)
+    assert_eq_str("call kind=line", cvg_backend.backend_kind(bk, 0), "line")
+    assert_opt_near("line opts.x1", bk, 0, "x1", 0.0)
+    assert_opt_near("line opts.y1", bk, 0, "y1", 0.0)
+    assert_opt_near("line opts.x2", bk, 0, "x2", 100.0)
+    assert_opt_near("line opts.y2", bk, 0, "y2", 100.0)
+    assert_opt_str("line strokeColor", bk, 0, "strokeColor", "blue")
+    assert_opt_near("line strokeWidth", bk, 0, "strokeWidth", 2.0)
+
+    cvg_backend.backend_clear(bk)
+
+    // ─── shape_path ─────────────────────────────────────────────
+    a4 = map.new()
+    _ = map.put(a4, "d", "M 10 10 L 30 10 L 30 30 L 10 30 Z")
+    _ = map.put(a4, "fill", "yellow")
+    el4 = grammar_shapes.shape_path(ctx, bk, a4)
+    assert_eq_str("call kind=path", cvg_backend.backend_kind(bk, 0), "path")
+    assert_opt_str("path opts.d", bk, 0, "d", "M 10 10 L 30 10 L 30 30 L 10 30 Z")
+    assert_opt_str("path fillColor", bk, 0, "fillColor", "yellow")
+    // Bounds from the normalized path: AABB of (10,10)→(30,30).
+    if grammar_element.element_has_bounds(el4) == 1 {
+        if grammar_element.element_bounds_x(el4) == 10.0 {
+            println("  PASS: path bounds.x = 10")
+        } else {
+            println("  FAIL: path bounds.x = ${grammar_element.element_bounds_x(el4)}")
+            exit(1)
+        }
+    } else {
+        println("  FAIL: path has no bounds")
+        exit(1)
+    }
+
+    cvg_backend.backend_clear(bk)
+
+    // ─── Transform attribute on a shape ─────────────────────────
+    // circle with transform="translate(10 20)" — center should
+    // shift by (10, 20).
+    a5 = mk_attrs4("cx", "0", "cy", "0", "r", "5", "fill", "red")
+    _ = map.put(a5, "transform", "translate(10 20)")
+    _el5 = grammar_shapes.shape_circle(ctx, bk, a5)
+    // After translate(10,20): center is (10, 20), bbox (5..15, 15..25).
+    assert_opt_near("translated circle x",  bk, 0, "x",  5.0)
+    assert_opt_near("translated circle y",  bk, 0, "y",  15.0)
+    assert_opt_near("translated circle x2", bk, 0, "x2", 15.0)
+    assert_opt_near("translated circle y2", bk, 0, "y2", 25.0)
+    // Transform was popped after the circle dispatch.
+    assert_eq_int("transform stack returned to depth 1",
+                   grammar_context.transform_depth(ctx), 1)
+
+    cvg_backend.backend_clear(bk)
+
+    // ─── Style cascade through shapes ────────────────────────────
+    // Use shape_group to set a fill on the parent, then a child
+    // circle should inherit it.
+    // shape_group takes a fn `body` — we declare a separate fn for
+    // that body, capturing nothing (the test fixtures are passed
+    // implicitly via the test runner's flat state).
+    // But: Aether closures capture via env, named functions don't —
+    // so we can't actually thread ctx/bk into a bare-name body fn
+    // without globals. Instead, test shape_group's stack effects
+    // directly without needing a body callback that touches state:
+    // pass an empty body and verify push/pop happens.
+    a_grp = mk_attrs1("fill", "purple")
+    // Prime the style stack with a non-zero baseline so the
+    // "preserve bottom on pop" rule doesn't mask the test:
+    // push a base style first.
+    base_attrs = mk_attrs1("opacity", "1")
+    grammar_style_push_dummy(ctx, base_attrs)
+    pre_style_depth = grammar_context.style_depth(ctx)
+    pre_xform_depth = grammar_context.transform_depth(ctx)
+    grammar_shapes.shape_group(ctx, a_grp, empty_body)
+    assert_eq_int("group restored style stack",
+                   grammar_context.style_depth(ctx), pre_style_depth)
+    assert_eq_int("group restored transform stack",
+                   grammar_context.transform_depth(ctx), pre_xform_depth)
+    assert_eq_int("group made no backend calls", cvg_backend.backend_call_count(bk), 0)
+
+    println("=== test_grammar_shapes passed ===")
+}
+
+// Used by the shape_group test as a no-op builder.
+empty_body() {
+}
+
+// Helper to prime the style stack with a known baseline so the
+// "preserve bottom on pop" rule doesn't get in the way of the
+// group's push/pop assertions.
+import grammar_style
+grammar_style_push_dummy(ctx: ptr, attrs: ptr) {
+    grammar_style.push_style(ctx, attrs, "_baseline", "")
+}

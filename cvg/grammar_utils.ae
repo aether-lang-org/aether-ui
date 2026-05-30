@@ -17,9 +17,18 @@
 // Out of scope (waits for Tier C or pending Aether asks):
 //   normalize_color: rgb(r,g,b) → #RRGGBB needs from_int_radix +
 //     pad_start, both still pending in aether/cvg_asked_for.md.
-//   resolve_fill_color / resolve_stroke_color / effective_alpha /
-//     resolve_gradient_* / transform_path_to_buffer: all need
-//     CvgContextLike (gradient lookup / viewBox mapping). Tier C.
+//   resolve_gradient_fill / resolve_gradient_stroke /
+//   transform_path_to_buffer: all need full CvgContext gradient
+//   storage (lands with grammar_defs).
+//
+// Added in this Tier C commit:
+//   resolve_fill_color(style_map)   — "none" → "", url() with no
+//                                     fallback → "", anything else →
+//                                     the color string with optional
+//                                     alpha bake-in
+//   resolve_stroke_color(style_map) — symmetric
+//   effective_alpha(style_map)      — opacity × fill-opacity
+//   effective_stroke_alpha(style_map) — opacity × stroke-opacity
 
 exports (
     parse_style_attr, parse_length_to_px, parse_font_size,
@@ -27,6 +36,9 @@ exports (
     extract_url_id, parse_preserve_aspect_ratio,
     points_to_path, compute_path_bounds, apply_opacity_to_color,
     base64_encode_bytes,
+    resolve_fill_color, resolve_stroke_color,
+    effective_alpha, effective_stroke_alpha,
+    style_num_default,
     // Accessors for the AspectRatio struct and Bounds4 struct.
     aspect_align_x, aspect_align_y, aspect_meet_or_slice,
     bounds4_min_x, bounds4_min_y, bounds4_max_x, bounds4_max_y
@@ -416,4 +428,107 @@ base64_encode_bytes(buf: ptr, len: int) -> string {
     out, e = cryptography.base64_encode_padded(s, len)
     if e != "" { return "" }
     return out
+}
+
+// ─── Style-driven color resolution ───────────────────────────────
+//
+// style_map is the std.map produced by grammar_style.resolve_style
+// (key→value strings). These helpers read the relevant keys, apply
+// the "none" / url() / plain-color rules, and bake in any alpha
+// derived from opacity×fill-opacity (or stroke-opacity).
+//
+// Gradient registry lookup is NOT done here — that needs
+// CvgContext.gradients, which lands with grammar_defs. For now, a
+// `url(#id)` reference falls back to its optional trailing color
+// (per TS source's `fill.replace(/url\([^)]*\)\s*/, '').trim()`)
+// or `"black"` if no fallback. When the full gradient lookup lands
+// these helpers will accept an optional `ctx` arg.
+
+import std.map
+
+// Read a numeric style property, defaulting to `default_val`.
+// Exported under its more-explicit name for cross-module use.
+style_num_default(style: ptr, key: string, default_val: float) -> float {
+    v, _ = map.get(style, key)
+    if v == null { return default_val }
+    return parse_length_to_px(v)
+}
+
+style_num(style: ptr, key: string, default_val: float) -> float {
+    return style_num_default(style, key, default_val)
+}
+
+// opacity × fill-opacity. Both default to 1.0 (fully opaque) when
+// absent. The TS source returns `undefined` if alpha == 1.0 (no
+// bake-in needed); we return 1.0 — callers check `< 1.0` before
+// applying.
+effective_alpha(style: ptr) -> float {
+    o = style_num(style, "opacity", 1.0)
+    fo = style_num(style, "fill-opacity", 1.0)
+    return o * fo
+}
+
+effective_stroke_alpha(style: ptr) -> float {
+    o = style_num(style, "opacity", 1.0)
+    so = style_num(style, "stroke-opacity", 1.0)
+    return o * so
+}
+
+// Strip a leading `url(#id)` prefix, returning the trailing fallback
+// (or "" if none). Mirrors TS's
+//   fill.replace(/url\([^)]*\)\s*/, '').trim()
+url_fallback(s: string) -> string {
+    re, e = std_regex_for_url_strip()
+    if e != "" { return string.trim(s) }
+    out, _ = regex.replace_all(re, s, "")
+    regex.free(re)
+    return string.trim(out)
+}
+
+import std.regex
+std_regex_for_url_strip() -> (ptr, string) {
+    return regex.compile("url\\([^)]*\\)\\s*")
+}
+
+// Resolve the fill color from a style map.
+// Rules (mirrors TS resolveFillColor):
+//   - "none"          → ""  (no fill)
+//   - missing         → "black" (CSS default)
+//   - url(#id) <fb>   → <fb>, falling back to "black" if empty
+//                       (no gradient lookup yet; will pick first
+//                       stop color when grammar_defs lands)
+//   - anything else   → the value as-is
+// If alpha < 1.0, the result is baked as rgba(...) via
+// apply_opacity_to_color.
+resolve_fill_color(style: ptr) -> string {
+    f, _ = map.get(style, "fill")
+    base = "black"
+    if f != null {
+        if string.equals(f, "none") == 1 { return "" }
+        if string.starts_with(f, "url(") == 1 {
+            fb = url_fallback(f)
+            if string.length(fb) > 0 { base = fb }
+            // else stays "black"
+        } else {
+            base = f
+        }
+    }
+    a = effective_alpha(style)
+    if a < 1.0 { return apply_opacity_to_color(base, a) }
+    return base
+}
+
+resolve_stroke_color(style: ptr) -> string {
+    s, _ = map.get(style, "stroke")
+    if s == null { return "" }
+    if string.equals(s, "none") == 1 { return "" }
+    base = s
+    if string.starts_with(s, "url(") == 1 {
+        fb = url_fallback(s)
+        if string.length(fb) == 0 { return "" }
+        base = fb
+    }
+    a = effective_stroke_alpha(style)
+    if a < 1.0 { return apply_opacity_to_color(base, a) }
+    return base
 }
