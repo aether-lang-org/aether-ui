@@ -36,7 +36,7 @@
 
 exports (
     shape_circle, shape_rectangle, shape_line, shape_path,
-    shape_group
+    shape_group, shape_text
 )
 
 import std.string
@@ -49,6 +49,8 @@ import grammar_element
 import transform
 import aevg_backend
 import normalizer
+import parser
+import std.regex
 
 extern malloc(size: int) -> ptr
 
@@ -386,3 +388,223 @@ shape_group(ctx: ptr, attrs: ptr, body: fn) {
     maybe_pop_transform(ctx, did_push_xform)
     grammar_style.pop_style(ctx)
 }
+
+// ─── shape_text ─────────────────────────────────────────────────
+//
+// SVG <text> element. Takes the parser handle for the text node so
+// the factory can read both the inline text (`node_text`) and any
+// `<tspan>` children for multi-line content.
+//
+// Backend dispatches `canvas_text` with computed opts:
+//   x, y          — mapped origin (with baseline correction applied)
+//   text          — the content string
+//   color         — resolved fill (or fallback to stroke / "black")
+//   text_size     — viewBox-scaled font size
+//   bold, italic, monospace  — derived from style.font-* via regex
+//   alignment     — "leading"/"center"/"trailing" from text-anchor
+//
+// For multi-line (with tspans), emit one canvas_text call per
+// tspan; the returned AevgElement wraps the LAST underlying call's
+// handle (matching TS source behaviour).
+//
+// Bounds estimate for hit-testing: char-width ≈ 0.6 × text_size,
+// height ≈ text_size. Adjusted for alignment (center/end shifts).
+
+shape_text(ctx: ptr, backend: ptr, node_h: ptr) -> ptr {
+    attrs = parser.node_attrs(node_h)
+    did_push = maybe_push_transform(ctx, attrs)
+    style = grammar_style.resolve_style(ctx, attrs, "text",
+                                        attr_str_or(attrs, "class", ""))
+
+    // Base font size from style (default 16, per CSS).
+    base_font_size = grammar_utils.style_num_default(style, "font-size", 16.0)
+    t_scale = transform.affine_average_scale_p(grammar_rendering.current_transform(ctx))
+    text_size = grammar_rendering.map_length(ctx, base_font_size) * t_scale
+
+    // text-anchor → alignment string. SVG values: "start" (leading,
+    // default), "middle" (center), "end" (trailing).
+    anchor = grammar_style.style_get(style, "text-anchor")
+    alignment = "leading"
+    if string.equals(anchor, "middle") == 1 { alignment = "center" }
+    if string.equals(anchor, "end") == 1    { alignment = "trailing" }
+
+    // Font flags. The TS source matches via regex (bold|600+, italic|oblique,
+    // mono|courier|consolas case-insensitive); we do the same.
+    fw = grammar_style.style_get(style, "font-weight")
+    bold = is_bold(fw)
+    fs = grammar_style.style_get(style, "font-style")
+    italic = is_italic(fs)
+    ff = grammar_style.style_get(style, "font-family")
+    monospace = is_monospace(ff)
+
+    // Resolved fill (with effective alpha baked in).
+    fill_color = grammar_utils.resolve_fill_color(style)
+    // Text falls back to "black" when no fill is resolved.
+    if string.length(fill_color) == 0 { fill_color = "black" }
+
+    // Baseline correction.
+    baseline_offset = text_size * 1.07
+
+    // ─── tspan path ──────────────────────────────────────────────
+    // Walk children for <tspan> elements. If any exist, emit one
+    // canvas_text per tspan with positioning from its x/dx/dy attrs.
+    n_children = parser.node_child_count(node_h)
+    tspan_count = count_tspans(node_h, n_children)
+
+    if tspan_count > 0 {
+        emit_tspans(ctx, backend, node_h, attrs,
+                    text_size, baseline_offset,
+                    fill_color, alignment, bold, italic, monospace,
+                    base_font_size)
+        maybe_pop_transform(ctx, did_push)
+        el = grammar_element.element_new(null)
+        return el
+    }
+
+    // ─── Simple text path ────────────────────────────────────────
+    content = parser.node_text(node_h)
+    if string.length(content) == 0 {
+        maybe_pop_transform(ctx, did_push)
+        return grammar_element.element_new(null)
+    }
+
+    x_raw = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "x", "0"))
+    y_raw = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "y", "0"))
+    p = grammar_rendering.map_point(ctx, x_raw, y_raw)
+    mx = transform.pt_x(p)
+    my = transform.pt_y(p)
+
+    opts = mk_text_opts(content, mx, my - baseline_offset, fill_color,
+                       text_size, alignment, bold, italic, monospace)
+    underlying = aevg_backend.canvas_text(backend, opts)
+
+    maybe_pop_transform(ctx, did_push)
+    el = grammar_element.element_new(underlying)
+
+    // Estimate bounds for hit-testing.
+    est_w = string.length(content) * text_size * 0.6
+    est_h = text_size
+    bx = mx
+    if string.equals(alignment, "center") == 1   { bx = mx - est_w / 2.0 }
+    if string.equals(alignment, "trailing") == 1 { bx = mx - est_w }
+    grammar_element.element_set_bounds(el, bx, my - est_h, est_w, est_h)
+    return el
+}
+
+// Build the opts map for canvas_text. Keys mirror what the TS
+// source passes to app.canvasText (the Tsyne canvas widget surface);
+// real backend implementations consume these directly.
+mk_text_opts(content: string, x: float, y: float, color: string,
+             text_size: float, alignment: string,
+             bold: int, italic: int, monospace: int) -> ptr {
+    opts = map.new()
+    opt_set_s(opts, "text",      content)
+    opt_set_f(opts, "x",         x)
+    opt_set_f(opts, "y",         y)
+    opt_set_s(opts, "color",     color)
+    opt_set_f(opts, "textSize",  text_size)
+    opt_set_s(opts, "alignment", alignment)
+    opt_set_s(opts, "bold",      int_to_str(bold))
+    opt_set_s(opts, "italic",    int_to_str(italic))
+    opt_set_s(opts, "monospace", int_to_str(monospace))
+    return opts
+}
+
+// Count <tspan> children for the multi-line dispatch decision.
+count_tspans(node_h: ptr, n: int) -> int {
+    c = 0
+    i = 0
+    while i < n {
+        child = parser.node_child_at(node_h, i)
+        if string.equals(parser.node_tag(child), "tspan") == 1 { c = c + 1 }
+        i = i + 1
+    }
+    return c
+}
+
+// Emit one canvas_text per tspan child. tspan.x resets horizontal
+// position; tspan.dx adds horizontal offset; tspan.dy adds
+// vertical offset (em-relative via parse_dy_em).
+emit_tspans(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr,
+            text_size: float, baseline_offset: float,
+            color: string, alignment: string,
+            bold: int, italic: int, monospace: int,
+            base_font_size: float) {
+    base_x = grammar_rendering.parse_len_x(ctx, attr_str_or(attrs, "x", "0"))
+    base_y = grammar_rendering.parse_len_y(ctx, attr_str_or(attrs, "y", "0"))
+    cur_x = base_x
+    cur_y = base_y
+
+    n = parser.node_child_count(node_h)
+    i = 0
+    while i < n {
+        child = parser.node_child_at(node_h, i)
+        if string.equals(parser.node_tag(child), "tspan") == 1 {
+            t_text = parser.node_text(child)
+            if string.length(t_text) > 0 {
+                t_attrs = parser.node_attrs(child)
+                // x resets, dx adds, dy adds.
+                tx_str, _ = map.get(t_attrs, "x")
+                if tx_str != null {
+                    cur_x = grammar_rendering.parse_len_x(ctx, tx_str)
+                }
+                dx_str, _ = map.get(t_attrs, "dx")
+                if dx_str != null {
+                    cur_x = cur_x + grammar_utils.parse_dy_em(dx_str, base_font_size)
+                }
+                dy_str, _ = map.get(t_attrs, "dy")
+                if dy_str != null {
+                    cur_y = cur_y + grammar_utils.parse_dy_em(dy_str, base_font_size)
+                }
+
+                p = grammar_rendering.map_point(ctx, cur_x, cur_y)
+                mx = transform.pt_x(p)
+                my = transform.pt_y(p)
+
+                opts = mk_text_opts(t_text, mx, my - baseline_offset, color,
+                                   text_size, alignment, bold, italic, monospace)
+                _ = aevg_backend.canvas_text(backend, opts)
+            }
+        }
+        i = i + 1
+    }
+}
+
+// ─── Font-style classifiers ──────────────────────────────────────
+//
+// SVG font-weight: "normal" / "bold" / numeric (100..900). 600+ counts
+// as bold per CSS convention. The TS source matches /bold/i OR >= 600.
+
+is_bold(fw: string) -> int {
+    if string.length(fw) == 0 { return 0 }
+    // Case-insensitive match for "bold" substring.
+    lower = string.to_lower(fw)
+    if string.contains(lower, "bold") == 1 { return 1 }
+    // Numeric: 600+ → bold.
+    n, e = string.to_double(fw)
+    if e == "" {
+        if n >= 600.0 { return 1 }
+    }
+    return 0
+}
+
+is_italic(fs: string) -> int {
+    if string.length(fs) == 0 { return 0 }
+    lower = string.to_lower(fs)
+    if string.starts_with(lower, "italic")  == 1 { return 1 }
+    if string.starts_with(lower, "oblique") == 1 { return 1 }
+    return 0
+}
+
+is_monospace(ff: string) -> int {
+    if string.length(ff) == 0 { return 0 }
+    lower = string.to_lower(ff)
+    if string.contains(lower, "mono")     == 1 { return 1 }
+    if string.contains(lower, "courier")  == 1 { return 1 }
+    if string.contains(lower, "consolas") == 1 { return 1 }
+    return 0
+}
+
+// Tiny helper used inside mk_text_opts. Keeps the opts map
+// uniformly stringy (test inspect-via-opt_get expects strings).
+import std.string

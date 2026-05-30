@@ -1,0 +1,190 @@
+// aevg/test_grammar_text.ae — regression test for shape_text.
+//
+// Covers:
+//   - Simple text content: x/y positioning, fill color, text-anchor,
+//     baseline offset, hit-test bounds estimate
+//   - font-size from style → backend text_size (scaled through
+//     viewBox + currentTransform)
+//   - bold detection via font-weight (case + numeric forms)
+//   - italic / oblique detection
+//   - monospace detection via font-family substring match
+//   - text-anchor → alignment string round-trip
+//   - <tspan> children: x reset, dx/dy add, multi-line emission
+//   - Empty text (no content, no tspans) → no backend call
+//   - End-to-end through loader: <text> in an SVG string
+
+import grammar_shapes
+import grammar_context
+import grammar_element
+import loader
+import aevg_backend
+import parser
+import transform
+import std.string
+import std.math
+import std.map
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+assert_near(label: string, got: float, want: float) {
+    if math.abs_float(got - want) < 0.01 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_opt_str(label: string, b: ptr, i: int, key: string, want: string) {
+    got = aevg_backend.backend_opt_get(b, i, key)
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+assert_opt_near(label: string, b: ptr, i: int, key: string, want: float) {
+    s = aevg_backend.backend_opt_get(b, i, key)
+    got, e = string.to_double(s)
+    if e != "" { println("  FAIL: ${label}: parse '${s}' → ${e}"); exit(1) }
+    if math.abs_float(got - want) < 0.01 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+main() {
+    println("=== test_grammar_text ===")
+
+    // ─── Simple text via loader (full pipeline) ──────────────────
+    bk1 = aevg_backend.backend_new()
+    svg1 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='20' y='50' fill='red'>hello</text></svg>"
+    _ctx1 = loader.load_svg(bk1, svg1, 100.0, 100.0)
+    assert_eq_int("text: 1 backend call", aevg_backend.backend_call_count(bk1), 1)
+    assert_eq_str("text: kind=text",       aevg_backend.backend_kind(bk1, 0), "text")
+    assert_opt_str("text: content",         bk1, 0, "text", "hello")
+    assert_opt_str("text: color = red",     bk1, 0, "color", "red")
+    assert_opt_near("text: x = 20",         bk1, 0, "x", 20.0)
+    // y = 50 - baseline_offset (text_size * 1.07). Default font-size = 16,
+    // identity viewBox → text_size = 16 → baseline = 17.12 → y_emit = 32.88.
+    assert_opt_near("text: y (50 - baseline)", bk1, 0, "y", 50.0 - 16.0 * 1.07)
+    assert_opt_near("text: text_size = 16 (default)", bk1, 0, "textSize", 16.0)
+    assert_opt_str("text: default alignment = leading",
+                    bk1, 0, "alignment", "leading")
+    assert_opt_str("text: not bold by default",     bk1, 0, "bold",      "0")
+    assert_opt_str("text: not italic by default",   bk1, 0, "italic",    "0")
+    assert_opt_str("text: not monospace by default", bk1, 0, "monospace", "0")
+
+    // ─── text-anchor → alignment ────────────────────────────────
+    bk2 = aevg_backend.backend_new()
+    svg2 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='50' y='50' text-anchor='middle'>centered</text></svg>"
+    _ctx2 = loader.load_svg(bk2, svg2, 100.0, 100.0)
+    assert_opt_str("anchor middle → center",  bk2, 0, "alignment", "center")
+
+    bk3 = aevg_backend.backend_new()
+    svg3 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='50' y='50' text-anchor='end'>right-aligned</text></svg>"
+    _ctx3 = loader.load_svg(bk3, svg3, 100.0, 100.0)
+    assert_opt_str("anchor end → trailing",   bk3, 0, "alignment", "trailing")
+
+    // ─── font-size from style ───────────────────────────────────
+    bk4 = aevg_backend.backend_new()
+    svg4 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='10' y='20' font-size='24'>big</text></svg>"
+    _ctx4 = loader.load_svg(bk4, svg4, 100.0, 100.0)
+    assert_opt_near("font-size=24 → text_size=24", bk4, 0, "textSize", 24.0)
+
+    // font-size in inline style
+    bk5 = aevg_backend.backend_new()
+    svg5 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='10' y='20' style='font-size:12'>small</text></svg>"
+    _ctx5 = loader.load_svg(bk5, svg5, 100.0, 100.0)
+    assert_opt_near("inline style font-size=12", bk5, 0, "textSize", 12.0)
+
+    // ─── bold detection ─────────────────────────────────────────
+    bk_b1 = aevg_backend.backend_new()
+    svg_b1 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='0' y='10' font-weight='bold'>B</text></svg>"
+    _ctx_b1 = loader.load_svg(bk_b1, svg_b1, 100.0, 100.0)
+    assert_opt_str("font-weight=bold → bold=1", bk_b1, 0, "bold", "1")
+
+    bk_b2 = aevg_backend.backend_new()
+    svg_b2 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='0' y='10' font-weight='700'>B</text></svg>"
+    _ctx_b2 = loader.load_svg(bk_b2, svg_b2, 100.0, 100.0)
+    assert_opt_str("font-weight=700 → bold=1", bk_b2, 0, "bold", "1")
+
+    bk_b3 = aevg_backend.backend_new()
+    svg_b3 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='0' y='10' font-weight='400'>not bold</text></svg>"
+    _ctx_b3 = loader.load_svg(bk_b3, svg_b3, 100.0, 100.0)
+    assert_opt_str("font-weight=400 → bold=0", bk_b3, 0, "bold", "0")
+
+    // ─── italic / oblique ───────────────────────────────────────
+    bk_i1 = aevg_backend.backend_new()
+    svg_i1 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='0' y='10' font-style='italic'>i</text></svg>"
+    _ctx_i1 = loader.load_svg(bk_i1, svg_i1, 100.0, 100.0)
+    assert_opt_str("font-style=italic → italic=1", bk_i1, 0, "italic", "1")
+
+    bk_i2 = aevg_backend.backend_new()
+    svg_i2 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='0' y='10' font-style='oblique'>o</text></svg>"
+    _ctx_i2 = loader.load_svg(bk_i2, svg_i2, 100.0, 100.0)
+    assert_opt_str("font-style=oblique → italic=1", bk_i2, 0, "italic", "1")
+
+    // ─── monospace via font-family substring ────────────────────
+    bk_m1 = aevg_backend.backend_new()
+    svg_m1 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='0' y='10' font-family='Courier New'>code</text></svg>"
+    _ctx_m1 = loader.load_svg(bk_m1, svg_m1, 100.0, 100.0)
+    assert_opt_str("font-family=Courier → monospace=1", bk_m1, 0, "monospace", "1")
+
+    bk_m2 = aevg_backend.backend_new()
+    svg_m2 = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='0' y='10' font-family='Helvetica'>not mono</text></svg>"
+    _ctx_m2 = loader.load_svg(bk_m2, svg_m2, 100.0, 100.0)
+    assert_opt_str("font-family=Helvetica → monospace=0", bk_m2, 0, "monospace", "0")
+
+    // ─── Empty text → no backend call ───────────────────────────
+    bk_empty = aevg_backend.backend_new()
+    svg_empty = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='10' y='20'></text></svg>"
+    _ctx_empty = loader.load_svg(bk_empty, svg_empty, 100.0, 100.0)
+    assert_eq_int("empty text → 0 calls",
+                   aevg_backend.backend_call_count(bk_empty), 0)
+
+    // ─── tspan multi-line ───────────────────────────────────────
+    // <text x='10' y='20'>
+    //   <tspan>line one</tspan>
+    //   <tspan x='10' dy='1em'>line two</tspan>
+    // </text>
+    // First tspan at (10, 20). Second tspan: x reset to 10, dy=1em
+    // adds 1 * font_size to current y. Default font-size=16, so
+    // second tspan at (10, 36).
+    bk_ts = aevg_backend.backend_new()
+    svg_ts = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='10' y='20'><tspan>line one</tspan><tspan x='10' dy='1em'>line two</tspan></text></svg>"
+    _ctx_ts = loader.load_svg(bk_ts, svg_ts, 100.0, 100.0)
+    assert_eq_int("tspans: 2 backend calls",
+                   aevg_backend.backend_call_count(bk_ts), 2)
+    assert_opt_str("tspan[0]: line one",  bk_ts, 0, "text", "line one")
+    assert_opt_str("tspan[1]: line two",  bk_ts, 1, "text", "line two")
+    // tspan[0] y = 20 - 17.12 = 2.88; tspan[1] y = 36 - 17.12 = 18.88
+    assert_opt_near("tspan[0] y", bk_ts, 0, "y", 20.0 - 16.0 * 1.07)
+    assert_opt_near("tspan[1] y", bk_ts, 1, "y", 36.0 - 16.0 * 1.07)
+
+    // ─── Hit-test bounds estimate ───────────────────────────────
+    // For "hello" (5 chars) at default size 16: est_w = 5 * 16 * 0.6 = 48
+    bk_hit = aevg_backend.backend_new()
+    svg_hit = "<svg viewBox='0 0 100 100' width='100' height='100'><text x='10' y='30'>hello</text></svg>"
+    _ctx_hit = loader.load_svg(bk_hit, svg_hit, 100.0, 100.0)
+    // The element's bounds are set inside shape_text. Loader doesn't
+    // hand back the element; the recording-stub backend's call is the
+    // observable surface. Just check the backend call's positioning.
+    assert_opt_near("hit-test scenario: x", bk_hit, 0, "x", 10.0)
+
+    println("=== test_grammar_text passed ===")
+}

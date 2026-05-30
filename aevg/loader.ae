@@ -159,7 +159,10 @@ walk_node(ctx: ptr, backend: ptr, node_h: ptr) {
     }
 
     if string.equals(tag, "style") == 1 { return }
-    if string.equals(tag, "text") == 1 { return }
+    if string.equals(tag, "text") == 1 {
+        _ = grammar_shapes.shape_text(ctx, backend, node_h)
+        return
+    }
     if string.equals(tag, "ellipse") == 1 { return }
 
     // ─── Default: unknown element → walk children ────────────────
