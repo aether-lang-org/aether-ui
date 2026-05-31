@@ -10,6 +10,7 @@ extern println(s: string)
 main() {
     slider_state = aether_ui.ui_state(50)
 
+    aether_ui.window("Perry Form", 500, 600) {
     root = aether_ui.root_vstack(8) {
         aether_ui.text("Aether UI Form Demo")
         aether_ui.divider()
@@ -72,5 +73,5 @@ main() {
         }
     }
 
-    aether_ui.app_run("Perry Form", 500, 600, root)
+    }
 }

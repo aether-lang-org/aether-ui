@@ -5,10 +5,10 @@
 //     via `call(op, prev, num)` — no opcode ints or if/else chain)
 
 import aether_ui (
-    root_vstack, hstack, btn, button,
+    window, root_vstack, hstack, btn, button,
     bg_color, onclick, divider, text_bound,
     ui_state, ui_set, margin,
-    app_run, enable_test_server
+    enable_test_server
 )
 import std.os (os_getenv)
 
@@ -23,6 +23,7 @@ main() {
     equals   = ||        { num = call(op, prev, num); prev = 0; ui_set(display, num) }
     clear    = ||        { num = 0; prev = 0; ui_set(display, 0) }
 
+    window("Calculator", 280, 260) {
     root = root_vstack(4) {
         text_bound(display, " ", "")
         divider()
@@ -57,6 +58,5 @@ main() {
     if test_port != null {
         enable_test_server(9222, root)
     }
-
-    app_run("Calculator", 280, 260, root)
+    }
 }

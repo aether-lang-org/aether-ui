@@ -274,6 +274,75 @@ void aether_ui_app_run_raw(int app_handle) {
 }
 
 // ---------------------------------------------------------------------------
+// Surface table — "DSL with Scope" surfaces (window / render_to / record).
+// Platform-agnostic handle bookkeeping (mirrors aether_ui_gtk4.c); the
+// only platform calls are through the shared app/vstack ABI.
+// ---------------------------------------------------------------------------
+#define AUI_SURFACE_WINDOW 0
+#define AUI_SURFACE_RENDER 1
+#define AUI_SURFACE_RECORD 2
+
+typedef struct {
+    int container_handle;
+    int kind;
+    int app_handle;
+    int diag_count;
+} SurfaceEntry;
+
+static SurfaceEntry* surfaces = NULL;
+static int surface_count = 0;
+static int surface_capacity = 0;
+
+static SurfaceEntry* surface_for_container(int container_handle) {
+    for (int i = 0; i < surface_count; i++) {
+        if (surfaces[i].container_handle == container_handle) return &surfaces[i];
+    }
+    return NULL;
+}
+
+static SurfaceEntry* surface_add(int container_handle, int kind, int app_handle) {
+    if (surface_count >= surface_capacity) {
+        surface_capacity = surface_capacity == 0 ? 4 : surface_capacity * 2;
+        surfaces = realloc(surfaces, sizeof(SurfaceEntry) * surface_capacity);
+    }
+    SurfaceEntry* s = &surfaces[surface_count++];
+    s->container_handle = container_handle;
+    s->kind = kind;
+    s->app_handle = app_handle;
+    s->diag_count = 0;
+    return s;
+}
+
+int aether_ui_surface_container_new_impl(int kind) {
+    int container = aether_ui_vstack_create(0);
+    surface_add(container, kind, 0);
+    return container;
+}
+
+void aether_ui_surface_run_impl(int container_handle,
+                                const char* title, int width, int height) {
+    SurfaceEntry* s = surface_for_container(container_handle);
+    if (!s || s->kind != AUI_SURFACE_WINDOW) return;
+    int app = aether_ui_app_create(title, width, height);
+    s->app_handle = app;
+    aether_ui_app_set_body(app, container_handle);
+    aether_ui_app_run_raw(app);
+}
+
+int aether_ui_surface_note_interactive_impl(int container_handle) {
+    SurfaceEntry* s = surface_for_container(container_handle);
+    if (!s) return 0;
+    if (s->kind == AUI_SURFACE_WINDOW) return 0;
+    s->diag_count++;
+    return 1;
+}
+
+int aether_ui_surface_diag_count_impl(int container_handle) {
+    SurfaceEntry* s = surface_for_container(container_handle);
+    return s ? s->diag_count : 0;
+}
+
+// ---------------------------------------------------------------------------
 // Widget creation
 // ---------------------------------------------------------------------------
 

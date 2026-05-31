@@ -8,6 +8,7 @@ import aether_ui
 extern println(s: string)
 
 main() {
+    aether_ui.window("Canvas Demo", 440, 500) {
     root = aether_ui.root_vstack(10) {
         title = aether_ui.text("Canvas Drawing Demo")
         aether_ui.style_font_size(title, 18)
@@ -74,5 +75,5 @@ main() {
     }
     aether_ui.margin(root, 12, 12, 12, 12)
 
-    aether_ui.app_run("Canvas Demo", 440, 500, root)
+    }
 }

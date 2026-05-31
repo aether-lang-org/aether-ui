@@ -13,6 +13,7 @@ extern println(s: string)
 main() {
     counter = aether_ui.ui_state(0)
 
+    aether_ui.window("Testable App", 400, 400) {
     root = aether_ui.root_vstack(10) {
         aether_ui.text("Testable App")
         aether_ui.divider()
@@ -50,5 +51,5 @@ main() {
     // Enable test server on port 9222 — injects "Under Remote Control" banner
     aether_ui.enable_test_server(9222, root)
 
-    aether_ui.app_run("Testable App", 400, 400, root)
+    }
 }

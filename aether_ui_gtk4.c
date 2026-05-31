@@ -165,6 +165,94 @@ static AppEntry* apps = NULL;
 static int app_count = 0;
 static int app_capacity = 0;
 
+// ---------------------------------------------------------------------------
+// Surface table — "DSL with Scope" surfaces (window / render_to / record).
+//
+// A surface is the ambient destination a drawing/widget block populates.
+// Children attach to the surface's content container (the handle pushed as
+// _ctx); the surface row carries the rest: kind, the owning app handle (for
+// `window`, so its builder body can run the loop after the block), and a
+// collected diagnostic count (interactive verbs used on a bounded surface).
+//
+// Keyed by the content-container handle so a child verb's _ctx maps back to
+// the surface. Single-window-at-a-time is fine — surfaces don't nest.
+// ---------------------------------------------------------------------------
+#define AUI_SURFACE_WINDOW 0
+#define AUI_SURFACE_RENDER 1   // render_to (bounded; flush to target)
+#define AUI_SURFACE_RECORD 2   // record    (bounded; capture for tests)
+
+typedef struct {
+    int container_handle;  // the _ctx children attach to (key)
+    int kind;              // AUI_SURFACE_*
+    int app_handle;        // window: owning app (0 for bounded surfaces)
+    int diag_count;        // # interactive-verb-on-bounded-surface diagnostics
+} SurfaceEntry;
+
+static SurfaceEntry* surfaces = NULL;
+static int surface_count = 0;
+static int surface_capacity = 0;
+
+static SurfaceEntry* surface_for_container(int container_handle) {
+    for (int i = 0; i < surface_count; i++) {
+        if (surfaces[i].container_handle == container_handle) return &surfaces[i];
+    }
+    return NULL;
+}
+
+static SurfaceEntry* surface_add(int container_handle, int kind, int app_handle) {
+    if (surface_count >= surface_capacity) {
+        surface_capacity = surface_capacity == 0 ? 4 : surface_capacity * 2;
+        surfaces = realloc(surfaces, sizeof(SurfaceEntry) * surface_capacity);
+    }
+    SurfaceEntry* s = &surfaces[surface_count++];
+    s->container_handle = container_handle;
+    s->kind = kind;
+    s->app_handle = app_handle;
+    s->diag_count = 0;
+    return s;
+}
+
+// Create a surface container of the given kind: a detached root vstack the
+// block's children attach to (pushed as _ctx). No app/loop is created here —
+// the zero-arg `with` factory runs BEFORE the block and doesn't know the
+// window title/size. The `window` builder BODY (which has title/w/h and the
+// now-populated container) creates the app + runs the loop afterward, via
+// aether_ui_surface_run_impl. This matches the builder "configure then
+// execute" lifecycle: children fill the container, then the body acts.
+int aether_ui_surface_container_new_impl(int kind) {
+    int container = aether_ui_vstack_create(0);
+    surface_add(container, kind, 0);
+    return container;
+}
+
+// window builder body: create the app, mount the populated container, run
+// the loop. Called after the block. Only meaningful for a WINDOW surface.
+void aether_ui_surface_run_impl(int container_handle,
+                                const char* title, int width, int height) {
+    SurfaceEntry* s = surface_for_container(container_handle);
+    if (!s || s->kind != AUI_SURFACE_WINDOW) return;
+    int app = aether_ui_app_create(title, width, height);
+    s->app_handle = app;
+    aether_ui_app_set_body(app, container_handle);
+    aether_ui_app_run_raw(app);
+}
+
+// Record an interactive-verb-on-bounded-surface diagnostic; returns 1 if the
+// container is a bounded surface (so the caller knows the verb is inert), 0
+// if it's a live window (verb is fine) or unknown.
+int aether_ui_surface_note_interactive_impl(int container_handle) {
+    SurfaceEntry* s = surface_for_container(container_handle);
+    if (!s) return 0;
+    if (s->kind == AUI_SURFACE_WINDOW) return 0;
+    s->diag_count++;
+    return 1;
+}
+
+int aether_ui_surface_diag_count_impl(int container_handle) {
+    SurfaceEntry* s = surface_for_container(container_handle);
+    return s ? s->diag_count : 0;
+}
+
 static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
     AppEntry* entry = (AppEntry*)user_data;
     GtkWidget* window = gtk_application_window_new(gtk_app);

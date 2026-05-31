@@ -31,6 +31,18 @@ int aether_ui_app_create(const char* title, int width, int height);
 void aether_ui_app_set_body(int app_handle, int root_handle);
 void aether_ui_app_run_raw(int app_handle);
 
+// Surfaces — "DSL with Scope" destinations (window / render_to / record).
+// container_new(kind) makes a detached content container (pushed as _ctx so
+// children attach to it) — used as the zero-arg `with` factory for every
+// surface kind. surface_run is the `window` builder body: creates the app,
+// mounts the populated container, runs the loop (window only). The
+// interactive/diag helpers track interactive verbs used on bounded surfaces.
+int aether_ui_surface_container_new_impl(int kind);
+void aether_ui_surface_run_impl(int container_handle,
+                                const char* title, int width, int height);
+int aether_ui_surface_note_interactive_impl(int container_handle);
+int aether_ui_surface_diag_count_impl(int container_handle);
+
 // Widget creation
 int aether_ui_text_create(const char* text);
 int aether_ui_button_create(const char* label, void* boxed_closure);

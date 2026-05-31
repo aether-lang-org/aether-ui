@@ -8,6 +8,7 @@ import aether_ui
 extern println(s: string)
 
 main() {
+    aether_ui.window("Styled Demo", 500, 600) {
     root = aether_ui.root_vstack(0) {
         // Header with gradient background
         header = aether_ui.hstack(10) {
@@ -89,5 +90,5 @@ main() {
     }
 
     aether_ui.margin(root, 0, 12, 12, 12)
-    aether_ui.app_run("Styled Demo", 500, 600, root)
+    }
 }

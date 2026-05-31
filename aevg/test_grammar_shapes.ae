@@ -268,7 +268,9 @@ main() {
     grammar_style_push_dummy(ctx, base_attrs)
     pre_style_depth = grammar_context.style_depth(ctx)
     pre_xform_depth = grammar_context.transform_depth(ctx)
-    grammar_shapes.shape_group(ctx, a_grp, empty_body)
+    // Pass the body as a callback {} (AeVG convention — never a bare
+    // named fn in a fn-slot; see the fn_bare_name_env_shift history).
+    grammar_shapes.shape_group(ctx, a_grp) callback { }
     assert_eq_int("group restored style stack",
                    grammar_context.style_depth(ctx), pre_style_depth)
     assert_eq_int("group restored transform stack",
@@ -276,10 +278,6 @@ main() {
     assert_eq_int("group made no backend calls", aevg_backend.backend_call_count(bk), 0)
 
     println("=== test_grammar_shapes passed ===")
-}
-
-// Used by the shape_group test as a no-op builder.
-empty_body() {
 }
 
 // Helper to prime the style stack with a known baseline so the

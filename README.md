@@ -58,32 +58,76 @@ See [docs/aether-ui-windows.md](docs/aether-ui-windows.md) for
 Windows-specific details (DPI model, dark mode, widget mappings, known
 limitations).
 
-## How it works
+## DSL with Scope
 
-Aether UI maps to Aether's builder DSL (same pattern as TinyWeb):
+Aether UI is a **"DSL with Scope"** — Matz's own name (he coined it when
+asked to name the pattern) for the builder-block style: nested blocks that
+describe structure declaratively while keeping full imperative power, with an
+*implicit receiver* so children wire to their parent without explicit
+plumbing. It runs in the Smalltalk-blocks / Ruby-Shoes / Groovy-SwingBuilder /
+Kotlin-Compose / SwiftUI lineage — and, unlike a markup format, the blocks are
+**executed code**, not parsed into a DOM for some later actioning. See
+[Paul Hammant's "That Ruby and Groovy Language Feature"](https://paulhammant.com/2024/02/14/that-ruby-and-groovy-language-feature.html)
+for the full tour, and Aether's own
+[`docs/closures-and-builder-dsl.md`](https://github.com/aether-lang-org/aether/blob/main/docs/closures-and-builder-dsl.md)
+for the mechanism (trailing blocks, the `_ctx` implicit-receiver convention,
+and `builder … with` "configure then execute").
+
+A UI is opened inside a **surface** scope. The surface's *kind* decides its
+lifecycle (see [Surfaces](#surfaces-window--render_to--record) below):
 
 ```aether
-import contrib.aether_ui
+import aether_ui
 
 main() {
     counter = aether_ui.ui_state(0)
 
-    root = aether_ui.root_vstack(10) {
-        aether_ui.text("Hello World")
-        aether_ui.text_bound(counter, "Count: ", "")
-        aether_ui.hstack(5) {
-            aether_ui.button("+1") callback {
-                aether_ui.ui_set(counter, aether_ui.ui_get(counter) + 1)
-            }
-            aether_ui.button("-1") callback {
-                aether_ui.ui_set(counter, aether_ui.ui_get(counter) - 1)
+    aether_ui.window("My App", 400, 200) {
+        aether_ui.root_vstack(10) {
+            aether_ui.text("Hello World")
+            aether_ui.text_bound(counter, "Count: ", "")
+            aether_ui.hstack(5) {
+                aether_ui.button("+1") callback {
+                    aether_ui.ui_set(counter, aether_ui.ui_get(counter) + 1)
+                }
+                aether_ui.button("-1") callback {
+                    aether_ui.ui_set(counter, aether_ui.ui_get(counter) - 1)
+                }
             }
         }
     }
-
-    aether_ui.app_run("My App", 400, 200, root)
 }
 ```
+
+The `window(…) { … }` block builds the tree, then — because it's a `builder`
+function whose body runs *after* the block — opens the window and runs the
+event loop. No trailing `app_run(root)`: the surface *is* the entry point.
+
+## Surfaces (window / render_to / record)
+
+A **surface** is the ambient destination a widget/drawing block populates.
+The kind decides lifecycle:
+
+| Surface | Lifecycle | What it is |
+|---------|-----------|------------|
+| `window(title, w, h) { … }` | **lived** — runs the event loop, ends on window close | An on-screen interactive window. Absorbs the old `app_run`. |
+| `render_to(target, w, h) { … }` | **bounded** — one render pass, returns | Draw into a target: pixel buffer, PNG, PDF, **paper**. No event loop. |
+| `record(w, h) { … }` | **bounded** — captures, returns | A test/recording surface — inspect what was built. No event loop. |
+| `window_run(title, w, h, root)` | lived | Explicit-root variant of `window` for trees built imperatively (e.g. a `root_grid` whose cells are `grid_place`'d in). |
+
+Interactive verbs (`onclick`, `onhover`) used inside a **bounded** surface are
+*diagnostic-inert*: they render but the handler never fires (there's no event
+loop to deliver to). The diagnostic is **collected on the surface** by default
+(read it with `surface_diagnostics(handle)`); routing it to stderr or a hard
+fail is an explicit opt-in, never the default — the framework never writes to
+a stream you didn't ask it to.
+
+Why three verbs instead of one `app_run`? Because `app_run` welded together
+three jobs — create the window, mount the tree, run the loop — and forced that
+*lived* shape onto every program. Most surfaces aren't lived: a render-to-PNG,
+a print-to-paper, a headless test needs no loop and ends by reaching `}`. Only
+a live window has "a life of its own" that ends on an external event, so only
+`window` carries the loop.
 
 ## Widgets available
 
@@ -179,7 +223,7 @@ capabilities the test harness is denied, not the other way around.
 
 | Layer | File | Role |
 |-------|------|------|
-| Aether DSL | `module.ae` | Builder-pattern wrappers with `_ctx` auto-injection |
+| Aether DSL | `aether_ui.ae` | Builder-pattern wrappers with `_ctx` auto-injection; surface verbs (`window`/`render_to`/`record`) |
 | GTK4 backend | `aether_ui_gtk4.c` | Linux: GTK4 C API calls, Cairo canvas, test server |
 | macOS backend | `aether_ui_macos.m` | macOS: AppKit Objective-C |
 | Win32 backend | `aether_ui_win32.c` | Windows: USER32 + GDI+ + Common Controls |

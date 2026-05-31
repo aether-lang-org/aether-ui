@@ -39,5 +39,7 @@ main() {
     }
     aether_ui.grid_place(form, sign_in, 3, 0, 1, 2)
 
-    aether_ui.app_run("Login — Grid Layout", 400, 220, form)
+    // Grid root is built imperatively (cells grid_place'd into a
+    // pre-created root), so the explicit-root window form fits.
+    aether_ui.window_run("Login — Grid Layout", 400, 220, form)
 }

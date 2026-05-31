@@ -105,46 +105,50 @@ main() {
     assert_eq_int("destroyed = 1", grammar_element.element_is_destroyed(el), 1)
     grammar_element.element_set_destroyed(el, 0)
 
-    // ─── Event handlers (bare-name → ptr coercion at call site) ──
-    grammar_element.element_on_click(el, my_click_handler)
+    // ─── Event handlers (callback {} closures — AeVG convention) ──
+    grammar_element.element_on_click(el) callback { return 1 }
     assert_not_null("click handler stored", grammar_element.element_click_handler(el))
 
-    grammar_element.element_on_hover(el, my_hover_handler)
+    grammar_element.element_on_hover(el) callback { return 2 }
     assert_not_null("hover handler stored", grammar_element.element_hover_handler(el))
 
-    grammar_element.element_on_drag(el, my_drag_handler)
+    grammar_element.element_on_drag(el) callback { return 3 }
     assert_not_null("drag handler stored", grammar_element.element_drag_handler(el))
 
-    grammar_element.element_on_drag_end(el, my_drag_handler)
+    grammar_element.element_on_drag_end(el) callback { return 3 }
     assert_not_null("drag-end handler stored", grammar_element.element_drag_end_handler(el))
 
-    grammar_element.element_on_scroll(el, my_drag_handler)
+    grammar_element.element_on_scroll(el) callback { return 3 }
     assert_not_null("scroll handler stored", grammar_element.element_scroll_handler(el))
 
-    grammar_element.element_on_double_click(el, my_drag_handler)
+    grammar_element.element_on_double_click(el) callback { return 3 }
     assert_not_null("dblclick handler stored", grammar_element.element_double_click_handler(el))
 
-    grammar_element.element_on_right_click(el, my_drag_handler)
+    grammar_element.element_on_right_click(el) callback { return 3 }
     assert_not_null("rclick handler stored", grammar_element.element_right_click_handler(el))
 
     // ─── Reactive bindings ──────────────────────────────────────
-    grammar_element.element_bind_fill(el, my_fill_binding)
+    // Bindings are passed as callback {} closures (AeVG convention —
+    // never bare named fns in a fn-slot; v0.197's bare-fn adapter has
+    // a cross-module gap, and callback {} is what the renderer uses
+    // everywhere anyway).
+    grammar_element.element_bind_fill(el) callback { return "#ff0000" }
     assert_not_null("fill binding stored", grammar_element.element_fill_binding(el))
 
-    grammar_element.element_bind_stroke(el, my_fill_binding)
+    grammar_element.element_bind_stroke(el) callback { return "#ff0000" }
     assert_not_null("stroke binding stored", grammar_element.element_stroke_binding(el))
 
-    grammar_element.element_bind_opacity(el, my_opacity_binding)
+    grammar_element.element_bind_opacity(el) callback { return 0.5 }
     assert_not_null("opacity binding stored", grammar_element.element_opacity_binding(el))
 
-    grammar_element.element_bind_text(el, my_fill_binding)
+    grammar_element.element_bind_text(el) callback { return "hello" }
     assert_not_null("text binding stored", grammar_element.element_text_binding(el))
 
-    grammar_element.element_bind_pos(el, my_fill_binding)
+    grammar_element.element_bind_pos(el) callback { return null }
     assert_not_null("pos binding stored", grammar_element.element_pos_binding(el))
 
     // ─── when() predicate ───────────────────────────────────────
-    grammar_element.element_set_when(el, my_when_predicate)
+    grammar_element.element_set_when(el) callback { return 1 }
     assert_not_null("when predicate stored", grammar_element.element_when_predicate(el))
 
     // ─── Bounds + hit-test ──────────────────────────────────────

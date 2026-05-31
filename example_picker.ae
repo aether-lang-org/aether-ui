@@ -11,6 +11,7 @@ extern println(s: string)
 main() {
     selected = aether_ui.ui_state(0)
 
+    aether_ui.window("Color Picker", 300, 200) {
     root = aether_ui.root_vstack(10) {
         aether_ui.text("Choose a color:")
 
@@ -27,5 +28,5 @@ main() {
         aether_ui.text_bound(selected, "Selected index: ", "")
     }
 
-    aether_ui.app_run("Color Picker", 300, 200, root)
+    }
 }

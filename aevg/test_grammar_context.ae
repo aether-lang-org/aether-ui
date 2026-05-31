@@ -48,10 +48,6 @@ assert_null(label: string, p: ptr) {
     }
 }
 
-// Predicate functions for the when-stack test below.
-pred_true() -> int { return 1 }
-pred_false() -> int { return 0 }
-
 main() {
     println("=== test_grammar_context ===")
 
@@ -156,8 +152,10 @@ main() {
     assert_eq_int("transform .a == 1 after pop", transform.affine_is_identity_p(top_t2), 1)
 
     // ─── When stack (closures stored as fn) ──────────────────────
-    grammar_context.when_push(ctx, pred_true)
-    grammar_context.when_push(ctx, pred_false)
+    // Pass predicates as callback {} (AeVG convention — never bare
+    // named fns in a fn-slot).
+    grammar_context.when_push(ctx) callback { return 1 }
+    grammar_context.when_push(ctx) callback { return 0 }
     assert_eq_int("when depth = 2", grammar_context.when_depth(ctx), 2)
     grammar_context.when_pop(ctx)
     assert_eq_int("when depth = 1 after pop", grammar_context.when_depth(ctx), 1)

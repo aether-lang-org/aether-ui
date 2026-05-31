@@ -10,6 +10,7 @@ extern println(s: string)
 main() {
     tick_count = aether_ui.ui_state(0)
 
+    aether_ui.window("System Demo", 400, 400) {
     root = aether_ui.root_vstack(10) {
         aether_ui.text("System Integration Demo")
         aether_ui.divider()
@@ -50,5 +51,5 @@ main() {
     }
     aether_ui.margin(root, 12, 12, 12, 12)
 
-    aether_ui.app_run("System Demo", 400, 400, root)
+    }
 }
