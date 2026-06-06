@@ -53,6 +53,11 @@ mk_tracked(ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
 struct Recorder { n_calls: int last_hovered: int }
 mk_recorder() -> *Recorder { r = malloc(16) as *Recorder; r.n_calls = 0; r.last_hovered = 0 - 1; return r }
 
+// Captured key strings. A closure stores via string.copy (the struct-string
+// idiom from test_grammar_bind) so the value survives past the handler.
+struct KeyLog { down: string up: string }
+mk_keylog() -> *KeyLog { k = malloc(16) as *KeyLog; k.down = ""; k.up = ""; return k }
+
 main() {
     println("=== test_grammar_interaction ===")
 
@@ -133,6 +138,47 @@ main() {
     }
     // And its cursor resolves at that point.
     assert_eq_str("cursor-only resolves", grammar_events.cursor_at(ctx3, 55.0, 15.0), "text")
+
+    // ─── Keyboard: scene-wide key-down / key-up ──────────────────
+    // Port of svg-drag-scroll-keys.test.ts "onKeyDown/onKeyUp fire on
+    // CvgContext": dispatch ArrowUp↓, ArrowUp↑, Space↓ → down=[ArrowUp,Space],
+    // up=[ArrowUp]. Keyboard is scene-level (no hit-test), handlers on the
+    // event state. We record count + last key per stream.
+    _ctx4 = mk_test_ctx()
+    es4 = grammar_events.event_state_new()
+    kd = mk_recorder()
+    ku = mk_recorder()
+    klog = mk_keylog()
+    // Reuse Recorder.n_calls as count; capture last key in the KeyLog struct.
+    grammar_events.event_on_key_down(es4) callback |key: string| {
+        kd.n_calls = kd.n_calls + 1
+        klog.down = string.copy(key)
+    }
+    grammar_events.event_on_key_up(es4) callback |key: string| {
+        ku.n_calls = ku.n_calls + 1
+        klog.up = string.copy(key)
+    }
+
+    grammar_events.dispatch_key_down(es4, "ArrowUp")
+    assert_eq_int("keydown ArrowUp: count 1", kd.n_calls, 1)
+    assert_eq_str("keydown ArrowUp: key",     klog.down, "ArrowUp")
+
+    grammar_events.dispatch_key_up(es4, "ArrowUp")
+    assert_eq_int("keyup ArrowUp: count 1",   ku.n_calls, 1)
+    assert_eq_str("keyup ArrowUp: key",       klog.up, "ArrowUp")
+
+    grammar_events.dispatch_key_down(es4, "Space")
+    assert_eq_int("keydown Space: count 2",   kd.n_calls, 2)
+    assert_eq_str("keydown Space: key",       klog.down, "Space")
+    // keysDown == [ArrowUp, Space] (2), keysUp == [ArrowUp] (1).
+    assert_eq_int("total key-downs",          kd.n_calls, 2)
+    assert_eq_int("total key-ups",            ku.n_calls, 1)
+
+    // No handler registered → dispatch is a safe no-op.
+    es5 = grammar_events.event_state_new()
+    grammar_events.dispatch_key_down(es5, "Escape")   // must not crash
+    grammar_events.dispatch_key_up(es5, "Escape")
+    println("  PASS: key dispatch with no handler is a no-op")
 
     println("=== test_grammar_interaction passed ===")
 }

@@ -49,7 +49,9 @@ exports (
     dispatch_drag, dispatch_drag_end,
     dispatch_scroll,
     dispatch_double_click, dispatch_right_click,
-    find_topmost_hoverable, cursor_at, tooltip_at
+    find_topmost_hoverable, cursor_at, tooltip_at,
+    event_on_key_down, event_on_key_up,
+    dispatch_key_down, dispatch_key_up
 )
 
 import std.list
@@ -66,14 +68,18 @@ struct EventState {
     dragged_element: ptr      // currently captured drag target (or null)
     last_drag_x: float
     last_drag_y: float
+    key_down_handler: ptr     // scene-wide key-down closure (or null)
+    key_up_handler: ptr       // scene-wide key-up closure (or null)
 }
 
 event_state_new() -> ptr {
-    s = malloc(32) as *EventState
+    s = malloc(48) as *EventState
     s.hovered_element = null
     s.dragged_element = null
     s.last_drag_x = 0.0
     s.last_drag_y = 0.0
+    s.key_down_handler = null
+    s.key_up_handler = null
     return s
 }
 
@@ -359,3 +365,40 @@ dispatch_right_click(es: ptr, ctx: ptr, x: float, y: float) {
         invoke_click(grammar_element.element_right_click_handler(target), x, y)
     }
 }
+
+// ─── Keyboard (scene-wide, no hit-test) ──────────────────────────
+//
+// CVG keeps key handlers on the context, not per element: dispatchKeyDown /
+// dispatchKeyUp fire the scene-wide handler directly with the key string
+// (grammar-context.ts L215-225, onKeyDown/onKeyUp L255-261). We store the two
+// handlers on EventState (where the events sub-system keeps its state) and
+// fire them unconditionally — keyboard focus is scene-level, not geometric.
+
+event_on_key_down(es: ptr, h: fn) {
+    state = es as *EventState
+    state.key_down_handler = h
+}
+
+event_on_key_up(es: ptr, h: fn) {
+    state = es as *EventState
+    state.key_up_handler = h
+}
+
+dispatch_key_down(es: ptr, key: string) {
+    state = es as *EventState
+    if state.key_down_handler != null {
+        invoke_key(state.key_down_handler, key)
+    }
+}
+
+dispatch_key_up(es: ptr, key: string) {
+    state = es as *EventState
+    if state.key_up_handler != null {
+        invoke_key(state.key_up_handler, key)
+    }
+}
+
+invoke_key(handler_ptr: ptr, key: string) {
+    inner_call_str(handler_ptr, key)
+}
+inner_call_str(cb: fn, k: string) { cb(k) }
