@@ -1,0 +1,138 @@
+// aevg/test_grammar_interaction.ae — cursor + tooltip resolution parity.
+//
+// Headless port of the CVG interaction suites that the windowed TS tests
+// exercise under a real pointer:
+//   - svg-cursor.test.ts                 (per-element cursor, hover-driven)
+//   - svg-dblclick-rtclick-tooltip.test.ts (tooltip presence on hover)
+//
+// The windowed tests assert "hover element X → cursor becomes Y / tooltip
+// shows Z". The cursor/tooltip change is driven by the topmost HOVERABLE
+// element at the pointer, where hoverable = has-hover-handler OR has-tooltip
+// OR has-cursor (grammar-context.ts dispatchHover ~L105). We verify that
+// resolution logic directly via grammar_events.cursor_at / tooltip_at and the
+// stateful hover transitions, no window required.
+
+import grammar_events
+import grammar_context
+import grammar_element
+import transform
+import std.string
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+mk_test_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(
+        0.0, 0.0, 100.0, 100.0,
+        100.0, 100.0,
+        1.0, 0.0, 0.0,
+        id
+    )
+    return grammar_context.new_context(m)
+}
+
+mk_tracked(ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
+    sentinel = malloc(8)
+    el = grammar_element.element_new(sentinel)
+    grammar_element.element_set_bounds(el, x, y, w, h)
+    grammar_events.track_element(ctx, el)
+    return el
+}
+
+struct Recorder { n_calls: int last_hovered: int }
+mk_recorder() -> *Recorder { r = malloc(16) as *Recorder; r.n_calls = 0; r.last_hovered = 0 - 1; return r }
+
+main() {
+    println("=== test_grammar_interaction ===")
+
+    // ─── Cursor: per-element cursor resolves on hover ────────────
+    // Layout mirrors svg-cursor.test.ts: a background (no cursor → default),
+    // a button (pointer), an input (text), a resizer (hResize), a crosshair.
+    ctx = mk_test_ctx()
+
+    _bg    = mk_tracked(ctx, 0.0, 0.0, 100.0, 100.0)   // background, no cursor
+    button = mk_tracked(ctx, 0.0, 0.0, 20.0, 20.0)
+    grammar_element.element_set_cursor(button, "pointer")
+    input  = mk_tracked(ctx, 30.0, 0.0, 20.0, 20.0)
+    grammar_element.element_set_cursor(input, "text")
+    resizer = mk_tracked(ctx, 60.0, 0.0, 10.0, 10.0)
+    grammar_element.element_set_cursor(resizer, "hResize")
+    cross  = mk_tracked(ctx, 80.0, 0.0, 15.0, 15.0)
+    grammar_element.element_set_cursor(cross, "crosshair")
+
+    assert_eq_str("cursor over button",   grammar_events.cursor_at(ctx, 10.0, 10.0), "pointer")
+    assert_eq_str("cursor over input",    grammar_events.cursor_at(ctx, 40.0, 10.0), "text")
+    assert_eq_str("cursor over resizer",  grammar_events.cursor_at(ctx, 65.0, 5.0),  "hResize")
+    assert_eq_str("cursor over crosshair",grammar_events.cursor_at(ctx, 85.0, 5.0),  "crosshair")
+    // Over the background only (a region none of the cursor rects cover):
+    // bg has no cursor → "default".
+    assert_eq_str("cursor over bg only",  grammar_events.cursor_at(ctx, 10.0, 60.0), "default")
+    // Fully outside the scene → "default".
+    assert_eq_str("cursor outside scene", grammar_events.cursor_at(ctx, 200.0, 200.0), "default")
+
+    // ─── Topmost wins: a later cursor rect over the button ───────
+    overlay = mk_tracked(ctx, 0.0, 0.0, 20.0, 20.0)
+    grammar_element.element_set_cursor(overlay, "crosshair")
+    assert_eq_str("topmost cursor wins", grammar_events.cursor_at(ctx, 10.0, 10.0), "crosshair")
+
+    // ─── Tooltip resolution ──────────────────────────────────────
+    ctx2 = mk_test_ctx()
+    help = mk_tracked(ctx2, 0.0, 0.0, 30.0, 30.0)
+    grammar_element.element_set_tooltip(help, "Click to save")
+    _plain = mk_tracked(ctx2, 40.0, 0.0, 30.0, 30.0)   // no tooltip
+
+    assert_eq_str("tooltip over help",  grammar_events.tooltip_at(ctx2, 15.0, 15.0), "Click to save")
+    assert_eq_str("tooltip over plain", grammar_events.tooltip_at(ctx2, 50.0, 15.0), "")
+    assert_eq_str("tooltip empty space",grammar_events.tooltip_at(ctx2, 90.0, 90.0), "")
+
+    // ─── Cursor-only element still drives hover enter/leave ──────
+    // svg-cursor.test.ts records 4 hover-in / 4 hover-out: the hovered
+    // element transitions even when it has ONLY a cursor (no onHover). Here
+    // we give a cursor-only element a hover handler too and confirm it fires
+    // (the handler is optional in CVG; the transition itself must occur).
+    ctx3 = mk_test_ctx()
+    es3 = grammar_events.event_state_new()
+    rec = mk_recorder()
+    btn = mk_tracked(ctx3, 0.0, 0.0, 30.0, 30.0)
+    grammar_element.element_set_cursor(btn, "pointer")
+    grammar_element.element_on_hover(btn) callback |hovered: int| {
+        rec.n_calls = rec.n_calls + 1
+        rec.last_hovered = hovered
+    }
+    // A pure cursor-only neighbour (no hover handler) — must still become the
+    // hovered element (so its cursor would apply), exercising the widened
+    // hoverable predicate.
+    cursoronly = mk_tracked(ctx3, 40.0, 0.0, 30.0, 30.0)
+    grammar_element.element_set_cursor(cursoronly, "text")
+
+    grammar_events.dispatch_hover(es3, ctx3, 15.0, 15.0)   // into btn
+    assert_eq_int("hover into btn: handler fired", rec.n_calls, 1)
+    assert_eq_int("hover into btn: hovered=1",      rec.last_hovered, 1)
+
+    // Move onto the cursor-only element: btn must get a leave (transition to
+    // a different hovered element even though that element has no handler).
+    grammar_events.dispatch_hover(es3, ctx3, 55.0, 15.0)
+    assert_eq_int("btn leave when moving to cursor-only", rec.n_calls, 2)
+    assert_eq_int("btn leave: hovered=0",                 rec.last_hovered, 0)
+    if grammar_events.event_state_hovered(es3) == cursoronly {
+        println("  PASS: cursor-only element captured hover")
+    } else {
+        println("  FAIL: cursor-only element should be hovered")
+        exit(1)
+    }
+    // And its cursor resolves at that point.
+    assert_eq_str("cursor-only resolves", grammar_events.cursor_at(ctx3, 55.0, 15.0), "text")
+
+    println("=== test_grammar_interaction passed ===")
+}

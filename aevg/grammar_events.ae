@@ -48,10 +48,12 @@ exports (
     dispatch_click, dispatch_hover,
     dispatch_drag, dispatch_drag_end,
     dispatch_scroll,
-    dispatch_double_click, dispatch_right_click
+    dispatch_double_click, dispatch_right_click,
+    find_topmost_hoverable, cursor_at, tooltip_at
 )
 
 import std.list
+import std.string
 import grammar_context
 import grammar_element
 
@@ -201,6 +203,50 @@ find_topmost_with_right_click(ctx: ptr, x: float, y: float) -> ptr {
     return null
 }
 
+// Topmost element that is "hoverable" in the CVG sense: it has a hover
+// handler OR a non-empty tooltip OR a non-empty cursor, AND hit-tests.
+// (grammar-context.ts dispatchHover line ~105 — cursor/tooltip-only elements
+// still capture hover so their cursor/tooltip resolve.)
+find_topmost_hoverable(ctx: ptr, x: float, y: float) -> ptr {
+    list_p = ctx_tracked_elements(ctx)
+    n = list.size(list_p)
+    i = n - 1
+    while i >= 0 {
+        item, _ = list.get(list_p, i)
+        interactive = 0
+        if grammar_element.element_hover_handler(item) != null { interactive = 1 }
+        if string.length(grammar_element.element_tooltip(item)) > 0 { interactive = 1 }
+        if string.length(grammar_element.element_cursor(item)) > 0 { interactive = 1 }
+        if interactive == 1 {
+            if grammar_element.element_hit_test(item, x, y) == 1 {
+                return item
+            }
+        }
+        i = i - 1
+    }
+    return null
+}
+
+// ─── Cursor / tooltip resolution ─────────────────────────────────
+//
+// The cursor shown / tooltip available at a point is that of the topmost
+// hoverable element there. cursor_at falls back to "default" (CVG:
+// `newHovered?.getCursor() || 'default'`); tooltip_at to "" (no tooltip).
+
+cursor_at(ctx: ptr, x: float, y: float) -> string {
+    el = find_topmost_hoverable(ctx, x, y)
+    if el == null { return "default" }
+    c = grammar_element.element_cursor(el)
+    if string.length(c) == 0 { return "default" }
+    return c
+}
+
+tooltip_at(ctx: ptr, x: float, y: float) -> string {
+    el = find_topmost_hoverable(ctx, x, y)
+    if el == null { return "" }
+    return grammar_element.element_tooltip(el)
+}
+
 // ─── Invokers (the bridge from stored ptr to call via fn-typed
 //     param). All handlers are void-returning. ────────────────────
 
@@ -239,7 +285,9 @@ dispatch_click(es: ptr, ctx: ptr, x: float, y: float) {
 
 dispatch_hover(es: ptr, ctx: ptr, x: float, y: float) {
     state = es as *EventState
-    new_hovered = find_topmost_with_hover(ctx, x, y)
+    // Hoverable = hover-handler OR tooltip OR cursor (CVG), so cursor/tooltip-
+    // only elements drive enter/leave too (and thus cursor_at/tooltip_at).
+    new_hovered = find_topmost_hoverable(ctx, x, y)
     if new_hovered == state.hovered_element { return }
 
     // Fire hover-out on the previous hovered element.
