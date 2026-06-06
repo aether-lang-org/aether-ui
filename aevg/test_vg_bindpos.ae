@@ -1,0 +1,101 @@
+// aevg/test_vg_bindpos.ae — reactive geometry (semantic update) via vg.bind_pos.
+//
+// Headless port of svg-semantic-update.test.ts: a shape's bind_pos returns
+// updated geometry on scene_refresh; the engine merges it into the element's
+// SVG-space geometry and recompute_bounds re-maps to canvas space, so the
+// hit-test follows the move (click hits the new spot, misses the old). Mirrors
+// CVG's .bindPos. Identity viewBox (100→100) keeps coords 1:1.
+
+import vg
+import aevg_backend
+import grammar_context
+import grammar_element
+import grammar_events
+import transform
+import std.string
+import std.map
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_near(label: string, got: float, want: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < 0.5 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+mk_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0, id)
+    return grammar_context.new_context(m)
+}
+
+// Mutable position the bind_pos closure reads.
+struct Pos { cx: float cy: float }
+mk_pos(x: float, y: float) -> *Pos { p = malloc(16) as *Pos; p.cx = x; p.cy = y; return p }
+
+main() {
+    println("=== test_vg_bindpos ===")
+
+    ctx = mk_ctx()
+    bk = aevg_backend.backend_new()
+    scene = vg.scene_new(ctx, bk)
+    es = grammar_events.event_state_new()
+    vg.scene_set_event_state(scene, es)
+    vg.scene_set_deferred(scene, 1)
+    root = vg.vg_root(scene)
+
+    pos = mk_pos(20.0, 20.0)   // start at (20,20)
+
+    // Circle r=10 at the bound position, clickable (so it's tracked).
+    cnode = vg.circle(root, 20.0, 20.0, 10.0)
+    cel = vg.node_element(cnode)
+    vg.fill(cnode, "#888888")
+    vg.on_click_recolor(cnode, "#00ff00")
+    vg.bind_pos(cnode) callback {
+        m = map.new()
+        ig0 = map.put(m, "cx", float_str(pos.cx))
+        ig1 = map.put(m, "cy", float_str(pos.cy))
+        return m
+    }
+
+    // First flush establishes geometry + bounds (placeholder gets the drawn
+    // circle's SVG geo copied so bind_pos has something to merge into).
+    vg.vg_flush(scene)
+    assert_near("init bounds_x = 10", grammar_element.element_bounds_x(cel), 10.0)  // 20 - r(10)
+    assert_near("init bounds_y = 10", grammar_element.element_bounds_y(cel), 10.0)
+    assert_eq_int("init hit (20,20) inside", grammar_element.element_hit_test(cel, 20.0, 20.0), 1)
+    assert_eq_int("init hit (80,80) outside", grammar_element.element_hit_test(cel, 80.0, 80.0), 0)
+
+    // Move the bound position to (80,80), refresh → bounds follow.
+    pos.cx = 80.0
+    pos.cy = 80.0
+    vg.scene_refresh(scene)
+    assert_near("moved bounds_x = 70", grammar_element.element_bounds_x(cel), 70.0)  // 80 - 10
+    assert_near("moved bounds_y = 70", grammar_element.element_bounds_y(cel), 70.0)
+    assert_eq_int("moved hit (80,80) inside", grammar_element.element_hit_test(cel, 80.0, 80.0), 1)
+    assert_eq_int("moved hit (20,20) outside", grammar_element.element_hit_test(cel, 20.0, 20.0), 0)
+
+    // Hit-testing follows the move: a click at the NEW spot recolors it; a
+    // click at the OLD spot now misses.
+    grammar_events.dispatch_click(es, ctx, 20.0, 20.0)   // old spot — miss
+    assert_eq_str("click old spot: still grey", grammar_element.element_last_fill(cel), "#888888")
+    grammar_events.dispatch_click(es, ctx, 80.0, 80.0)   // new spot — hit
+    assert_eq_str("click new spot: recolored", grammar_element.element_last_fill(cel), "#00ff00")
+
+    println("=== test_vg_bindpos passed ===")
+}
+
+// SVG-attr float string (the pos map stores attrs as strings, like the loader).
+float_str(v: float) -> string { return string.from_float(v) }

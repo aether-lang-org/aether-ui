@@ -44,6 +44,7 @@ exports (
     // Interaction modifiers (attach a handler to the shape's element).
     on_click, on_hover, on_double_click, on_right_click, cursor, tooltip,
     on_click_recolor, visible_when,
+    bind_fill, bind_stroke, bind_opacity, bind_text, bind_pos,
     // Re-exported element mutators so a handler can recolor the element it
     // captured: vg.element_set_fill(el, "#0f0") inside an on_click closure.
     element_set_fill, element_set_stroke, element_set_opacity,
@@ -415,6 +416,39 @@ on_click_recolor(_ctx: ptr, color: string) {
     }
 }
 
+// ─── reactive bindings ───────────────────────────────────────────
+//
+// Re-evaluated on scene_refresh: bind_fill/stroke/text return a fresh value,
+// bind_opacity a fresh float, bind_pos a map of geometry attrs that re-drives
+// the shape's position (and recomputes its hit-test bounds). Mirror CVG's
+// .bindFill/.bindPos/etc. The closure captures whatever state it reads.
+
+bind_fill(_ctx: ptr, f: fn) {
+    el = node_payload(_ctx)
+    if el != null { grammar_element.element_bind_fill(el, f) }
+}
+bind_stroke(_ctx: ptr, f: fn) {
+    el = node_payload(_ctx)
+    if el != null { grammar_element.element_bind_stroke(el, f) }
+}
+bind_opacity(_ctx: ptr, f: fn) {
+    el = node_payload(_ctx)
+    if el != null { grammar_element.element_bind_opacity(el, f) }
+}
+bind_text(_ctx: ptr, f: fn) {
+    el = node_payload(_ctx)
+    if el != null { grammar_element.element_bind_text(el, f) }
+}
+// bind_pos(f) — f returns a map of changed geometry attrs (e.g. {"cx","cy"}).
+// On refresh the result merges into the shape's SVG-space geometry and
+// recompute_bounds re-maps to canvas space, so hit-testing follows the move
+// (CVG semantic-update). The element must carry shape geometry — set by the
+// shape factory at flush — so bind_pos is meaningful after the first flush.
+bind_pos(_ctx: ptr, f: fn) {
+    el = node_payload(_ctx)
+    if el != null { grammar_element.element_bind_pos(el, f) }
+}
+
 // visible_when(pred) — conditional rendering. `pred` is a `fn -> int` (1 = show,
 // 0 = hide), re-evaluated on scene refresh. A hidden element is not drawn and
 // not hit-tested (clicks fall through). CVG names this `when`; Aether reserves
@@ -594,13 +628,20 @@ flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
     }
     a = pend.attrs
     apply_cached_style(a, el)
+    // If a bind_pos moved this shape, its current geometry lives on the element
+    // (geo0..3, updated by recompute_bounds on refresh). Sync the draw attrs
+    // from it so the redraw reflects the new position — otherwise re-flush
+    // redraws from the original static attrs and clobbers the move.
+    if grammar_element.element_pos_binding(el) != null {
+        sync_attrs_from_geo(a, el, pend.kind)
+    }
     drawn = null
     if pend.kind == 0 { drawn = grammar_shapes.shape_circle(ctx, be, a) }
     if pend.kind == 1 { drawn = grammar_shapes.shape_rectangle(ctx, be, a) }
     if pend.kind == 2 { drawn = grammar_shapes.shape_line(ctx, be, a) }
     if pend.kind == 3 { drawn = grammar_shapes.shape_path(ctx, be, a) }
-    // Refresh the placeholder's hit-test bounds from the drawn element.
     if drawn != null {
+        // Refresh the placeholder's hit-test bounds from the drawn element.
         if grammar_element.element_has_bounds(drawn) == 1 {
             grammar_element.element_set_bounds(el,
                 grammar_element.element_bounds_x(drawn),
@@ -608,6 +649,59 @@ flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
                 grammar_element.element_bounds_width(drawn),
                 grammar_element.element_bounds_height(drawn))
         }
+        // Copy the SVG-space shape geometry onto the placeholder ONCE, so a
+        // bind_pos can merge into it + recompute_bounds. Only when the
+        // placeholder has none yet — a bind_pos refresh updates the geometry
+        // in place, and re-flush must not overwrite it with the static attrs.
+        if grammar_element.element_shape_type(el) == grammar_element.SHAPE_NONE() {
+            copy_shape_geo(el, drawn)
+        }
+    }
+}
+
+// Write the element's current geo0..3 back into the draw attrs map, keyed by
+// shape kind, so a bind_pos-moved shape redraws at its new position. Only the
+// geometry attrs change; style stays as apply_cached_style set it.
+sync_attrs_from_geo(a: ptr, el: ptr, kind: int) {
+    if grammar_element.element_shape_type(el) == grammar_element.SHAPE_NONE() { return }
+    g0 = grammar_element.element_geo0(el)
+    g1 = grammar_element.element_geo1(el)
+    g2 = grammar_element.element_geo2(el)
+    g3 = grammar_element.element_geo3(el)
+    if kind == 0 {
+        ig0 = map.put(a, "cx", string.from_float(g0))
+        ig1 = map.put(a, "cy", string.from_float(g1))
+        ig2 = map.put(a, "r",  string.from_float(g2))
+    }
+    if kind == 1 {
+        ig0 = map.put(a, "x",      string.from_float(g0))
+        ig1 = map.put(a, "y",      string.from_float(g1))
+        ig2 = map.put(a, "width",  string.from_float(g2))
+        ig3 = map.put(a, "height", string.from_float(g3))
+    }
+    if kind == 2 {
+        ig0 = map.put(a, "x1", string.from_float(g0))
+        ig1 = map.put(a, "y1", string.from_float(g1))
+        ig2 = map.put(a, "x2", string.from_float(g2))
+        ig3 = map.put(a, "y2", string.from_float(g3))
+    }
+}
+
+// Copy shape type + geo0..3 from `src` to `dst` via the typed shape setters.
+copy_shape_geo(dst: ptr, src: ptr) {
+    st = grammar_element.element_shape_type(src)
+    g0 = grammar_element.element_geo0(src)
+    g1 = grammar_element.element_geo1(src)
+    g2 = grammar_element.element_geo2(src)
+    g3 = grammar_element.element_geo3(src)
+    if st == grammar_element.SHAPE_CIRCLE() {
+        grammar_element.element_set_shape_circle(dst, g0, g1, g2)
+    }
+    if st == grammar_element.SHAPE_RECT() {
+        grammar_element.element_set_shape_rect(dst, g0, g1, g2, g3)
+    }
+    if st == grammar_element.SHAPE_LINE() {
+        grammar_element.element_set_shape_line(dst, g0, g1, g2, g3)
     }
 }
 
@@ -623,6 +717,11 @@ element_is_interactive(el: ptr) -> int {
     if string.length(grammar_element.element_cursor(el)) > 0 { return 1 }
     if string.length(grammar_element.element_tooltip(el)) > 0 { return 1 }
     if grammar_element.element_when_predicate(el) != null { return 1 }
+    // Reactive bindings need tracking too, so scene_refresh (which walks the
+    // tracked list) re-evaluates them.
+    if grammar_element.element_pos_binding(el) != null { return 1 }
+    if grammar_element.element_fill_binding(el) != null { return 1 }
+    if grammar_element.element_opacity_binding(el) != null { return 1 }
     return 0
 }
 
