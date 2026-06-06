@@ -24,3 +24,4 @@ Thumbs.db
 aevg/test/screenshots/
 aevg/_gen_*.ae
 build/_gen_*
+__pycache__/
