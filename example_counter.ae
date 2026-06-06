@@ -14,7 +14,7 @@ main() {
     counter = aether_ui.ui_state(0)
 
     aether_ui.window("Perry Counter", 400, 200) {
-        aether_ui.root_vstack(10) {
+        aether_ui.vstack(10) {
             aether_ui.text("Aether UI Counter Demo")
             aether_ui.divider()
             aether_ui.text_bound(counter, "Count: ", "")

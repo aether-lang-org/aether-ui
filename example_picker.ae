@@ -12,7 +12,7 @@ main() {
     selected = aether_ui.ui_state(0)
 
     aether_ui.window("Color Picker", 300, 200) {
-    root = aether_ui.root_vstack(10) {
+    root = aether_ui.vstack(10) {
         aether_ui.text("Choose a color:")
 
         colors = aether_ui.picker() callback |idx: int| {

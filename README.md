@@ -122,6 +122,16 @@ loop to deliver to). The diagnostic is **collected on the surface** by default
 fail is an explicit opt-in, never the default — the framework never writes to
 a stream you didn't ask it to.
 
+**Inside a surface block, use the context-attaching layout verbs** (`vstack`,
+`hstack`, `zstack`, …) — **not** the `root_*` variants (`root_vstack`,
+`root_hstack`). The `root_*` verbs are *detached*: they take no builder context
+and so don't attach to the enclosing surface, leaving you with a window that
+maps but renders blank. The `root_*` forms exist only for the explicit-root
+`window_run(title, w, h, root)` path, where you build the tree imperatively and
+hand the root in. Inside `window {…}` / `render_to {…}` / `record {…}`, always
+`vstack` (which the compiler auto-parents to the surface via the `_ctx`
+convention).
+
 Why three verbs instead of one `app_run`? Because `app_run` welded together
 three jobs — create the window, mount the tree, run the loop — and forced that
 *lived* shape onto every program. Most surfaces aren't lived: a render-to-PNG,

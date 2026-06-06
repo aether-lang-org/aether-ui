@@ -9,7 +9,7 @@ extern println(s: string)
 
 main() {
     aether_ui.window("Styled Demo", 500, 600) {
-    root = aether_ui.root_vstack(0) {
+    root = aether_ui.vstack(0) {
         // Header with gradient background
         header = aether_ui.hstack(10) {
             title = aether_ui.text("Aether UI Styled Demo")
