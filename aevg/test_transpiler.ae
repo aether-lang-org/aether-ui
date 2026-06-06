@@ -1,0 +1,122 @@
+// aevg/test_transpiler.ae — SVG → editable AeVG `vg{}` source emission.
+//
+// The transpiler now emits the elegant DSL-with-Scope form (the same shape a
+// human authors in example_vg.ae), NOT the old map.new/map.put plumbing:
+//
+//   main() {
+//       window("name", 400, 300) {
+//           vg(view_box(0.0, 0.0, 100.0, 100.0), 400, 300) {
+//               circle(50.0, 50.0, 20.0) { fill("#F00") }
+//           }
+//       }
+//   }
+//
+// Tests assert the generated string contains the expected fragments. A full
+// compile-the-output round-trip is exercised by the parity harness
+// (aevg/test/svg-compare-aevg.py --transpile); here we pin the emitted shape.
+
+import std.string
+import transpiler
+
+extern exit(code: int)
+
+assert_contains(label: string, haystack: string, needle: string) {
+    if string.contains(haystack, needle) == 1 {
+        println("  PASS: ${label}")
+    } else {
+        println("  FAIL: ${label}")
+        println("    wanted substring: '${needle}'")
+        exit(1)
+    }
+}
+
+assert_not_contains(label: string, haystack: string, needle: string) {
+    if string.contains(haystack, needle) == 0 {
+        println("  PASS: ${label}")
+    } else {
+        println("  FAIL: ${label}: unexpectedly found '${needle}'")
+        exit(1)
+    }
+}
+
+main() {
+    println("=== test_transpiler ===")
+
+    // ─── Module wrapper: window + vg + a styled circle ────────
+    svg1 = "<svg viewBox='0 0 100 100' width='400' height='300'><circle cx='50' cy='50' r='20' fill='#F00'/></svg>"
+    out1 = transpiler.transpile_svg_to_module(svg1, "my_svg")
+
+    assert_contains("module: main() wrapper", out1, "main() {")
+    assert_contains("module: window with name + px size", out1,
+                    "window(\"my_svg\", 400, 300) {")
+    assert_contains("module: vg + typed view_box", out1,
+                    "vg(view_box(0.0, 0.0, 100.0, 100.0), 400, 300) {")
+    assert_contains("module: circle positional geometry", out1,
+                    "circle(50.0, 50.0, 20.0)")
+    assert_contains("module: fill as block modifier", out1, "fill(\"#F00\")")
+    assert_contains("module: vg DSL imports", out1, "import vg_live (vg)")
+    assert_contains("module: window import", out1, "import aether_ui (window)")
+    // Old plumbing must be GONE.
+    assert_not_contains("module: no map.new plumbing", out1, "map.new()")
+    assert_not_contains("module: no shape factory call", out1, "grammar_shapes.shape_circle")
+    assert_not_contains("module: no backend param fn", out1, "(backend: ptr) -> ptr")
+
+    // ─── Default fn/window name when empty ────────────────────
+    out_def = transpiler.transpile_svg_to_module(svg1, "")
+    assert_contains("default name render_svg", out_def, "window(\"render_svg\"")
+
+    // ─── Body-only form: just the vg(...) { … } scope ─────────
+    svg2 = "<svg viewBox='0 0 200 200'><rect x='10' y='10' width='40' height='30' fill='blue'/><circle cx='100' cy='100' r='25'/></svg>"
+    out2 = transpiler.transpile_svg(svg2)
+    assert_contains("body: vg opener", out2, "vg(view_box(0.0, 0.0, 200.0, 200.0)")
+    assert_contains("body: rect positional", out2, "rect(10.0, 10.0, 40.0, 30.0)")
+    assert_contains("body: rect fill", out2, "fill(\"blue\")")
+    assert_contains("body: bare circle, no style block", out2, "circle(100.0, 100.0, 25.0)\n")
+    assert_not_contains("body: no main wrapper", out2, "main() {")
+
+    // ─── stroke + stroke-width → stroke("…", w) ───────────────
+    svg_s = "<svg viewBox='0 0 100 100'><rect x='1' y='2' width='3' height='4' stroke='#003' stroke-width='2'/></svg>"
+    out_s = transpiler.transpile_svg(svg_s)
+    assert_contains("stroke: color + width", out_s, "stroke(\"#003\", 2.0)")
+
+    // ─── stroke with no width defaults to 1.0 ─────────────────
+    svg_s1 = "<svg viewBox='0 0 100 100'><line x1='0' y1='0' x2='9' y2='9' stroke='red'/></svg>"
+    out_s1 = transpiler.transpile_svg(svg_s1)
+    assert_contains("line: positional", out_s1, "line(0.0, 0.0, 9.0, 9.0)")
+    assert_contains("stroke: default width 1.0", out_s1, "stroke(\"red\", 1.0)")
+
+    // ─── Path normalization at transpile time ─────────────────
+    svg3 = "<svg viewBox='0 0 100 100'><path d='M 10 10 l 20 0 l 0 20 Z' fill='green'/></svg>"
+    out3 = transpiler.transpile_svg(svg3)
+    assert_contains("path: verb + d string", out3, "path(\"")
+    assert_contains("path: fill", out3, "fill(\"green\")")
+    assert_contains("path: normalized to absolute L 30 10", out3, "L 30 10")
+    assert_not_contains("path: no relative l in d", out3, "l 20 0")
+
+    // ─── Omitted attrs (id, xmlns) don't break geometry ───────
+    svg4 = "<svg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'><circle id='c1' cx='5' cy='5' r='2'/></svg>"
+    out4 = transpiler.transpile_svg(svg4)
+    assert_contains("omit: circle geometry intact", out4, "circle(5.0, 5.0, 2.0)")
+
+    // ─── Text content as positional string arg ────────────────
+    svg5 = "<svg viewBox='0 0 100 100'><text x='10' y='20' fill='#222'>Hello</text></svg>"
+    out5 = transpiler.transpile_svg(svg5)
+    assert_contains("text: positional x,y,content", out5, "text(10.0, 20.0, \"Hello\")")
+    assert_contains("text: fill modifier", out5, "fill(\"#222\")")
+
+    // ─── inline style="fill:…;stroke:…" parsed ────────────────
+    svg_in = "<svg viewBox='0 0 100 100'><circle cx='1' cy='1' r='1' style='fill:teal;stroke:black'/></svg>"
+    out_in = transpiler.transpile_svg(svg_in)
+    assert_contains("inline-style: fill", out_in, "fill(\"teal\")")
+    assert_contains("inline-style: stroke", out_in, "stroke(\"black\"")
+
+    // ─── <desc> → comment; <g fill> → g() { fill(…) … } ───────
+    svg6 = "<svg viewBox='0 0 100 100'><desc>A scene</desc><g fill='red'><circle cx='1' cy='1' r='1'/></g></svg>"
+    out6 = transpiler.transpile_svg(svg6)
+    assert_contains("desc: emitted as comment", out6, "// A scene")
+    // g with children: opens `g() { fill(...)` then nests children, closes `}`.
+    assert_contains("g: scope opens with cascade fill", out6, "g() { fill(\"red\")")
+    assert_contains("g: child circle nested", out6, "circle(1.0, 1.0, 1.0)")
+
+    println("=== test_transpiler passed ===")
+}
