@@ -158,6 +158,24 @@ attr_or(node: ptr, name: string, fallback: string) -> string {
     return fallback
 }
 
+// A gradient's referenced id from xlink:href / href (leading '#' stripped),
+// or "" if none.
+grad_href(node: ptr) -> string {
+    h = ""
+    if parser.node_has_attr(node, "xlink:href") == 1 {
+        h = parser.node_attr(node, "xlink:href")
+    } else {
+        if parser.node_has_attr(node, "href") == 1 {
+            h = parser.node_attr(node, "href")
+        }
+    }
+    if string.length(h) == 0 { return "" }
+    if string.starts_with(h, "#") == 1 {
+        return string.substring(h, 1, string.length(h))
+    }
+    return h
+}
+
 // ─── parse_stops: walk <stop> children ───────────────────────────
 //
 // Each <stop offset="0.5" stop-color="red" stop-opacity="0.8"/>
@@ -231,8 +249,21 @@ parse_gradient(ctx: ptr, node: ptr) -> ptr {
         g.type_code = GRADIENT_RADIAL()
     }
 
-    // Stops
+    // Stops. A gradient with xlink:href/href and no own <stop>s inherits the
+    // referenced gradient's stops (SVG gradient href inheritance — Inkscape
+    // commonly splits stops into a base linearGradient and references it from
+    // a radialGradient that only carries coords). The referenced node is in
+    // ctx.nodes_by_id (built by the loader's index_nodes first pass).
     parse_stops(g.stops, node)
+    if list.size(g.stops) == 0 {
+        href = grad_href(node)
+        if string.length(href) > 0 {
+            parent = grammar_context.get_node(ctx, href)
+            if parent != null {
+                parse_stops(g.stops, parent)
+            }
+        }
+    }
 
     // units & spreadMethod (pass-through strings; consumers default
     // when empty).

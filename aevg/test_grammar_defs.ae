@@ -290,5 +290,28 @@ main() {
     cp_e2e = grammar_context.get_clip_path(ctx_e2e2, "clip1")
     assert_eq_int("e2e2: clipPath 1 shape",      grammar_defs.clip_path_shape_count(cp_e2e), 1)
 
+    // ─── Gradient xlink:href stop inheritance ────────────────────
+    // A radialGradient with href to a base linearGradient (carrying the
+    // stops) and no own <stop>s inherits the base's stops. The base node must
+    // be registered (the loader does this via index_nodes); we mimic that.
+    ctx_href = mk_test_ctx()
+    svg_href = "<svg><defs><linearGradient id='base'><stop offset='0' stop-color='#0a0'/><stop offset='1' stop-color='#00a'/></linearGradient><radialGradient id='rg' xlink:href='#base' cx='0.5' cy='0.5' r='0.5'/></defs></svg>"
+    root_href = parser.parse_svg(svg_href)
+    defs_href = parser.node_child_at(root_href, 0)
+    base_node = parser.node_child_at(defs_href, 0)
+    rg_node = parser.node_child_at(defs_href, 1)
+    grammar_context.register_node(ctx_href, "base", base_node)
+    _ = grammar_defs.parse_gradient(ctx_href, base_node)
+    g_rg = grammar_defs.parse_gradient(ctx_href, rg_node)
+    assert_not_null("href: radial gradient returned", g_rg)
+    assert_eq_int("href: radial is radial",
+                  grammar_defs.gradient_type(g_rg), grammar_defs.GRADIENT_RADIAL())
+    assert_eq_int("href: inherited 2 stops from base",
+                  grammar_defs.gradient_stop_count(g_rg), 2)
+    rg_stops = grammar_defs.gradient_stops(g_rg)
+    rs0, _ = list.get(rg_stops, 0)
+    assert_eq_str("href: inherited stop[0] color",
+                  grammar_defs.stop_color(rs0), "#0a0")
+
     println("=== test_grammar_defs passed ===")
 }

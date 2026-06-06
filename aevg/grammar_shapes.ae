@@ -301,6 +301,13 @@ shape_circle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
         return el_w
     }
 
+    // Gradient fill → delegate to shape_path (only it emits gradient opts; the
+    // direct-circle dispatch below emits a solid fillColor). A circle is an
+    // ellipse with rx==ry, so reuse ellipse_to_path. Mirrors rect_via_path.
+    if string.length(style_grad_id_of(style, "fill")) > 0 {
+        return circle_via_path(ctx, backend, attrs, style, cx_raw, cy_raw, r_raw, did_push)
+    }
+
     p = grammar_rendering.map_point(ctx, cx_raw, cy_raw)
     cx = transform.pt_x(p)
     cy = transform.pt_y(p)
@@ -502,6 +509,30 @@ rect_via_path(ctx: ptr, backend: ptr, attrs: ptr, style: ptr,
 
     el = shape_path(ctx, backend, pa)
     maybe_pop_transform(ctx, did_push)
+    return el
+}
+
+// circle_via_path — a circle (cx,cy,r) as an ellipse path (rx==ry==r) so it
+// routes through shape_path, which is the only shape that emits gradient opts.
+// Same transform-strip + style-carry as rect_via_path (the circle's transform
+// is already pushed via did_push; shape_path renders under it, then we pop).
+circle_via_path(ctx: ptr, backend: ptr, attrs: ptr, style: ptr,
+                cx: float, cy: float, r: float, did_push: int) -> ptr {
+    d = grammar_utils.ellipse_to_path(cx, cy, r, r)
+    pa = map.new()
+    _ = map.put(pa, "d", d)
+    fv = grammar_style.style_get(style, "fill")
+    if string.length(fv) > 0 { _ = map.put(pa, "fill", fv) }
+    sv = grammar_style.style_get(style, "stroke")
+    if string.length(sv) > 0 { _ = map.put(pa, "stroke", sv) }
+    swv = grammar_style.style_get(style, "stroke-width")
+    if string.length(swv) > 0 { _ = map.put(pa, "stroke-width", swv) }
+    clv = attr_str_or(attrs, "class", "")
+    if string.length(clv) > 0 { _ = map.put(pa, "class", clv) }
+
+    el = shape_path(ctx, backend, pa)
+    maybe_pop_transform(ctx, did_push)
+    grammar_element.element_set_shape_circle(el, cx, cy, r)
     return el
 }
 

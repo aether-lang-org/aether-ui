@@ -166,6 +166,25 @@ main() {
     assert_eq_str("grad rect: gradType=linear",
                   aevg_backend.backend_opt_get(bk5, 0, "gradType"), "linear")
 
+    // ─── Gradient-filled circle → routes through path ─────────
+    // Previously a circle with fill=url(#id) emitted a SOLID fillColor (→
+    // black): only shape_path emits gradient opts. Now shape_circle delegates
+    // to a path (ellipse rx==ry) when the fill is a gradient.
+    ctx_cg = mk_ctx()
+    bk_cg = aevg_backend.backend_new()
+    register_radial(ctx_cg, "cg")
+    a_cg = map.new()
+    _ = map.put(a_cg, "cx", "50")
+    _ = map.put(a_cg, "cy", "50")
+    _ = map.put(a_cg, "r", "40")
+    _ = map.put(a_cg, "fill", "url(#cg)")
+    _ = grammar_shapes.shape_circle(ctx_cg, bk_cg, a_cg)
+    assert_eq_str("grad circle: routed to path", aevg_backend.backend_kind(bk_cg, 0), "path")
+    assert_eq_str("grad circle: gradType=radial",
+                  aevg_backend.backend_opt_get(bk_cg, 0, "gradType"), "radial")
+    assert_nonempty("grad circle: gradStops present", bk_cg, 0, "gradStops")
+    assert_empty("grad circle: no solid fillColor", bk_cg, 0, "fillColor")
+
     // ─── Rounded rect → routes through path ───────────────────
     ctx6 = mk_ctx()
     bk6 = aevg_backend.backend_new()
