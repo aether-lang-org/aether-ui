@@ -85,6 +85,14 @@ main() {
     assert_contains("line: positional", out_s1, "line(0.0, 0.0, 9.0, 9.0)")
     assert_contains("stroke: default width 1.0", out_s1, "stroke(\"red\", 1.0)")
 
+    // ─── unit suffix on stroke-width → numeric prefix only ────
+    // "1px" must become 1.0 (not the invalid literal "1px.0"); this kept the
+    // generated source from compiling on real Inkscape exports.
+    svg_px = "<svg viewBox='0 0 100 100'><rect x='1' y='1' width='2' height='2' stroke='#000' stroke-width='1px'/></svg>"
+    out_px = transpiler.transpile_svg(svg_px)
+    assert_contains("stroke-width unit stripped", out_px, "stroke(\"#000\", 1.0)")
+    assert_not_contains("no invalid px literal", out_px, "1px.0")
+
     // ─── Path normalization at transpile time ─────────────────
     svg3 = "<svg viewBox='0 0 100 100'><path d='M 10 10 l 20 0 l 0 20 Z' fill='green'/></svg>"
     out3 = transpiler.transpile_svg(svg3)

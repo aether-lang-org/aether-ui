@@ -22,3 +22,5 @@ Thumbs.db
 *.swo
 *~
 aevg/test/screenshots/
+aevg/_gen_*.ae
+build/_gen_*

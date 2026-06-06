@@ -1,0 +1,27 @@
+// aevg/svg_transpile_module.ae — emit the human-facing vg{} module source for
+// an SVG (read on stdin). The parity suite uses this to populate the
+// "show source" pane in its HTML report (the editable AeVG a person would
+// keep), distinct from svg_transpile_harness.ae which emits the headless
+// PNG-render harness used to score the transpiled column.
+//
+//   build:  ./build.sh aevg/svg_transpile_module.ae build/svg_transpile_module
+//   use:    ./build/svg_transpile_module < in.svg
+
+import std.string
+import std.strbuilder
+import transpiler
+extern getchar() -> int
+
+read_stdin() -> string {
+    out = strbuilder.new(4096)
+    c = getchar()
+    while c >= 0 {
+        _ = strbuilder.append_byte(out, c)
+        c = getchar()
+    }
+    return strbuilder.finish(out)
+}
+
+main() {
+    println(transpiler.transpile_svg_to_module(read_stdin(), "transpiled_scene"))
+}

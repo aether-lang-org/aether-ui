@@ -93,36 +93,78 @@ def render_loader(svg_path: Path, output_path: Path) -> bool:
         return False
 
 
+# Tools for the transpiled column (built on demand).
+TRANSPILE_MODULE_BIN = AEVG_ROOT / 'build' / 'svg_transpile_module'   # vg{} source (for display)
+TRANSPILE_HARNESS_BIN = AEVG_ROOT / 'build' / 'svg_transpile_harness' # PNG harness emitter
+
+
+def _ensure_built(src_rel: str, bin_path: Path) -> bool:
+    """Build an .ae tool if its binary is missing. Returns True if present."""
+    if bin_path.exists():
+        return True
+    src = AEVG_ROOT / src_rel
+    if not src.exists():
+        return False
+    r = subprocess.run([str(BUILD_SH), src_rel, f'build/{bin_path.name}'],
+                       cwd=str(AEVG_ROOT), capture_output=True, text=True)
+    return bin_path.exists()
+
+
 def transpile_to_source(svg_path: Path) -> str:
-    """Transpile an SVG to AeVG vg{} module source via the transpiler.
-    Returns '' on failure. (Uses a tiny throwaway .ae that calls the
-    transpiler and prints the result — built + run headless.)"""
-    # The transpiler is an AeVG module; we drive it from a generated harness.
-    # Kept best-effort: if the transpiler isn't emitting compilable vg{} yet,
-    # the Transpiled column is simply informational source text.
-    drv = AEVG_ROOT / 'aevg' / '_transpile_one.ae'
-    if not drv.exists():
-        return ''
-    env = os.environ.copy()
-    env['AETHER_UI_HEADLESS'] = '1'
-    env['AEVG_SVG_IN'] = str(svg_path)
-    bin_path = AEVG_ROOT / 'build' / '_transpile_one'
-    if not bin_path.exists():
+    """Emit the human-facing vg{} module source for display (the 'show source'
+    pane). Best-effort; '' if the emitter tool isn't available."""
+    if not _ensure_built('aevg/svg_transpile_module.ae', TRANSPILE_MODULE_BIN):
         return ''
     try:
-        r = subprocess.run([str(bin_path)], env=env, capture_output=True,
-                           text=True, timeout=20)
-        return r.stdout if r.returncode == 0 else ''
+        r = subprocess.run([str(TRANSPILE_MODULE_BIN)],
+                           input=svg_path.read_bytes(),
+                           capture_output=True, timeout=20)
+        return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 else ''
     except Exception:
         return ''
 
 
 def render_transpiled(svg_path: Path, output_path: Path, work: Path) -> bool:
-    """Transpile → write a renderable .ae → build → run → PNG.
-    Returns True on success. Best-effort; requires transpiler vg{} output."""
-    # Placeholder: wired once the transpiler emits compilable vg{} modules.
-    # Intentionally a no-op for now so the harness runs with the loader column.
-    return False
+    """Transpile the SVG to a headless PNG-render harness, BUILD it, RUN it →
+    PNG. This proves the generated vg{} source compiles and renders. Returns
+    True on success. Each SVG gets its own throwaway module + binary under
+    aevg/ (build.sh resolves imports relative to the source dir, so the .ae
+    must live there)."""
+    if not _ensure_built('aevg/svg_transpile_harness.ae', TRANSPILE_HARNESS_BIN):
+        return False
+    stem = svg_path.stem
+    # 1. Emit the harness .ae for this SVG.
+    try:
+        r = subprocess.run([str(TRANSPILE_HARNESS_BIN)],
+                           input=svg_path.read_bytes(),
+                           capture_output=True, timeout=20)
+        if r.returncode != 0 or not r.stdout:
+            return False
+    except Exception:
+        return False
+    # The generated module must sit in aevg/ for import resolution.
+    safe = ''.join(c if (c.isalnum() or c == '_') else '_' for c in stem)
+    gen_ae = AEVG_ROOT / 'aevg' / f'_gen_{safe}.ae'
+    gen_bin = AEVG_ROOT / 'build' / f'_gen_{safe}'
+    try:
+        gen_ae.write_bytes(r.stdout)
+        # 2. Build it.
+        b = subprocess.run([str(BUILD_SH), f'aevg/_gen_{safe}.ae', f'build/_gen_{safe}'],
+                           cwd=str(AEVG_ROOT), capture_output=True, text=True, timeout=120)
+        if not gen_bin.exists():
+            return False
+        # 3. Run it headless → PNG.
+        env = os.environ.copy()
+        env['AETHER_UI_HEADLESS'] = '1'
+        env['AEVG_OUT'] = str(output_path)
+        env['AEVG_SIZE'] = str(SIZE)
+        rr = subprocess.run([str(gen_bin)], env=env, capture_output=True, timeout=30)
+        return rr.returncode == 0 and output_path.exists()
+    except subprocess.TimeoutExpired:
+        return False
+    finally:
+        gen_ae.unlink(missing_ok=True)
+        gen_bin.unlink(missing_ok=True)
 
 
 def png_to_data_uri(png_path: Path) -> str:

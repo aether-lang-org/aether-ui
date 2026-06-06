@@ -1,0 +1,28 @@
+// aevg/svg_transpile_harness.ae — emit a headless PNG-render harness for an
+// SVG (read on stdin), via the transpiler's transpile_svg_to_png_harness.
+//
+// The parity suite's "transpiled" column (aevg/test/svg-compare-aevg.py
+// --transpile) pipes an SVG in, captures the emitted .ae module on stdout,
+// then builds + runs it to render the transpiled column's PNG. This proves the
+// generated vg{} source actually compiles and renders — not just that the
+// transpiler produced plausible text.
+//
+//   build:  ./build.sh aevg/svg_transpile_harness.ae build/svg_transpile_harness
+//   use:    ./build/svg_transpile_harness < in.svg > gen_harness.ae
+
+import std.string
+import std.strbuilder
+import transpiler
+extern getchar() -> int
+read_stdin() -> string {
+    out = strbuilder.new(4096)
+    c = getchar()
+    while c >= 0 {
+        _ = strbuilder.append_byte(out, c)
+        c = getchar()
+    }
+    return strbuilder.finish(out)
+}
+main() {
+    println(transpiler.transpile_svg_to_png_harness(read_stdin()))
+}

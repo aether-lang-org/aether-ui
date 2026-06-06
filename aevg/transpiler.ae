@@ -34,7 +34,7 @@
 //   transpile_svg(svg) -> string
 //     just the vg(view_box(…), w, h) { … } scope (to embed in a surface)
 
-exports ( transpile_svg_to_module, transpile_svg )
+exports ( transpile_svg_to_module, transpile_svg, transpile_svg_to_png_harness )
 
 import std.string
 import std.strbuilder
@@ -118,6 +118,64 @@ transpile_svg(svg: string) -> string {
     return strbuilder.finish(sb)
 }
 
+// ─── transpile_svg_to_png_harness ────────────────────────────────
+//
+// A self-contained, HEADLESS module that renders the SVG to a PNG via the
+// transpiled vg{} shapes — the parity harness's "transpiled" column builds +
+// runs this, then diffs the PNG vs librsvg. Unlike transpile_svg_to_module
+// (which opens a window), this builds a detached deferred scene, runs the
+// transpiled shapes, flushes, and writes the PNG (out path + size from the
+// AEVG_OUT / AEVG_SIZE env vars, matching aevg/svg_render_png.ae). It compiles
+// the SAME vg{} shape emission the module form does — so a green PNG here
+// proves the generated source renders.
+//
+// The shapes are emitted in EXPLICIT-NODE form — `vg.circle(node, …)` rather
+// than the bare `circle(…)` the surface-block form relies on — because there
+// is no `vg { … }` builder block here to inject _ctx; we thread an explicit
+// `node` (the deferred-scene root) ourselves.
+transpile_svg_to_png_harness(svg: string) -> string {
+    root = parser.parse_svg(svg)
+    vb = root_view_box(root)
+
+    sb = strbuilder.new(1024)
+    _ = strbuilder.append(sb, "// Generated headless render harness (transpiler parity column).\n")
+    _ = strbuilder.append(sb, "import aether_ui\n")
+    _ = strbuilder.append(sb, "import aether_ui (canvas_create, canvas_write_png)\n")
+    _ = strbuilder.append(sb, "import vg\n")
+    _ = strbuilder.append(sb, "import vg (view_box)\n")
+    _ = strbuilder.append(sb, "import grammar_factories\n")
+    _ = strbuilder.append(sb, "import aevg_gtk_backend\n")
+    _ = strbuilder.append(sb, "import std.string\n")
+    _ = strbuilder.append(sb, "extern getenv(name: string) -> string\n")
+    _ = strbuilder.append(sb, "extern exit(code: int)\n\n")
+    _ = strbuilder.append(sb, "main() {\n")
+    _ = strbuilder.append(sb, "    out = getenv(\"AEVG_OUT\")\n")
+    _ = strbuilder.append(sb, "    if string.length(out) == 0 { println(\"no AEVG_OUT\"); exit(2) }\n")
+    _ = strbuilder.append(sb, "    sz = 400\n")
+    _ = strbuilder.append(sb, "    szs = getenv(\"AEVG_SIZE\")\n")
+    _ = strbuilder.append(sb, "    if string.length(szs) > 0 { v, ok = string.to_int(szs); if ok == 1 { sz = v } }\n")
+    _ = strbuilder.append(sb, "    cid = canvas_create(sz, sz)\n")
+    _ = strbuilder.append(sb, "    backend = aevg_gtk_backend.gtk_backend_new(cid)\n")
+    _ = strbuilder.append(sb, "    opts = grammar_factories.opts_new()\n")
+    _ = strbuilder.append(sb, "    grammar_factories.opts_set_view_box(opts, view_box(")
+    emit_vb_args(sb, vb)
+    _ = strbuilder.append(sb, "))\n")
+    _ = strbuilder.append(sb, "    grammar_factories.opts_set_width(opts, sz / 1.0)\n")
+    _ = strbuilder.append(sb, "    grammar_factories.opts_set_height(opts, sz / 1.0)\n")
+    _ = strbuilder.append(sb, "    ctx = grammar_factories.create_aevg_context(opts)\n")
+    _ = strbuilder.append(sb, "    scene = vg.scene_new(ctx, backend)\n")
+    _ = strbuilder.append(sb, "    vg.scene_set_canvas(scene, cid)\n")
+    _ = strbuilder.append(sb, "    vg.scene_set_deferred(scene, 1)\n")
+    _ = strbuilder.append(sb, "    node = vg.vg_root(scene)\n")
+    // Transpiled shapes, explicit-node form.
+    emit_children_explicit(sb, root, 1)
+    _ = strbuilder.append(sb, "    vg.vg_flush(scene)\n")
+    _ = strbuilder.append(sb, "    ok2 = canvas_write_png(cid, out, sz, sz)\n")
+    _ = strbuilder.append(sb, "    if ok2 == 1 { println(\"ok\") } else { println(\"png fail\"); exit(1) }\n")
+    _ = strbuilder.append(sb, "}\n")
+    return strbuilder.finish(sb)
+}
+
 // Emit the `vg(view_box(minx, miny, w, h), W, H) {` opener at `indent`.
 emit_vg_open(sb: ptr, vb: string, px_w: string, px_h: string, indent: int) {
     pad(sb, indent)
@@ -159,6 +217,173 @@ emit_children(sb: ptr, node: ptr, indent: int) {
     while i < nch {
         emit_node(sb, parser.node_child_at(node, i), indent)
         i = i + 1
+    }
+}
+
+// ─── explicit-node emission (headless PNG harness) ───────────────
+//
+// Same shapes, but as `vg.circle(node, …)` + `vg.fill(cN, …)` against an
+// explicit `node`/scene rather than the _ctx-injected surface-block form.
+// Each styled shape binds a vn (cN) so its modifiers can target it; bare
+// shapes don't bind. Groups flatten (the explicit form has no cascade scope
+// — the renderer still resolves per-shape style, and g cascade is a known
+// gap shared with the surface form). A counter box names the vars.
+
+emit_children_explicit(sb: ptr, root: ptr, indent: int) {
+    ctr = malloc(8) as *VarCounter
+    ctr.n = 0
+    emit_kids_explicit(sb, root, indent, ctr)
+}
+
+ctr_next(ctr: ptr) -> int {
+    c = ctr as *VarCounter
+    n = c.n
+    c.n = n + 1
+    return n
+}
+
+emit_kids_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr) {
+    nch = parser.node_child_count(node)
+    i = 0
+    while i < nch {
+        emit_node_explicit(sb, parser.node_child_at(node, i), indent, ctr)
+        i = i + 1
+    }
+}
+
+struct VarCounter { n: int }
+
+emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr) {
+    tag = parser.node_tag(node)
+    if string.equals(tag, "desc") == 1 { return }
+    if string.equals(tag, "title") == 1 { return }
+    if string.equals(tag, "g") == 1 {
+        // Flatten group children (cascade gap noted above).
+        emit_kids_explicit(sb, node, indent, ctr)
+        return
+    }
+    is_shape = 0
+    if string.equals(tag, "circle") == 1 { is_shape = 1 }
+    if string.equals(tag, "rect") == 1 { is_shape = 1 }
+    if string.equals(tag, "line") == 1 { is_shape = 1 }
+    if string.equals(tag, "path") == 1 { is_shape = 1 }
+    if string.equals(tag, "text") == 1 { is_shape = 1 }
+    if is_shape == 0 {
+        emit_kids_explicit(sb, node, indent, ctr)
+        return
+    }
+
+    styled = has_style(node)
+    pad(sb, indent)
+    vn = ""
+    if styled == 1 {
+        vn = string.concat("c", string.from_int(ctr_next(ctr)))
+        _ = strbuilder.append(sb, vn)
+        _ = strbuilder.append(sb, " = ")
+    } else {
+        _ = strbuilder.append(sb, "_ = ")
+    }
+    _ = strbuilder.append(sb, "vg.")
+    _ = strbuilder.append(sb, tag)
+    if string.equals(tag, "rect") == 1 { } // tag matches verb name for all
+    _ = strbuilder.append(sb, "(node")
+    emit_geom_args_explicit(sb, node, tag)
+    _ = strbuilder.append(sb, ")\n")
+
+    if styled == 1 {
+        emit_style_explicit(sb, node, indent, vn)
+    }
+}
+
+// Geometry args (leading ", ") per shape, for the explicit vg.<verb>(node, …).
+emit_geom_args_explicit(sb: ptr, node: ptr, tag: string) {
+    if string.equals(tag, "circle") == 1 {
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "cx", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "cy", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "r", 0)
+        return
+    }
+    if string.equals(tag, "rect") == 1 {
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "x", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "y", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "width", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "height", 0)
+        return
+    }
+    if string.equals(tag, "line") == 1 {
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "x1", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "y1", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "x2", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "y2", 0)
+        return
+    }
+    if string.equals(tag, "path") == 1 {
+        d = ""
+        if parser.node_has_attr(node, "d") == 1 {
+            d = normalize_d_to_string(parser.node_attr(node, "d"))
+        }
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, escape_str(d))
+        _ = strbuilder.append(sb, "\"")
+        return
+    }
+    if string.equals(tag, "text") == 1 {
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "x", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "y", 0)
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, escape_str(parser.node_text(node)))
+        _ = strbuilder.append(sb, "\"")
+        return
+    }
+}
+
+// Emit vg.fill(vn, …) / vg.stroke(vn, …, w) / vg.opacity(vn, v) lines.
+emit_style_explicit(sb: ptr, node: ptr, indent: int, vn: string) {
+    fillv = style_attr(node, "fill")
+    if string.length(fillv) > 0 {
+        pad(sb, indent)
+        _ = strbuilder.append(sb, "vg.fill(")
+        _ = strbuilder.append(sb, vn)
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, escape_str(fillv))
+        _ = strbuilder.append(sb, "\")\n")
+    }
+    strokev = style_attr(node, "stroke")
+    if string.length(strokev) > 0 {
+        sw = style_attr(node, "stroke-width")
+        if string.length(sw) == 0 { sw = "1" }
+        pad(sb, indent)
+        _ = strbuilder.append(sb, "vg.stroke(")
+        _ = strbuilder.append(sb, vn)
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, escape_str(strokev))
+        _ = strbuilder.append(sb, "\", ")
+        _ = strbuilder.append(sb, as_float_literal(sw))
+        _ = strbuilder.append(sb, ")\n")
+    }
+    opv = style_attr(node, "opacity")
+    if string.length(opv) > 0 {
+        if is_numeric(opv) == 1 {
+            pad(sb, indent)
+            _ = strbuilder.append(sb, "vg.opacity(")
+            _ = strbuilder.append(sb, vn)
+            _ = strbuilder.append(sb, ", ")
+            _ = strbuilder.append(sb, as_float_literal(opv))
+            _ = strbuilder.append(sb, ")\n")
+        }
     }
 }
 
@@ -504,11 +729,40 @@ is_numeric(s: string) -> int {
 }
 
 // Render a numeric string as an Aether float literal (needs a "."):
-// "400" → "400.0"; "1.5" → "1.5".
+// "400" → "400.0"; "1.5" → "1.5". Robust to unit suffixes and junk: takes the
+// leading numeric run only, so "1px" → "1.0", "50%" → "50.0", "2.5pt" → "2.5".
+// No numeric prefix → "0.0" (keeps the generated source compilable).
 as_float_literal(s: string) -> string {
     t = string.trim(s)
-    if string.index_of(t, ".") >= 0 { return t }
-    return string.concat(t, ".0")
+    n = string.length(t)
+    out = strbuilder.new(n + 2)
+    i = 0
+    seen_digit = 0
+    seen_dot = 0
+    while i < n {
+        c = string.char_at(t, i)
+        is_digit = 0
+        if c >= 48 { if c <= 57 { is_digit = 1 } }
+        if i == 0 { if c == 45 { _ = strbuilder.append_byte(out, c) } }  // leading '-'
+        if is_digit == 1 {
+            _ = strbuilder.append_byte(out, c)
+            seen_digit = 1
+        } else {
+            if c == 46 {            // '.'
+                if seen_dot == 0 {
+                    _ = strbuilder.append_byte(out, c)
+                    seen_dot = 1
+                } else { i = n }    // second dot → stop
+            } else {
+                if i > 0 { i = n }  // first non-numeric (after sign) → stop
+            }
+        }
+        i = i + 1
+    }
+    num = strbuilder.finish(out)
+    if seen_digit == 0 { return "0.0" }
+    if string.index_of(num, ".") >= 0 { return num }
+    return string.concat(num, ".0")
 }
 
 // Escape backslash + double-quote for an Aether string literal,
