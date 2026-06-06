@@ -56,7 +56,8 @@ exports (
     // dispatch them with their final cached style after the block closes.
     scene_set_deferred, scene_is_deferred, vg_flush, scene_refresh,
     bind_to, bind_items, bind_trackby, bind_render, bind_update, bind_start,
-    animate, scene_animation_manager, scene_is_animating, scene_tick, scene_advance
+    animate, scene_animation_manager, scene_is_animating, scene_tick, scene_advance,
+    scene_add_live_region, scene_live_regions, scene_render_live_draws
 )
 
 import std.string
@@ -68,6 +69,7 @@ import grammar_events
 import grammar_reactive
 import grammar_bind
 import grammar_animations
+import live_region
 import parser
 
 extern malloc(size: int) -> ptr
@@ -99,6 +101,7 @@ struct VgScene {
     pending: ptr    // std.list of *VgPending (draw order); null until deferred
     event_state: ptr // *grammar_events.EventState — shared hover/drag/click state
     anim_mgr: ptr   // *grammar_animations.AnimationManager (null until animate)
+    live_regions: ptr // std.list of *live_region.LiveRegion (null until first)
 }
 
 // One deferred shape: enough to dispatch it after its style is known.
@@ -169,7 +172,7 @@ scene_canvas(p: ptr) -> int        { s = p as *VgScene; return s.canvas_id }
 // canvas" (headless / recording). vg_root wraps it as the root VgNode the
 // shape verbs accept as _ctx.
 scene_new(ctx: ptr, backend: ptr) -> ptr {
-    s = malloc(64) as *VgScene
+    s = malloc(80) as *VgScene
     s.ctx = ctx
     s.backend = backend
     s.canvas_id = 0
@@ -177,6 +180,7 @@ scene_new(ctx: ptr, backend: ptr) -> ptr {
     s.pending = null
     s.event_state = null
     s.anim_mgr = null
+    s.live_regions = null
     return s
 }
 
@@ -625,8 +629,60 @@ scene_animation_manager(scene: ptr) -> ptr {
 
 scene_is_animating(scene: ptr) -> int {
     s = scene as *VgScene
+    // A scene with any live region animates continuously (it produces new
+    // content every frame), as does one with active timed animations.
+    if s.live_regions != null {
+        if list.size(s.live_regions) > 0 { return 1 }
+    }
     if s.anim_mgr == null { return 0 }
     return grammar_animations.is_animating(s.anim_mgr)
+}
+
+// ─── live regions (video / game / generated, per-frame) ──────────
+//
+// Register a live region (from live_region.ae) on the scene. RASTER regions are
+// blitted by the live path (vg_live walks scene_live_regions and calls
+// canvas_draw_image); DRAW regions are rendered here via scene_render_live_draws
+// during flush. Both compose into the one backbuffer → atomic present.
+scene_add_live_region(scene: ptr, lr: ptr) {
+    s = scene as *VgScene
+    if s.live_regions == null { s.live_regions = list.new() }
+    _ = list.add(s.live_regions, lr)
+}
+
+scene_live_regions(scene: ptr) -> ptr {
+    s = scene as *VgScene
+    return s.live_regions
+}
+
+// Render every DRAW live region by invoking its callback with (region, t). The
+// callbacks emit vg shapes into the scene (eager dispatch against the scene's
+// ctx/backend), so they must run AFTER the normal flush, into the same buffer.
+// `t` is a caller-supplied normalized clock (the live loop derives it from
+// now_monotonic_ms; headless tests pass an explicit value).
+scene_render_live_draws(scene: ptr, t: float) {
+    s = scene as *VgScene
+    if s.live_regions == null { return }
+    // Draw callbacks dispatch EAGERLY (transient, per-frame) so their shapes go
+    // straight to the just-cleared buffer and leave no residue in `pending`
+    // (which would grow unboundedly across frames). An eager sub-scene shares
+    // this scene's ctx + backend.
+    eager = scene_new(s.ctx, s.backend)
+    eroot = vg_root(eager)
+    n = list.size(s.live_regions)
+    i = 0
+    while i < n {
+        item, _ = list.get(s.live_regions, i)
+        if live_region.region_kind(item) == live_region.LIVE_DRAW() {
+            df = live_region.region_draw_fn(item)
+            if df != null {
+                // Callback gets (eager_root_node, t): draws via the vg verbs
+                // against the eager scene, capture-free.
+                live_region.invoke_region_draw(df, eroot, t)
+            }
+        }
+        i = i + 1
+    }
 }
 
 // scene_advance(scene, now_ms) — advance animations to `now_ms` WITHOUT

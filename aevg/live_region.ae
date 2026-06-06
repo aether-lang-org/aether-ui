@@ -1,0 +1,104 @@
+// aevg/live_region.ae — live (per-frame-updated) regions of a vg scene.
+//
+// A live region is a rectangular area whose pixels are produced every frame by
+// a source. Two source kinds, one abstraction — a video decoder, a CPU game,
+// or a generated animation all feed a region the same way:
+//
+//   RASTER (kind 0): the region owns an RGBA8888 buffer (w*h*4). Each frame the
+//     source writes the current frame into it; the scene blits it at the
+//     region's rect (canvas_draw_image, in the live path). A video decoder
+//     pushes a decoded frame; a CPU renderer draws into it.
+//   DRAW   (kind 1): a per-frame callback fn(region, t) that emits vg shapes
+//     directly into the scene (e.g. a tumbling cube as projected lines). No
+//     buffer; composes into the same backbuffer as everything else.
+//
+// Glitch-free composition is free: the scene rebuilds the whole frame each tick
+// into one backbuffer that GTK presents atomically (see docs/aevg-live-regions
+// -plan.md) — no region algebra needed for correctness, only for later
+// optimization.
+//
+// This module is PURE (no aether_ui): it holds the region structs + buffers and
+// invokes draw callbacks. The RASTER blit needs the GTK canvas, so vg_live
+// walks live_raster_each and calls canvas_draw_image; this module just hands it
+// the rect + buffer.
+
+exports (
+    LIVE_RASTER, LIVE_DRAW,
+    live_raster_new, live_draw_new,
+    region_kind, region_x, region_y, region_w, region_h,
+    region_buffer, region_buffer_len,
+    region_draw_fn, invoke_region_draw
+)
+
+import std.string
+
+extern malloc(size: int) -> ptr
+
+LIVE_RASTER() -> int { return 0 }
+LIVE_DRAW()   -> int { return 1 }
+
+// A live region. For RASTER, `buffer` is an owned w*h*4 RGBA8888 buffer the
+// source writes each frame and the scene blits. For DRAW, `draw_fn` is a boxed
+// fn(region, t) closure invoked each frame; buffer is null.
+struct LiveRegion {
+    kind: int
+    x: float
+    y: float
+    w: float
+    h: float
+    buffer: ptr      // RASTER: owned RGBA8888 (w*h*4 bytes); DRAW: null
+    buffer_len: int  // w*h*4
+    draw_fn: ptr     // DRAW: boxed closure fn(region, t); RASTER: null
+}
+
+// live_raster_new(x,y,w,h) — a raster region with a freshly-allocated RGBA
+// buffer (zeroed-ish; the source overwrites it). w/h are integer pixel dims.
+live_raster_new(x: float, y: float, w: int, h: int) -> ptr {
+    r = malloc(64) as *LiveRegion
+    r.kind = 0
+    r.x = x
+    r.y = y
+    r.w = w / 1.0
+    r.h = h / 1.0
+    n = w * h * 4
+    r.buffer = malloc(n)
+    r.buffer_len = n
+    r.draw_fn = null
+    return r
+}
+
+// live_draw_new(x,y,w,h, draw_fn) — a region drawn by a per-frame callback.
+// draw_fn is a fn(region, t); the fn→ptr coercion at this boundary boxes it
+// into the ptr field (the grammar_events/grammar_bind handler-storage pattern).
+live_draw_new(x: float, y: float, w: float, h: float, draw_fn: fn) -> ptr {
+    r = malloc(64) as *LiveRegion
+    r.kind = 1
+    r.x = x
+    r.y = y
+    r.w = w
+    r.h = h
+    r.buffer = null
+    r.buffer_len = 0
+    r.draw_fn = draw_fn
+    return r
+}
+
+region_kind(p: ptr) -> int       { r = p as *LiveRegion; return r.kind }
+region_x(p: ptr) -> float        { r = p as *LiveRegion; return r.x }
+region_y(p: ptr) -> float        { r = p as *LiveRegion; return r.y }
+region_w(p: ptr) -> float        { r = p as *LiveRegion; return r.w }
+region_h(p: ptr) -> float        { r = p as *LiveRegion; return r.h }
+region_buffer(p: ptr) -> ptr     { r = p as *LiveRegion; return r.buffer }
+region_buffer_len(p: ptr) -> int { r = p as *LiveRegion; return r.buffer_len }
+region_draw_fn(p: ptr) -> ptr    { r = p as *LiveRegion; return r.draw_fn }
+
+// Invoke a DRAW region's callback with (region, t). The callback receives the
+// region ptr (so it can read its rect / write its buffer) — capture-free, the
+// way the animation tick must be (block-locals dangle once the defining scope
+// returns and the frame timer fires later).
+invoke_region_draw(p: ptr, region: ptr, t: float) {
+    inner_call_region_draw(p, region, t)
+}
+inner_call_region_draw(cb: fn, region: ptr, t: float) {
+    cb(region, t)
+}

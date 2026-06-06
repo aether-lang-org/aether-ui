@@ -1,0 +1,96 @@
+// aevg/test_live_region.ae — live regions: registration, draw-callback firing,
+// always-animating, raster buffer shape.
+//
+// The pixel composite (raster blit + draw shapes into one atomic backbuffer) is
+// verified by the headless-PNG composite test in commit 2 and the windowed
+// demo; here we pin the pure machinery: a registered live region makes the
+// scene animate, a DRAW region's callback fires with the supplied t (drawing
+// real vg shapes against the eager sub-scene), and a RASTER region carries a
+// correctly-sized buffer.
+
+import vg
+import live_region
+import aevg_backend
+import grammar_context
+import transform
+import std.string
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_near(label: string, got: float, want: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < 0.01 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = grammar_context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0, id)
+    return grammar_context.new_context(m)
+}
+
+// A recorder the draw callback writes to (capture-free closures get the region;
+// the recorder is a stable heap object, fine to capture).
+struct Rec { calls: int last_t: float drew: int }
+mk_rec() -> *Rec { r = malloc(16) as *Rec; r.calls = 0; r.last_t = 0.0; r.drew = 0; return r }
+
+main() {
+    println("=== test_live_region ===")
+
+    ctx = mk_ctx()
+    bk = aevg_backend.backend_new()
+    scene = vg.scene_new(ctx, bk)
+
+    // No live regions yet → not animating.
+    assert_eq_int("no live regions: not animating", vg.scene_is_animating(scene), 0)
+
+    // ─── RASTER region: buffer sized w*h*4 ──────────────────────
+    rr = live_region.live_raster_new(10.0, 20.0, 40, 30)
+    assert_eq_int("raster kind", live_region.region_kind(rr), live_region.LIVE_RASTER())
+    assert_near("raster x", live_region.region_x(rr), 10.0)
+    assert_near("raster y", live_region.region_y(rr), 20.0)
+    assert_eq_int("raster buffer_len = 40*30*4", live_region.region_buffer_len(rr), 4800)
+    if live_region.region_buffer(rr) != null { println("  PASS: raster buffer allocated") }
+    else { println("  FAIL: raster buffer null"); exit(1) }
+
+    vg.scene_add_live_region(scene, rr)
+    assert_eq_int("after raster add: animating", vg.scene_is_animating(scene), 1)
+
+    // ─── DRAW region: callback fires with t, draws shapes ───────
+    // The callback captures `rec` (a stable heap object) and receives the eager
+    // root node `rn` — it records the call and draws one circle via the vg verb.
+    rec = mk_rec()
+    dr = live_region.live_draw_new(0.0, 0.0, 50.0, 50.0) callback |rn: ptr, t: float| {
+        rec.calls = rec.calls + 1
+        rec.last_t = t
+        _ = vg.circle(rn, 25.0, 25.0, 10.0)
+    }
+    vg.scene_add_live_region(scene, dr)
+
+    // Render the draw regions at t=0.25 → callback fires once, sees t, and its
+    // shape dispatched to the (eager) backend.
+    n_before = aevg_backend.backend_call_count(bk)
+    vg.scene_render_live_draws(scene, 0.25)
+    assert_eq_int("draw callback fired once", rec.calls, 1)
+    assert_near("draw callback saw t=0.25", rec.last_t, 0.25)
+    n_after = aevg_backend.backend_call_count(bk)
+    assert_eq_int("draw region dispatched 1 shape", n_after - n_before, 1)
+
+    // Render again at t=0.75 → fires again (transient, no accumulation).
+    vg.scene_render_live_draws(scene, 0.75)
+    assert_eq_int("draw callback fired twice", rec.calls, 2)
+    assert_near("draw callback saw t=0.75", rec.last_t, 0.75)
+
+    // Two live regions registered.
+    if vg.scene_live_regions(scene) != null { println("  PASS: live_regions list present") }
+    else { println("  FAIL: live_regions null"); exit(1) }
+
+    println("=== test_live_region passed ===")
+}
