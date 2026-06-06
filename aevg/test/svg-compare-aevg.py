@@ -214,10 +214,16 @@ def generate_html(results: list[dict], html_path: Path, has_transpile: bool):
             panel('Reference (librsvg)', r['ref_uri'], 'ref'),
             panel(f'Loader · {mae_str}', r.get('loader_uri'), 'loader'),
         ]
+        # Transpiler-gap flag: loader renders well but the transpiled output
+        # doesn't (or fails). Isolates a transpiler-fidelity bug from a renderer
+        # bug — those are the rows to look at when improving the transpiler.
+        tgap = ''
         if has_transpile:
             tm = r['transpiled_mae']
-            tlabel = f'Transpiled · MAE {tm:.1f}' if tm >= 0 else 'Transpiled · —'
+            tlabel = f'Transpiled · MAE {tm:.1f}' if tm >= 0 else 'Transpiled · — (no render)'
             cols.append(panel(tlabel, r.get('transpiled_uri'), 'transpiled'))
+            if m >= 0 and m < 20 and (tm < 0 or tm > m + 15):
+                tgap = '<span class="badge tgap">TRANSPILER GAP</span>'
 
         src = html_mod.escape(r.get('svg_source', ''))
         tsrc = html_mod.escape(r.get('transpiled_source', ''))
@@ -228,9 +234,10 @@ def generate_html(results: list[dict], html_path: Path, has_transpile: bool):
             src_blocks += f'<div class="srcpane" data-k="ae"><pre><code>{tsrc}</code></pre></div>'
 
         rows.append(f'''
-    <div class="cmp" data-bucket="{b}">
+    <div class="cmp" data-bucket="{b}" data-tgap="{1 if tgap else 0}">
       <div class="hdr"><span class="name">{r['name']}</span>
         <span class="badge {b}">{badge}</span>
+        {tgap}
         <span class="links">{src_links}</span></div>
       <div class="imgs">{''.join(cols)}</div>
       {src_blocks}
@@ -254,6 +261,7 @@ def generate_html(results: list[dict], html_path: Path, has_transpile: bool):
  .badge{{padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700}}
  .badge.good{{background:#d4edda;color:#155724}} .badge.ok{{background:#fff3cd;color:#856404}}
  .badge.diff{{background:#f8d7da;color:#721c24}} .badge.none{{background:#e2e3e5;color:#383d41}}
+ .badge.tgap{{background:#e0d4f8;color:#4a2a72}}
  .imgs{{display:flex;gap:14px;flex-wrap:wrap}}
  .panel{{text-align:center}} .panel img,.no-shot{{width:300px;height:300px;border:1px solid #ddd;background:#fff}}
  .no-shot{{display:flex;align-items:center;justify-content:center;color:#bbb;font-size:24px}}
@@ -272,6 +280,7 @@ def generate_html(results: list[dict], html_path: Path, has_transpile: bool):
   <button data-f="diff" onclick="setf(this)">Diff</button>
   <button data-f="ok" onclick="setf(this)">OK</button>
   <button data-f="good" onclick="setf(this)">Good</button>
+  <button data-f="tgap" onclick="setf(this)">Transpiler gap</button>
  </div>
 </div>
 <div id="list">{''.join(rows)}</div>
@@ -281,7 +290,8 @@ function setf(b){{cf=b.dataset.f;document.querySelectorAll('.filters button').fo
 function flt(){{var q=document.getElementById('q').value.toLowerCase();
  document.querySelectorAll('.cmp').forEach(function(e){{
   var n=e.querySelector('.name').textContent.toLowerCase();
-  var ok=(cf=='all'||e.dataset.bucket==cf)&&(!q||n.includes(q));
+  var match = cf=='all' || (cf=='tgap' ? e.dataset.tgap=='1' : e.dataset.bucket==cf);
+  var ok=match&&(!q||n.includes(q));
   e.style.display=ok?'':'none';}});}}
 function tog(a,k){{var c=a.closest('.cmp');var p=c.querySelector('.srcpane[data-k="'+k+'"]');
  var open=p.style.display=='block';c.querySelectorAll('.srcpane').forEach(x=>x.style.display='none');
