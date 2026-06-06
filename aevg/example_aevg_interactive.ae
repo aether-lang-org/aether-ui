@@ -9,10 +9,11 @@
 // Click the red circle → turns green. Click the blue rect → turns orange.
 
 import aether_ui                  // full — transitive canvas_* must resolve
-import aether_ui (window)         // companion — bare `window`
+import aether_ui (window, enable_test_server)   // companion — bare names
 import vg_live (vg)
 import vg                         // full — vg_live uses vg.scene_new transitively
 import vg (view_box, circle, rect, text, fill, stroke, on_click_recolor)
+import std.os (os_getenv)
 
 main() {
     window("AeVG — click to recolour", 420, 360) {
@@ -33,6 +34,13 @@ main() {
             text(8, 90, "click the shapes") {
                 fill("#222222")
             }
+        }
+        // Optional driver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+        // (POST /canvas/1/click?x=&y= drives shape clicks; GET /screenshot
+        // captures the result). Off by default — a plain window otherwise.
+        test_port = os_getenv("AETHER_UI_TEST_PORT")
+        if test_port != null {
+            enable_test_server(9222)
         }
     }
 }

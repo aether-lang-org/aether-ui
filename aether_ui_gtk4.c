@@ -1844,6 +1844,7 @@ void aether_ui_clear_children_impl(int handle) {
 //   POST /widget/{id}/set_value?v=X — set slider value
 //   GET  /state/{id}                — get reactive state value
 //   POST /state/{id}/set?v=X        — set reactive state value
+//   POST /canvas/{id}/click?x=&y=   — click a canvas at (x,y); hit-tests AeVG shapes
 // ---------------------------------------------------------------------------
 
 #include <sys/socket.h>
@@ -2081,6 +2082,30 @@ static gboolean test_action_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+// Canvas click — fires a canvas's registered on_click closure with (x, y) on
+// the GTK thread, exactly as the GtkGestureClick "pressed" handler would. Lets
+// the HTTP driver exercise AeVG vg-scene shape clicks (hit-tested + recoloured)
+// that the widget-level /widget/{id}/click can't reach.
+typedef struct {
+    int canvas_id;
+    double x, y;
+    int done;
+    int result;  // 0=ok, 3=no such canvas / no handler
+} CanvasClickAction;
+
+static gboolean canvas_click_idle(gpointer data) {
+    CanvasClickAction* a = (CanvasClickAction*)data;
+    CanvasState* cs = get_canvas_state(a->canvas_id);
+    if (cs && cs->on_click && cs->on_click->fn) {
+        ((void(*)(void*, double, double))cs->on_click->fn)(cs->on_click->env, a->x, a->y);
+        a->result = 0;
+    } else {
+        a->result = 3;
+    }
+    a->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
 static void send_response(int fd, int status, const char* status_text,
                            const char* content_type, const char* body) {
     char header[512];
@@ -2296,6 +2321,31 @@ static void handle_test_request(int client_fd) {
     TestAction ta = {0};
     ta.done = 0;
     ta.result = 3;
+
+    // POST /canvas/{id}/click?x=..&y=.. — fire a canvas's on_click at (x, y).
+    // Hit-tests AeVG vg-scene shapes (per-element handlers), unlike the
+    // widget-level click which has no coordinates.
+    if (method == 1 && strncmp(path, "/canvas/", 8) == 0) {
+        char* action_part = strchr(path + 8, '/');
+        if (action_part && strncmp(action_part, "/click", 6) == 0) {
+            CanvasClickAction ca = {0};
+            ca.canvas_id = atoi(path + 8);
+            const char* xs = extract_query_param(path, "x");
+            const char* ys = extract_query_param(path, "y");
+            ca.x = xs ? atof(xs) : 0.0;
+            ca.y = ys ? atof(ys) : 0.0;
+            g_idle_add(canvas_click_idle, &ca);
+            while (!ca.done) usleep(1000);
+            if (ca.result == 0) {
+                send_response(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+            } else {
+                send_response(client_fd, 404, "Not Found", "application/json",
+                              "{\"error\":\"no canvas click handler\"}");
+            }
+            close(client_fd);
+            return;
+        }
+    }
 
     // POST /widget/{id}/click
     if (method == 1 && strncmp(path, "/widget/", 8) == 0) {
