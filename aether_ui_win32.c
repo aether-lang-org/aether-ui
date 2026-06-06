@@ -2346,6 +2346,13 @@ int aether_ui_canvas_get_widget(int canvas_id) {
     return handle_for_hwnd(canvases[canvas_id - 1].hwnd);
 }
 
+// Resize hook — honest stub. Win32 WM_SIZE → re-map + re-flush is not wired
+// yet; the vg scene renders at its initial size and does not rescale on window
+// resize on Win32. Tracked for parity with the GTK backend.
+void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
 // begin_path starts a fresh command stream — drop any previously-recorded
 // commands so a redraw-per-frame loop doesn't accumulate unboundedly.
 // Previously this was an append-only op, which meant an animated canvas

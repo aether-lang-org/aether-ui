@@ -59,11 +59,7 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
     backend = aevg_gtk_backend.gtk_backend_new(canvas_id)
 
     // AevgContext: viewBox → canvas mapping at w×h px.
-    opts = grammar_factories.opts_new()
-    grammar_factories.opts_set_view_box(opts, vb)
-    grammar_factories.opts_set_width(opts, int_to_f(w))
-    grammar_factories.opts_set_height(opts, int_to_f(h))
-    ctx = grammar_factories.create_aevg_context(opts)
+    ctx = _build_ctx(vb, w, h)
 
     // Wrap (ctx, backend, canvas) in a vg scene + root node. The canvas id is
     // stored on the scene (vg.scene_set_canvas) so vg_redraw can present it.
@@ -77,7 +73,30 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
         vg.vg_flush(scene)
         aether_ui.canvas_redraw(canvas_id)
     }
+    // Resize: rescale the scene to the new canvas allocation. The hook fires
+    // from the draw func with the new (rw, rh); rebuild the viewBox→canvas
+    // mapping at that size, swap it into the scene, clear the stale command
+    // buffer, and re-flush the recorded shapes — they re-map through the new
+    // context, so the vector scene crisply rescales. The viewBox (vb) is fixed
+    // SVG space, so only the mapping changes. (No canvas_redraw here: the hook
+    // runs INSIDE the draw func, which replays the freshly-flushed buffer.)
+    aether_ui.canvas_on_resize(canvas_id) callback |rw: int, rh: int| {
+        new_ctx = _build_ctx(vb, rw, rh)
+        vg.scene_set_ctx(scene, new_ctx)
+        aether_ui.canvas_clear(canvas_id)
+        vg.vg_flush(scene)
+    }
     return vg.vg_root(scene)
+}
+
+// Build a fresh AevgContext (viewBox→canvas mapping) for a w×h canvas.
+// Reused by vg() at create time and by the resize hook to re-map.
+_build_ctx(vb: string, w: int, h: int) -> ptr {
+    opts = grammar_factories.opts_new()
+    grammar_factories.opts_set_view_box(opts, vb)
+    grammar_factories.opts_set_width(opts, int_to_f(w))
+    grammar_factories.opts_set_height(opts, int_to_f(h))
+    return grammar_factories.create_aevg_context(opts)
 }
 
 // vg_redraw — present the scene's canvas (the id stored by vg()).

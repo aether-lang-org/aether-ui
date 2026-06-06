@@ -43,7 +43,7 @@ exports (
     fill, stroke, opacity,
     // Scene construction — backend-agnostic (recording stub, GTK adapter, …).
     scene_new, vg_root, node_element, scene_ctx, scene_backend, node_scene,
-    scene_set_canvas, scene_canvas, mk_node,
+    scene_set_canvas, scene_canvas, scene_set_ctx, mk_node,
     // Deferred flush (the live path): record shapes during the block, then
     // dispatch them with their final cached style after the block closes.
     scene_set_deferred, scene_is_deferred, vg_flush
@@ -115,6 +115,12 @@ node_payload(p: ptr) -> ptr { n = p as *VgNode; return n.payload }
 
 scene_ctx(p: ptr) -> ptr     { s = p as *VgScene; return s.ctx }
 scene_backend(p: ptr) -> ptr { s = p as *VgScene; return s.backend }
+
+// scene_set_ctx — swap the AevgContext (viewBox→canvas mapping). Used on
+// resize: rebuild the mapping for the new canvas size, swap it in, then
+// re-run vg_flush so the recorded shapes re-dispatch at the new scale. The
+// pending list lives on the scene, not the context, so it survives the swap.
+scene_set_ctx(p: ptr, ctx: ptr) { s = p as *VgScene; s.ctx = ctx }
 
 // canvas_id accessors — the live vg verb (vg_live.ae) stores the aether_ui
 // canvas handle here so vg_redraw can present it. 0 = headless / recording.

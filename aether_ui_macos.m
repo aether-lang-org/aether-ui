@@ -1486,6 +1486,14 @@ int aether_ui_canvas_get_widget(int canvas_id) {
     return cs ? cs->widget_handle : 0;
 }
 
+// Resize hook — honest stub. AppKit live-resize delivery (NSView
+// setFrameSize: → re-map + re-flush) is not wired yet; the vg scene renders
+// at its initial size and does not rescale on window resize on macOS. Tracked
+// for parity with the GTK backend.
+void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_BEGIN_PATH });
 }

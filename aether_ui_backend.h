@@ -168,6 +168,11 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
 // Canvas drawing (Group 6)
 int aether_ui_canvas_create_impl(int width, int height);
 int aether_ui_canvas_get_widget(int canvas_id);
+// Register a resize hook: the boxed closure (taking new w, h) fires when the
+// canvas allocation changes. AeVG's vg{} scope uses it to re-map its viewBox
+// and re-flush its shapes at the new scale, so a resized window rescales the
+// vector scene. No-op on backends without live resize delivery.
+void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure);
 void aether_ui_canvas_begin_path_impl(int canvas_id);
 void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y);
 void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y);

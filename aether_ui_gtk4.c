@@ -1299,6 +1299,12 @@ typedef struct {
     int count;
     int capacity;
     int widget_handle;
+    // Resize hook — the AeVG vg{} scope registers a closure here so it can
+    // re-map its viewBox and re-flush its shapes at the new canvas size. Fired
+    // from the draw func when the allocation differs from last_w/last_h.
+    AeClosure* on_resize;
+    int last_w;
+    int last_h;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -1440,9 +1446,22 @@ static void canvas_replay(cairo_t* cr, CanvasState* cs) {
 
 static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
                               int width, int height, gpointer data) {
-    (void)area; (void)width; (void)height;
+    (void)area;
     int canvas_id = (int)(intptr_t)data;
-    canvas_replay(cr, get_canvas_state(canvas_id));
+    CanvasState* cs = get_canvas_state(canvas_id);
+    // Resize: GTK re-invokes the draw func with the new allocation. If a
+    // scene registered a resize hook and the size changed, fire it so it can
+    // re-map + re-flush its shapes at the new scale BEFORE we replay. The hook
+    // receives (w, h) and must rebuild the command buffer (clear + re-dispatch);
+    // it must NOT queue another draw (we're already drawing).
+    if (cs && cs->on_resize && cs->on_resize->fn &&
+        (width != cs->last_w || height != cs->last_h)) {
+        cs->last_w = width;
+        cs->last_h = height;
+        ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
+            cs->on_resize->env, (intptr_t)width, (intptr_t)height);
+    }
+    canvas_replay(cr, cs);
 }
 
 // Render the canvas command buffer to a PNG file off-screen — works HEADLESS
@@ -1482,6 +1501,9 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->cmds = NULL;
     cs->count = 0;
     cs->capacity = 0;
+    cs->on_resize = NULL;
+    cs->last_w = width;
+    cs->last_h = height;
     canvas_state_count++;
     int canvas_id = canvas_state_count; // 1-based
 
@@ -1495,6 +1517,19 @@ int aether_ui_canvas_create_impl(int width, int height) {
 int aether_ui_canvas_get_widget(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     return cs ? cs->widget_handle : 0;
+}
+
+// Register a resize hook on a canvas. The boxed Aether closure takes (w, h)
+// and is fired from the draw func when the allocation changes (see
+// canvas_draw_func). AeVG's vg{} scope uses this to rescale its scene.
+void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return;
+    cs->on_resize = (AeClosure*)boxed_closure;
+    // Seed last_w/h to the widget's content size so the first real allocation
+    // that differs triggers a remap. (0 would fire spuriously on first draw.)
+    cs->last_w = -1;
+    cs->last_h = -1;
 }
 
 void aether_ui_canvas_begin_path_impl(int canvas_id) {

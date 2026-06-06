@@ -39,6 +39,15 @@ mk_ctx() -> ptr {
     return grammar_context.new_context(m)
 }
 
+// A context that maps the 0..100 viewBox onto a 200×200 canvas — scale 2.0.
+// Used to verify that re-mapping a deferred scene + re-flushing rescales it
+// (the resize path, headless).
+mk_ctx_2x() -> ptr {
+    sx = transform.affine_scale(2.0, 2.0)
+    m = grammar_context.mapping_new(0.0, 0.0, 100.0, 100.0, 200.0, 200.0, 2.0, 0.0, 0.0, sx)
+    return grammar_context.new_context(m)
+}
+
 parse_opt(bk: ptr, i: int, key: string) -> float {
     s = aevg_backend.backend_opt_get(bk, i, key)
     v, _ = string.to_double(s)
@@ -115,6 +124,23 @@ main() {
                   aevg_backend.backend_kind(dbk, 0), "circle")
     // The fill set AFTER the shape reached the backend call — the bug's fix.
     assert_eq_str("deferred: final fill folded into dispatch",
+                  aevg_backend.backend_opt_get(dbk, 0, "fillColor"), "#abc123")
+    // At 1× (identity), the circle's bbox x = cx - r = 50 - 20 = 30.
+    assert_near("deferred 1x: circle bbox x", parse_opt(dbk, 0, "x"), 30.0)
+
+    // ── re-map + re-flush (the resize path, headless) ───────────────
+    // Swap in a 2× context, clear the recording, re-flush. vg_flush must be
+    // re-runnable, and the SAME recorded shape must re-map at the new scale:
+    // bbox x = (50 - 20) * 2 = 60. This is exactly what the live resize hook
+    // does (rebuild ctx for the new size → scene_set_ctx → clear → vg_flush).
+    vg.scene_set_ctx(dscene, mk_ctx_2x())
+    aevg_backend.backend_clear(dbk)
+    vg.vg_flush(dscene)
+    assert_eq_int("resize: re-flush re-dispatched",
+                  aevg_backend.backend_call_count(dbk), 1)
+    assert_near("resize: circle bbox x doubled at 2x", parse_opt(dbk, 0, "x"), 60.0)
+    // Style survives the re-map (fill still folded in on re-flush).
+    assert_eq_str("resize: fill preserved across re-flush",
                   aevg_backend.backend_opt_get(dbk, 0, "fillColor"), "#abc123")
 
     println("=== test_vg passed ===")

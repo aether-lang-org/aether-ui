@@ -13,7 +13,7 @@ exports (
     DIST_FILL, DIST_FILL_EQUALLY,
     root_vstack, root_hstack,
     window, window_run, render_to, record, surface_diagnostics,
-    register_deferred_flush,
+    register_deferred_flush, canvas_on_resize,
     _surface_window_factory, _surface_render_factory, _surface_record_factory,
     app_run, app_create, app_start,
     vstack, hstack, scrollview, zstack, form, section, navstack,
@@ -66,6 +66,7 @@ extern aether_ui_surface_note_interactive_impl(container_handle: int) -> int
 extern aether_ui_surface_diag_count_impl(container_handle: int) -> int
 extern aether_ui_register_deferred_flush_impl(boxed_closure: ptr)
 extern aether_ui_surface_flush_deferred_impl()
+extern aether_ui_canvas_on_resize_impl(canvas_id: int, boxed_closure: ptr)
 
 extern aether_ui_text_create(label: string) -> int
 extern aether_ui_text_set_string(handle: int, text: string)
@@ -349,6 +350,14 @@ surface_diagnostics(container_handle: int) -> int {
 register_deferred_flush(cb: fn) {
     boxed = box_closure(cb)
     aether_ui_register_deferred_flush_impl(boxed)
+}
+
+// canvas_on_resize(cid, cb) — fire cb(w, h) when the canvas allocation changes.
+// AeVG's vg{} scope uses this to rescale its scene on window resize. cb takes
+// the new width and height as ints.
+canvas_on_resize(cid: int, cb: fn) {
+    boxed = box_closure(cb)
+    aether_ui_canvas_on_resize_impl(cid, boxed)
 }
 
 // window_run — the explicit-root window form, sibling to `window {…}`.
