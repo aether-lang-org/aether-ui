@@ -1582,7 +1582,8 @@ static void macos_copy_stops(CanvasCmd* c, int n_stops,
 
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
-        int n_stops, void* offsets, void* rgba, double line_width) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+    (void)extend; // spreadMethod not yet honored on the CoreGraphics backend
     CanvasCmd cmd = { .type = CANVAS_FILL_LINEAR,
                       .gx1 = x1, .gy1 = y1, .gx2 = x2, .gy2 = y2,
                       .grad_line_width = line_width };
@@ -1592,7 +1593,8 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
 
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
-        int n_stops, void* offsets, void* rgba, double line_width) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+    (void)extend; // spreadMethod not yet honored on the CoreGraphics backend
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
                       .grad_line_width = line_width };

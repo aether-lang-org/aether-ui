@@ -338,20 +338,29 @@ apply_gradient(cid: int, opts: ptr, prefix: string, grad_type: string, line_widt
     }
     if valid == 0 { return }
 
+    extend = spread_to_extend(opt_s(opts, string.concat(prefix, "Spread")))
+
     if string.equals(grad_type, "radial") == 1 {
         cx = opt_f(opts, string.concat(prefix, "CX"), 0.0)
         cy = opt_f(opts, string.concat(prefix, "CY"), 0.0)
         r  = opt_f(opts, string.concat(prefix, "R"),  0.0)
         fx = opt_f(opts, string.concat(prefix, "FX"), cx)
         fy = opt_f(opts, string.concat(prefix, "FY"), cy)
-        aether_ui.canvas_fill_radial_gradient(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width)
+        aether_ui.canvas_fill_radial_gradient(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width, extend)
     } else {
         x1 = opt_f(opts, string.concat(prefix, "X1"), 0.0)
         y1 = opt_f(opts, string.concat(prefix, "Y1"), 0.0)
         x2 = opt_f(opts, string.concat(prefix, "X2"), 0.0)
         y2 = opt_f(opts, string.concat(prefix, "Y2"), 0.0)
-        aether_ui.canvas_fill_linear_gradient(cid, x1, y1, x2, y2, valid, offsets, rgba, line_width)
+        aether_ui.canvas_fill_linear_gradient(cid, x1, y1, x2, y2, valid, offsets, rgba, line_width, extend)
     }
+}
+
+// SVG spreadMethod string → cairo extend code (0=pad, 1=reflect, 2=repeat).
+spread_to_extend(spread: string) -> int {
+    if string.equals(spread, "reflect") == 1 { return 1 }
+    if string.equals(spread, "repeat") == 1 { return 2 }
+    return 0
 }
 
 // Replay a polyline token stream into the canvas as a path (no

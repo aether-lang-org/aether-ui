@@ -1290,6 +1290,7 @@ typedef struct {
     // grad_line_width: 0 → fill the path; >0 → stroke it at that width.
     double gx1, gy1, gx2, gy2, gr, gfx, gfy, grad_line_width;
     int n_stops;
+    int grad_extend;         // 0=pad, 1=reflect, 2=repeat (SVG spreadMethod)
     double* stop_off;        // owned: n_stops offsets (0..1)
     double* stop_rgba;       // owned: n_stops*4 colour comps (0..1)
 } CanvasCmd;
@@ -1424,6 +1425,14 @@ static void canvas_replay(cairo_t* cr, CanvasState* cs) {
                     cairo_pattern_add_color_stop_rgba(pat, c->stop_off[si],
                         c->stop_rgba[si*4+0], c->stop_rgba[si*4+1],
                         c->stop_rgba[si*4+2], c->stop_rgba[si*4+3]);
+                }
+                // SVG spreadMethod → cairo extend (pad is the cairo default).
+                if (c->grad_extend == 1) {
+                    cairo_pattern_set_extend(pat, CAIRO_EXTEND_REFLECT);
+                } else if (c->grad_extend == 2) {
+                    cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+                } else {
+                    cairo_pattern_set_extend(pat, CAIRO_EXTEND_PAD);
                 }
                 cairo_set_source(cr, pat);
                 if (c->grad_line_width > 0) {
@@ -1636,20 +1645,20 @@ static void canvas_copy_stops(CanvasCmd* c, int n_stops,
 
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
-        int n_stops, void* offsets, void* rgba, double line_width) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
     CanvasCmd cmd = { .type = CANVAS_FILL_LINEAR,
                       .gx1 = x1, .gy1 = y1, .gx2 = x2, .gy2 = y2,
-                      .grad_line_width = line_width };
+                      .grad_line_width = line_width, .grad_extend = extend };
     canvas_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);
 }
 
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
-        int n_stops, void* offsets, void* rgba, double line_width) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
-                      .grad_line_width = line_width };
+                      .grad_line_width = line_width, .grad_extend = extend };
     canvas_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);
 }

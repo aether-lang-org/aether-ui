@@ -132,6 +132,21 @@ main() {
     assert_opt_near("radial: gradCX=50", bk3, 0, "gradCX", 50.0)
     assert_opt_near("radial: gradCY=50", bk3, 0, "gradCY", 50.0)
     assert_opt_near("radial: gradR=50",  bk3, 0, "gradR",  50.0)
+    // No spreadMethod attr → defaults to "pad".
+    assert_eq_str("radial: gradSpread default pad",
+                  aevg_backend.backend_opt_get(bk3, 0, "gradSpread"), "pad")
+
+    // ─── spreadMethod="reflect" → gradSpread=reflect ──────────
+    ctx_sp = mk_ctx()
+    bk_sp = aevg_backend.backend_new()
+    sp = "<svg><defs><radialGradient id='sp' cx='0.5' cy='0.5' r='0.5' spreadMethod='reflect'><stop offset='0' stop-color='#fff'/><stop offset='1' stop-color='#000'/></radialGradient></defs></svg>"
+    root_sp = parser.parse_svg(sp)
+    defs_sp = parser.node_child_at(root_sp, 0)
+    _ = grammar_defs.parse_gradient(ctx_sp, parser.node_child_at(defs_sp, 0))
+    a_sp = mk_path_attrs("M 0 0 L 100 0 L 100 100 Z", "url(#sp)")
+    _ = grammar_shapes.shape_path(ctx_sp, bk_sp, a_sp)
+    assert_eq_str("spread: gradSpread=reflect",
+                  aevg_backend.backend_opt_get(bk_sp, 0, "gradSpread"), "reflect")
 
     // ─── Gradient stroke → strokeGradType + strokeGradStops ───
     ctx4 = mk_ctx()

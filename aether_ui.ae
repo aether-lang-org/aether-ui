@@ -223,10 +223,10 @@ extern aether_ui_canvas_draw_image_impl(canvas_id: int, x: float, y: float,
                                         rgba: string, byte_len: int)
 extern aether_ui_canvas_fill_linear_gradient_impl(canvas_id: int,
         x1: float, y1: float, x2: float, y2: float,
-        n_stops: int, offsets: ptr, rgba: ptr, line_width: float)
+        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int)
 extern aether_ui_canvas_fill_radial_gradient_impl(canvas_id: int,
         cx: float, cy: float, radius: float, fx: float, fy: float,
-        n_stops: int, offsets: ptr, rgba: ptr, line_width: float)
+        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int)
 extern aether_ui_canvas_fill_rect_impl(canvas_id: int, x: float, y: float,
                                   w: float, h: float,
                                   r: float, g: float, b: float, a: float)
@@ -895,18 +895,19 @@ canvas_draw_image(cid: int, x: float, y: float, iw: int, ih: int,
 // (x2,y2). `offsets` is a floatarr of n_stops stop positions (0..1);
 // `rgba` is a floatarr of n_stops*4 colour components (0..1, RGBA).
 // line_width = 0 fills the path; > 0 strokes it at that width.
+// extend = SVG spreadMethod: 0=pad, 1=reflect, 2=repeat.
 canvas_fill_linear_gradient(cid: int, x1: float, y1: float, x2: float, y2: float,
-                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float) {
-    aether_ui_canvas_fill_linear_gradient_impl(cid, x1, y1, x2, y2, n_stops, offsets, rgba, line_width)
+                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int) {
+    aether_ui_canvas_fill_linear_gradient_impl(cid, x1, y1, x2, y2, n_stops, offsets, rgba, line_width, extend)
 }
 
 // Paint the current path with a radial gradient: center (cx,cy),
 // radius, focal point (fx,fy). Stops as for the linear variant.
-// line_width = 0 fills; > 0 strokes.
+// line_width = 0 fills; > 0 strokes. extend = SVG spreadMethod.
 canvas_fill_radial_gradient(cid: int, cx: float, cy: float, radius: float,
                             fx: float, fy: float,
-                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float) {
-    aether_ui_canvas_fill_radial_gradient_impl(cid, cx, cy, radius, fx, fy, n_stops, offsets, rgba, line_width)
+                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int) {
+    aether_ui_canvas_fill_radial_gradient_impl(cid, cx, cy, radius, fx, fy, n_stops, offsets, rgba, line_width, extend)
 }
 
 canvas_clear(cid: int) {

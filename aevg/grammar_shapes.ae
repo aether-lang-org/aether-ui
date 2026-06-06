@@ -183,6 +183,12 @@ emit_gradient_for(ctx: ptr, style: ptr, opts: ptr, source_key: string, prefix: s
     user_space = 0
     if string.equals(units, "userSpaceOnUse") == 1 { user_space = 1 }
 
+    // spreadMethod → ${prefix}Spread opt (the adapter maps it to a cairo
+    // extend mode). Default "pad" when unset.
+    spread = grammar_defs.gradient_spread_method(gdef)
+    if string.length(spread) == 0 { spread = "pad" }
+    opt_set_s(opts, string.concat(prefix, "Spread"), spread)
+
     if gtype == grammar_defs.GRADIENT_RADIAL() {
         opt_set_s(opts, string.concat(prefix, "Type"), "radial")
         gcx = grammar_defs.gradient_cx(gdef)

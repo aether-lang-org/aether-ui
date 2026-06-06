@@ -2461,7 +2461,8 @@ static void win32_copy_stops(CanvasCmd* c, int n_stops,
 
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
-        int n_stops, void* offsets, void* rgba, double line_width) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+    (void)extend; // spreadMethod not yet honored on the GDI+ backend
     CanvasCmd c = {0};
     c.k = CV_FILL_LINEAR; c.gx1 = x1; c.gy1 = y1; c.gx2 = x2; c.gy2 = y2;
     c.grad_line_width = line_width;
@@ -2471,7 +2472,8 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
 
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
-        int n_stops, void* offsets, void* rgba, double line_width) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+    (void)extend; // spreadMethod not yet honored on the GDI+ backend
     CanvasCmd c = {0};
     c.k = CV_FILL_RADIAL; c.gx1 = cx; c.gy1 = cy; c.gr = radius;
     c.gfx = fx; c.gfy = fy; c.grad_line_width = line_width;
