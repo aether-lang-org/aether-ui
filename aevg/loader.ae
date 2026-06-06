@@ -457,6 +457,13 @@ load_svg(backend: ptr, svg_string: string, canvas_w: float, canvas_h: float) -> 
 
     ctx = grammar_factories.create_aevg_context(opts)
 
+    // Seed the base style frame with the root <svg>'s presentation attributes,
+    // so they inherit to every child (matches TS createCvgContext's rootStyle).
+    // caution.svg sets stroke="#000" on <svg> — without this the outline +
+    // exclamation-bar strokes vanish (they carry only stroke-width, inheriting
+    // the colour from the root).
+    seed_root_style(ctx, root)
+
     // First pass: index every node with an id into ctx.nodes_by_id.
     // <use> elements look here for their href target.
     index_nodes(ctx, root)
@@ -484,6 +491,31 @@ load_svg_default(backend: ptr, svg_string: string) -> ptr {
 // no high-precision tail).
 float_to_str(f: float) -> string {
     return string.from_float(f)
+}
+
+// Copy the root <svg>'s presentation attributes into the base style frame so
+// they cascade to every child (TS: createCvgContext's rootStyle → styleStack[0]).
+// The base frame is the seeded empty map at the bottom of the style stack.
+seed_root_style(ctx: ptr, root: ptr) {
+    base = grammar_style.current_style(ctx)
+    if base == null { return }
+    seed_one(base, root, "fill")
+    seed_one(base, root, "stroke")
+    seed_one(base, root, "stroke-width")
+    seed_one(base, root, "stroke-linecap")
+    seed_one(base, root, "stroke-linejoin")
+    seed_one(base, root, "stroke-opacity")
+    seed_one(base, root, "fill-opacity")
+    seed_one(base, root, "fill-rule")
+    seed_one(base, root, "opacity")
+    seed_one(base, root, "font-size")
+    seed_one(base, root, "font-family")
+}
+
+seed_one(base: ptr, root: ptr, key: string) {
+    if parser.node_has_attr(root, key) == 1 {
+        _ = map.put(base, key, parser.node_attr(root, key))
+    }
 }
 
 // Intrinsic viewBox from the content's bounding box, for a bare <svg> with no
