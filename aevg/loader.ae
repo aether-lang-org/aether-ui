@@ -40,6 +40,7 @@ import grammar_utils
 import grammar_defs
 import grammar_style
 import grammar_rendering
+import bbox
 import grammar_css
 
 extern malloc(size: int) -> ptr
@@ -388,7 +389,8 @@ copy_if_present(dst: ptr, src: ptr, key: string) {
 load_svg(backend: ptr, svg_string: string, canvas_w: float, canvas_h: float) -> ptr {
     root = parser.parse_svg(svg_string)
 
-    // Determine viewBox: explicit attr > width/height > canvas.
+    // Determine viewBox: explicit attr > width/height > computed content
+    // bounds (intrinsic sizing) > canvas default.
     vb_str = ""
     if attr_has(root, "viewBox") == 1 {
         vb_str = attr_get(root, "viewBox")
@@ -408,6 +410,14 @@ load_svg(backend: ptr, svg_string: string, canvas_w: float, canvas_h: float) -> 
                         }
                     }
                 }
+            }
+            // No viewBox and no usable width/height → intrinsic sizing:
+            // walk the content, compute its bounding box, and use that as the
+            // viewBox so the drawing fits the canvas (what librsvg does for a
+            // bare <svg>). Without this, content drawn outside the default
+            // 0..canvas box is clipped/offset (e.g. circles1.svg: cx=6.5cm).
+            if string.length(vb_str) == 0 {
+                vb_str = intrinsic_view_box(root)
             }
         }
     }
@@ -450,4 +460,26 @@ load_svg_default(backend: ptr, svg_string: string) -> ptr {
 // no high-precision tail).
 float_to_str(f: float) -> string {
     return string.from_float(f)
+}
+
+// Intrinsic viewBox from the content's bounding box, for a bare <svg> with no
+// viewBox/width/height. Returns "minX minY w h", or "" if the content is empty
+// or degenerate (caller then keeps the default canvas box). A tiny margin is
+// NOT added — librsvg fits tight to the content bbox.
+intrinsic_view_box(root: ptr) -> string {
+    b = bbox.compute_content_bounds(root)
+    if bbox.bounds_is_null(b) == 1 { return "" }
+    minx = bbox.bounds_min_x(b)
+    miny = bbox.bounds_min_y(b)
+    w = bbox.bounds_max_x(b) - minx
+    h = bbox.bounds_max_y(b) - miny
+    if w <= 0.0 { return "" }
+    if h <= 0.0 { return "" }
+    s = string.concat(float_to_str(minx), " ")
+    s = string.concat(s, float_to_str(miny))
+    s = string.concat(s, " ")
+    s = string.concat(s, float_to_str(w))
+    s = string.concat(s, " ")
+    s = string.concat(s, float_to_str(h))
+    return s
 }

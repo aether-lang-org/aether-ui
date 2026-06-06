@@ -81,6 +81,13 @@ main() {
     assert_near("parse_len_x('42')",   grammar_rendering.parse_len_x(ctx, "42"),  42.0)
     assert_near("parse_len_y('-3.5')", grammar_rendering.parse_len_y(ctx, "-3.5"), 0.0 - 3.5)
 
+    // Absolute units convert to px (cm=37.7953, in=96, pt=1.333). Previously
+    // the bare numeric prefix was used, so cx="6.5cm" rendered at 6.5 instead
+    // of 245.6 — the circles1.svg / tiger.svg coordinate bug.
+    assert_near("parse_len_x('6.5cm')", grammar_rendering.parse_len_x(ctx, "6.5cm"), 6.5 * 37.7953)
+    assert_near("parse_len_y('1in')",   grammar_rendering.parse_len_y(ctx, "1in"),   96.0)
+    assert_near("parse_len_x('12pt')",  grammar_rendering.parse_len_x(ctx, "12pt"),  12.0 * 1.333)
+
     // ─── map_point: currentTransform ∘ vb_xform ──────────────────
     // With identity currentTransform: map_point(x, y) == vb_xform(x, y).
     p = grammar_rendering.map_point(ctx, 50.0, 25.0)

@@ -44,6 +44,7 @@ import std.string
 import std.math
 import grammar_context
 import transform
+import grammar_utils
 
 extern malloc(size: int) -> ptr
 
@@ -163,21 +164,23 @@ numeric_prefix(s: string) -> float {
 }
 
 parse_len_x(ctx: ptr, v: string) -> float {
-    n = numeric_prefix(v)
     if string.ends_with(v, "%") == 1 {
         mapping = grammar_context.ctx_mapping(ctx)
-        return (n / 100.0) * grammar_context.mapping_vb_width(mapping)
+        return (numeric_prefix(v) / 100.0) * grammar_context.mapping_vb_width(mapping)
     }
-    return n
+    // Non-% lengths go through parse_length_to_px so absolute units
+    // (cm/mm/in/pt/pc) convert — matches TS parseLenX → parseNum →
+    // parseLengthToPx. (Previously used the bare numeric prefix, so e.g.
+    // cx="6.5cm" rendered at x=6.5 instead of 245px — circles1.svg.)
+    return grammar_utils.parse_length_to_px(v)
 }
 
 parse_len_y(ctx: ptr, v: string) -> float {
-    n = numeric_prefix(v)
     if string.ends_with(v, "%") == 1 {
         mapping = grammar_context.ctx_mapping(ctx)
-        return (n / 100.0) * grammar_context.mapping_vb_height(mapping)
+        return (numeric_prefix(v) / 100.0) * grammar_context.mapping_vb_height(mapping)
     }
-    return n
+    return grammar_utils.parse_length_to_px(v)
 }
 
 // ─── map_stroke_width: scaled width + opacity factor ─────────────
