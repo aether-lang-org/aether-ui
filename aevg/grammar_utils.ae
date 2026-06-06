@@ -34,7 +34,7 @@ exports (
     parse_style_attr, parse_length_to_px, parse_font_size,
     parse_dy_em, parse_filter_region,
     extract_url_id, parse_preserve_aspect_ratio,
-    points_to_path, compute_path_bounds, apply_opacity_to_color,
+    points_to_path, ellipse_to_path, compute_path_bounds, apply_opacity_to_color,
     base64_encode_bytes,
     resolve_fill_color, resolve_stroke_color,
     effective_alpha, effective_stroke_alpha,
@@ -317,6 +317,43 @@ points_to_path(points: string, closed: int) -> string {
     regex.find_all_free(fa)
     regex.free(re)
     return out
+}
+
+// ─── ellipse_to_path ─────────────────────────────────────────────
+//
+// An <ellipse cx cy rx ry> (or <circle> as rx==ry) as an SVG path made of
+// two half-arcs, so it can route through shape_path (no dedicated ellipse
+// backend op). The normalizer converts the arcs to cubics per SVG F.6.
+//
+//   M cx-rx,cy  A rx,ry 0 1 0 cx+rx,cy  A rx,ry 0 1 0 cx-rx,cy  Z
+//
+// Two arcs (each a half-ellipse, sweep=0) trace the full outline.
+
+ellipse_to_path(cx: float, cy: float, rx: float, ry: float) -> string {
+    lx = cx - rx
+    rxp = cx + rx
+    d = "M "
+    d = string.concat(d, string.from_float(lx))
+    d = string.concat(d, " ")
+    d = string.concat(d, string.from_float(cy))
+    d = string.concat(d, " A ")
+    d = string.concat(d, string.from_float(rx))
+    d = string.concat(d, " ")
+    d = string.concat(d, string.from_float(ry))
+    d = string.concat(d, " 0 1 0 ")
+    d = string.concat(d, string.from_float(rxp))
+    d = string.concat(d, " ")
+    d = string.concat(d, string.from_float(cy))
+    d = string.concat(d, " A ")
+    d = string.concat(d, string.from_float(rx))
+    d = string.concat(d, " ")
+    d = string.concat(d, string.from_float(ry))
+    d = string.concat(d, " 0 1 0 ")
+    d = string.concat(d, string.from_float(lx))
+    d = string.concat(d, " ")
+    d = string.concat(d, string.from_float(cy))
+    d = string.concat(d, " Z")
+    return d
 }
 
 // ─── compute_path_bounds ─────────────────────────────────────────

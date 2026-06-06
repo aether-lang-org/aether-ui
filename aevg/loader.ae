@@ -172,7 +172,10 @@ walk_node(ctx: ptr, backend: ptr, node_h: ptr) {
         _ = grammar_shapes.shape_text(ctx, backend, node_h)
         return
     }
-    if string.equals(tag, "ellipse") == 1 { return }
+    if string.equals(tag, "ellipse") == 1 {
+        emit_ellipse(ctx, backend, attrs)
+        return
+    }
 
     // ─── Default: unknown element → walk children ────────────────
     walk_children(ctx, backend, node_h)
@@ -323,6 +326,27 @@ emit_poly(ctx: ptr, backend: ptr, attrs: ptr, closed: int) {
     // with `d`. Simplest: clone, then set d.
     fresh = clone_attrs_replacing_points(attrs, d)
     _ = grammar_shapes.shape_path(ctx, backend, fresh)
+}
+
+// <ellipse cx cy rx ry> (and <ellipse>-as-circle) → a two-arc <path>, so it
+// renders through shape_path. rx/ry default to 0; a "circle via ellipse" is
+// just rx==ry. Style/transform survive via the same attr whitelist as poly.
+emit_ellipse(ctx: ptr, backend: ptr, attrs: ptr) {
+    cx = ellipse_num(attrs, "cx")
+    cy = ellipse_num(attrs, "cy")
+    rx = ellipse_num(attrs, "rx")
+    ry = ellipse_num(attrs, "ry")
+    if rx <= 0.0 { return }
+    if ry <= 0.0 { return }
+    d = grammar_utils.ellipse_to_path(cx, cy, rx, ry)
+    fresh = clone_attrs_replacing_points(attrs, d)
+    _ = grammar_shapes.shape_path(ctx, backend, fresh)
+}
+
+ellipse_num(attrs: ptr, key: string) -> float {
+    v, _ = map.get(attrs, key)
+    if v == null { return 0.0 }
+    return grammar_utils.parse_length_to_px(v)
 }
 
 // Build a copy of `attrs` with the `points` key replaced by `d`.

@@ -105,18 +105,19 @@ main() {
                    aevg_backend.backend_opt_get(bk6, 0, "d"),
                    "M 10 10 L 90 10 L 50 90 Z")
 
-    // ─── Mixed unsupported + supported: ellipse is skipped, text
-    //     renders (as of the <text> commit), rect renders. ────────
+    // ─── Mixed: text + ellipse (now a path) + rect all render. ───
+    //     (ellipse renders as a two-arc <path> via grammar_utils.)
     bk7 = aevg_backend.backend_new()
     svg7 = "<svg viewBox='0 0 100 100' width='100' height='100'><defs><linearGradient id='g1'/></defs><text x='10' y='20'>hi</text><ellipse cx='50' cy='50' rx='20' ry='10'/><rect x='0' y='0' width='10' height='10' fill='black'/></svg>"
     _ctx7 = loader.load_svg(bk7, svg7, 100.0, 100.0)
-    // text + rect render; ellipse skipped (no shape_ellipse yet).
-    assert_eq_int("mixed: 2 calls (text + rect)",
-                   aevg_backend.backend_call_count(bk7), 2)
+    assert_eq_int("mixed: 3 calls (text + ellipse-as-path + rect)",
+                   aevg_backend.backend_call_count(bk7), 3)
     assert_eq_str("mixed: call 0 = text",
                    aevg_backend.backend_kind(bk7, 0), "text")
-    assert_eq_str("mixed: call 1 = rect",
-                   aevg_backend.backend_kind(bk7, 1), "rectangle")
+    assert_eq_str("mixed: call 1 = ellipse (path)",
+                   aevg_backend.backend_kind(bk7, 1), "path")
+    assert_eq_str("mixed: call 2 = rect",
+                   aevg_backend.backend_kind(bk7, 2), "rectangle")
 
     // ─── Nested group → deep transform composition ───────────────
     bk8 = aevg_backend.backend_new()

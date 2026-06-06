@@ -42,6 +42,7 @@ import std.map
 import std.list
 import parser
 import normalizer
+import grammar_utils
 import std.floatarr
 
 // Attributes that carry no rendering meaning — omitted from output.
@@ -230,8 +231,9 @@ emit_children(sb: ptr, node: ptr, indent: int) {
 // gap shared with the surface form). A counter box names the vars.
 
 emit_children_explicit(sb: ptr, root: ptr, indent: int) {
-    ctr = malloc(8) as *VarCounter
+    ctr = malloc(16) as *VarCounter
     ctr.n = 0
+    ctr.root = root        // for <use> href→node resolution
     emit_kids_explicit(sb, root, indent, ctr)
 }
 
@@ -241,6 +243,7 @@ ctr_next(ctr: ptr) -> int {
     c.n = n + 1
     return n
 }
+ctr_root(ctr: ptr) -> ptr { c = ctr as *VarCounter; return c.root }
 
 // The flattened (headless harness) form threads the enclosing <g>s' composed
 // transform + cascading fill/stroke/stroke-width as four explicit strings
@@ -263,13 +266,17 @@ emit_kids_explicit_t(sb: ptr, node: ptr, indent: int, ctr: ptr,
     }
 }
 
-struct VarCounter { n: int }
+struct VarCounter {
+    n: int
+    root: ptr
+}
 
 emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr,
                    in_tf: string, in_fill: string, in_stroke: string, in_sw: string) {
     tag = parser.node_tag(node)
     if string.equals(tag, "desc") == 1 { return }
     if string.equals(tag, "title") == 1 { return }
+    if string.equals(tag, "defs") == 1 { return }   // definitions, not drawn directly
     if string.equals(tag, "g") == 1 {
         // Flatten: compose this g's transform + fill/stroke onto the inherited
         // context, then recurse. A g's own attr overrides what it inherited.
@@ -280,11 +287,27 @@ emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr,
             inherit_or(node, "stroke-width", in_sw))
         return
     }
+    if string.equals(tag, "use") == 1 {
+        // Resolve href→target, inline it with the use's composed transform
+        // (translate(x y) + own transform) and inherited style. The explicit
+        // form has no <defs>/<use> machinery, so we flatten by re-walking the
+        // referenced node as if it were a child here.
+        target = resolve_use(node, ctr_root(ctr))
+        if target == null { return }
+        use_tf = join_transform(in_tf, use_transform(node))
+        emit_node_explicit(sb, target, indent, ctr,
+            use_tf,
+            inherit_or(node, "fill", in_fill),
+            inherit_or(node, "stroke", in_stroke),
+            inherit_or(node, "stroke-width", in_sw))
+        return
+    }
     is_shape = 0
     if string.equals(tag, "circle") == 1 { is_shape = 1 }
     if string.equals(tag, "rect") == 1 { is_shape = 1 }
     if string.equals(tag, "line") == 1 { is_shape = 1 }
     if string.equals(tag, "path") == 1 { is_shape = 1 }
+    if string.equals(tag, "ellipse") == 1 { is_shape = 1 }
     if string.equals(tag, "text") == 1 { is_shape = 1 }
     if is_shape == 0 {
         emit_kids_explicit_t(sb, node, indent, ctr, in_tf, in_fill, in_stroke, in_sw)
@@ -313,11 +336,18 @@ emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr,
     } else {
         _ = strbuilder.append(sb, "_ = ")
     }
-    _ = strbuilder.append(sb, "vg.")
-    _ = strbuilder.append(sb, tag)
-    _ = strbuilder.append(sb, "(node")
-    emit_geom_args_explicit(sb, node, tag)
-    _ = strbuilder.append(sb, ")\n")
+    if string.equals(tag, "ellipse") == 1 {
+        // No vg.ellipse — emit it as vg.path(node, "<two-arc d>").
+        _ = strbuilder.append(sb, "vg.path(node, \"")
+        _ = strbuilder.append(sb, escape_str(ellipse_d(node)))
+        _ = strbuilder.append(sb, "\")\n")
+    } else {
+        _ = strbuilder.append(sb, "vg.")
+        _ = strbuilder.append(sb, tag)
+        _ = strbuilder.append(sb, "(node")
+        emit_geom_args_explicit(sb, node, tag)
+        _ = strbuilder.append(sb, ")\n")
+    }
 
     if any == 1 {
         emit_eff_style_explicit(sb, indent, vn, eff_fill, eff_stroke, eff_sw, eff_op, eff_tf)
@@ -534,6 +564,10 @@ emit_node(sb: ptr, node: ptr, indent: int) {
         emit_path(sb, node, indent)
         return
     }
+    if string.equals(tag, "ellipse") == 1 {
+        emit_ellipse(sb, node, indent)
+        return
+    }
     if string.equals(tag, "text") == 1 {
         emit_text(sb, node, indent)
         return
@@ -619,6 +653,38 @@ emit_text(sb: ptr, node: ptr, indent: int) {
     _ = strbuilder.append(sb, "\n")
 }
 
+// <ellipse> has no DSL verb — emit it as a path() with the two-arc d,
+// normalized (arcs → cubics) like any other path. The renderer's loader does
+// the same conversion; this keeps transpiled output a pure vg{} shape.
+emit_ellipse(sb: ptr, node: ptr, indent: int) {
+    d = ellipse_d(node)
+    pad(sb, indent)
+    _ = strbuilder.append(sb, "path(\"")
+    _ = strbuilder.append(sb, escape_str(d))
+    _ = strbuilder.append(sb, "\")")
+    emit_style_block(sb, node)
+    _ = strbuilder.append(sb, "\n")
+}
+
+// The normalized path-d for an <ellipse> (or circle-as-ellipse). "" if it has
+// no positive radii.
+ellipse_d(node: ptr) -> string {
+    cx = ellipse_attr(node, "cx")
+    cy = ellipse_attr(node, "cy")
+    rx = ellipse_attr(node, "rx")
+    ry = ellipse_attr(node, "ry")
+    if rx <= 0.0 { return "" }
+    if ry <= 0.0 { return "" }
+    return normalize_d_to_string(grammar_utils.ellipse_to_path(cx, cy, rx, ry))
+}
+
+ellipse_attr(node: ptr, key: string) -> float {
+    if parser.node_has_attr(node, key) == 0 { return 0.0 }
+    v, e = string.to_double(string.trim(parser.node_attr(node, key)))
+    if e != "" { return 0.0 }
+    return v
+}
+
 // ─── style → block modifiers ─────────────────────────────────────
 //
 // fill/stroke/opacity from presentation attrs become `fill("…")`,
@@ -681,10 +747,77 @@ node_transform(node: ptr) -> string {
 // space-joined string (parse_transform composes left-to-right). Either side
 // may be empty.
 compose_transform(inherited: string, node: ptr) -> string {
-    own = node_transform(node)
-    if string.length(inherited) == 0 { return own }
-    if string.length(own) == 0 { return inherited }
-    return string.concat(string.concat(inherited, " "), own)
+    return join_transform(inherited, node_transform(node))
+}
+
+// Join two transform strings (outer first), either possibly empty.
+join_transform(outer: string, inner: string) -> string {
+    if string.length(outer) == 0 { return inner }
+    if string.length(inner) == 0 { return outer }
+    return string.concat(string.concat(outer, " "), inner)
+}
+
+// ─── <use> resolution ────────────────────────────────────────────
+//
+// A <use href="#id" x y transform> draws the referenced element. We resolve
+// the href to its target node (searched from root by id) and inline it,
+// composing the use's own transform — which is translate(x y) prepended to
+// any transform= per SVG (the x/y offset applies first/outermost).
+
+resolve_use(use_node: ptr, root: ptr) -> ptr {
+    href = ""
+    if parser.node_has_attr(use_node, "xlink:href") == 1 {
+        href = parser.node_attr(use_node, "xlink:href")
+    } else {
+        if parser.node_has_attr(use_node, "href") == 1 {
+            href = parser.node_attr(use_node, "href")
+        }
+    }
+    if string.length(href) == 0 { return null }
+    ref_id = href
+    if string.starts_with(href, "#") == 1 {
+        ref_id = string.substring(href, 1, string.length(href))
+    }
+    if root == null { return null }
+    return find_by_id(root, ref_id)
+}
+
+// The use's effective own transform: translate(x y) (if x/y present) with
+// any transform= appended (x/y is the outer offset). "" if neither.
+use_transform(use_node: ptr) -> string {
+    tx = "0"
+    ty = "0"
+    has_xy = 0
+    if parser.node_has_attr(use_node, "x") == 1 {
+        tx = string.trim(parser.node_attr(use_node, "x"))
+        has_xy = 1
+    }
+    if parser.node_has_attr(use_node, "y") == 1 {
+        ty = string.trim(parser.node_attr(use_node, "y"))
+        has_xy = 1
+    }
+    own = node_transform(use_node)
+    if has_xy == 0 { return own }
+    tr = string.concat("translate(", string.concat(tx, string.concat(" ", string.concat(ty, ")"))))
+    if string.length(own) == 0 { return tr }
+    return string.concat(tr, string.concat(" ", own))
+}
+
+// Depth-first search for a node whose id attribute equals `id`.
+find_by_id(node: ptr, id: string) -> ptr {
+    if parser.node_has_attr(node, "id") == 1 {
+        if string.equals(string.trim(parser.node_attr(node, "id")), id) == 1 {
+            return node
+        }
+    }
+    n = parser.node_child_count(node)
+    i = 0
+    while i < n {
+        hit = find_by_id(parser.node_child_at(node, i), id)
+        if hit != null { return hit }
+        i = i + 1
+    }
+    return null
 }
 
 // Does the node carry any fill/stroke/opacity/transform (attr or inline style)?

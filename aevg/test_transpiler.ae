@@ -131,6 +131,22 @@ main() {
     assert_contains("g transform composed onto child", out_gt,
                     "vg.transform(c0, \"translate(50,50) rotate(30)\")")
 
+    // ─── <ellipse> → path() with a two-arc d ──────────────────
+    svg_el = "<svg viewBox='0 0 100 100'><ellipse cx='50' cy='50' rx='40' ry='25' fill='#4488cc'/></svg>"
+    out_el = transpiler.transpile_svg(svg_el)
+    assert_contains("ellipse → path", out_el, "path(\"M ")
+    assert_contains("ellipse: normalized cubic (no raw A)", out_el, " C ")
+    assert_not_contains("ellipse: no ellipse verb", out_el, "ellipse(")
+    assert_contains("ellipse: fill preserved", out_el, "fill(\"#4488cc\")")
+
+    // ─── <use href> inlines the target with translate(x y) ────
+    // (headless harness form — where <use> resolution lives.)
+    svg_use = "<svg viewBox='0 0 100 100'><defs><circle id='c' cx='10' cy='10' r='5' fill='red'/></defs><use href='#c' x='20' y='0'/></svg>"
+    out_use = transpiler.transpile_svg_to_png_harness(svg_use)
+    assert_contains("use: target circle inlined", out_use, "vg.circle(node, 10.0, 10.0, 5.0)")
+    assert_contains("use: x/y → translate", out_use, "vg.transform(c0, \"translate(20 0)\")")
+    assert_contains("use: target fill carried", out_use, "vg.fill(c0, \"red\")")
+
     // ─── <desc> → comment; <g fill> → g() { fill(…) … } ───────
     svg6 = "<svg viewBox='0 0 100 100'><desc>A scene</desc><g fill='red'><circle cx='1' cy='1' r='1'/></g></svg>"
     out6 = transpiler.transpile_svg(svg6)
