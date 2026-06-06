@@ -92,6 +92,7 @@ exports (
     element_set_stroke, element_last_stroke_color, element_last_stroke_width,
     element_has_stroke,
     element_set_opacity, element_last_opacity, element_has_opacity,
+    element_set_transform, element_last_transform,
     element_set_text, element_last_text,
     element_set_pos_props, element_last_pos_props,
 
@@ -173,6 +174,7 @@ struct AevgElement {
     last_opacity_set: int     // 1 if opacity ever set
     last_text: string
     last_pos_props: ptr       // std.map string→string of last bindPos result
+    last_transform: string    // SVG transform string (e.g. "scale(0.1)"), "" if none
 
     // ─── Shape geometry state (for bindPos → bounds recompute) ──
     // shape_type: 0=none/unknown, 1=circle, 2=rect, 3=line.
@@ -240,6 +242,7 @@ element_new(underlying: ptr) -> ptr {
     e.last_opacity_set = 0
     e.last_text = ""
     e.last_pos_props = null
+    e.last_transform = ""
     e.shape_type = 0
     e.geo0 = 0.0
     e.geo1 = 0.0
@@ -574,6 +577,22 @@ element_last_opacity(p: ptr) -> float {
 element_has_opacity(p: ptr) -> int {
     e = p as *AevgElement
     return e.last_opacity_set
+}
+
+// SVG transform string (e.g. "scale(0.1)", "translate(10 5) rotate(30)").
+// The deferred-flush path folds this back into the dispatch attrs as the
+// "transform" key, which maybe_push_transform applies — so a vg shape (or g)
+// can carry an SVG transform the same way it carries fill/stroke.
+element_set_transform(p: ptr, t: string) {
+    e = p as *AevgElement
+    cp = string.copy(t)
+    string_retain(cp)
+    e.last_transform = cp
+}
+
+element_last_transform(p: ptr) -> string {
+    e = p as *AevgElement
+    return e.last_transform
 }
 
 element_set_text(p: ptr, content: string) {

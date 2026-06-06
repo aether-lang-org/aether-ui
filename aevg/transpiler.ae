@@ -242,24 +242,42 @@ ctr_next(ctr: ptr) -> int {
     return n
 }
 
+// The flattened (headless harness) form threads the enclosing <g>s' composed
+// transform + cascading fill/stroke/stroke-width as four explicit strings
+// (in_tf/in_fill/in_stroke/in_sw). SVG composes transforms left-to-right
+// (outer first); fill/stroke inherit unless the child overrides. Threaded as
+// separate params (not a struct) to sidestep struct-string lifetime issues.
+
 emit_kids_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr) {
+    emit_kids_explicit_t(sb, node, indent, ctr, "", "", "", "")
+}
+
+emit_kids_explicit_t(sb: ptr, node: ptr, indent: int, ctr: ptr,
+                     in_tf: string, in_fill: string, in_stroke: string, in_sw: string) {
     nch = parser.node_child_count(node)
     i = 0
     while i < nch {
-        emit_node_explicit(sb, parser.node_child_at(node, i), indent, ctr)
+        emit_node_explicit(sb, parser.node_child_at(node, i), indent, ctr,
+                           in_tf, in_fill, in_stroke, in_sw)
         i = i + 1
     }
 }
 
 struct VarCounter { n: int }
 
-emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr) {
+emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr,
+                   in_tf: string, in_fill: string, in_stroke: string, in_sw: string) {
     tag = parser.node_tag(node)
     if string.equals(tag, "desc") == 1 { return }
     if string.equals(tag, "title") == 1 { return }
     if string.equals(tag, "g") == 1 {
-        // Flatten group children (cascade gap noted above).
-        emit_kids_explicit(sb, node, indent, ctr)
+        // Flatten: compose this g's transform + fill/stroke onto the inherited
+        // context, then recurse. A g's own attr overrides what it inherited.
+        emit_kids_explicit_t(sb, node, indent, ctr,
+            compose_transform(in_tf, node),
+            inherit_or(node, "fill", in_fill),
+            inherit_or(node, "stroke", in_stroke),
+            inherit_or(node, "stroke-width", in_sw))
         return
     }
     is_shape = 0
@@ -269,14 +287,26 @@ emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr) {
     if string.equals(tag, "path") == 1 { is_shape = 1 }
     if string.equals(tag, "text") == 1 { is_shape = 1 }
     if is_shape == 0 {
-        emit_kids_explicit(sb, node, indent, ctr)
+        emit_kids_explicit_t(sb, node, indent, ctr, in_tf, in_fill, in_stroke, in_sw)
         return
     }
 
-    styled = has_style(node)
+    // Effective style/transform: shape's own, falling back to inherited.
+    eff_tf = compose_transform(in_tf, node)
+    eff_fill = inherit_or(node, "fill", in_fill)
+    eff_stroke = inherit_or(node, "stroke", in_stroke)
+    eff_sw = inherit_or(node, "stroke-width", in_sw)
+    eff_op = style_attr(node, "opacity")
+
+    any = 0
+    if string.length(eff_tf) > 0 { any = 1 }
+    if string.length(eff_fill) > 0 { any = 1 }
+    if string.length(eff_stroke) > 0 { any = 1 }
+    if string.length(eff_op) > 0 { any = 1 }
+
     pad(sb, indent)
     vn = ""
-    if styled == 1 {
+    if any == 1 {
         vn = string.concat("c", string.from_int(ctr_next(ctr)))
         _ = strbuilder.append(sb, vn)
         _ = strbuilder.append(sb, " = ")
@@ -285,14 +315,21 @@ emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr) {
     }
     _ = strbuilder.append(sb, "vg.")
     _ = strbuilder.append(sb, tag)
-    if string.equals(tag, "rect") == 1 { } // tag matches verb name for all
     _ = strbuilder.append(sb, "(node")
     emit_geom_args_explicit(sb, node, tag)
     _ = strbuilder.append(sb, ")\n")
 
-    if styled == 1 {
-        emit_style_explicit(sb, node, indent, vn)
+    if any == 1 {
+        emit_eff_style_explicit(sb, indent, vn, eff_fill, eff_stroke, eff_sw, eff_op, eff_tf)
     }
+}
+
+// A shape/g's own attr value, else the inherited value. For fill/stroke we use
+// the cascade-aware style_attr (covers inline style=); stroke-width too.
+inherit_or(node: ptr, key: string, inherited: string) -> string {
+    own = style_attr(node, key)
+    if string.length(own) > 0 { return own }
+    return inherited
 }
 
 // Geometry args (leading ", ") per shape, for the explicit vg.<verb>(node, …).
@@ -350,9 +387,11 @@ emit_geom_args_explicit(sb: ptr, node: ptr, tag: string) {
     }
 }
 
-// Emit vg.fill(vn, …) / vg.stroke(vn, …, w) / vg.opacity(vn, v) lines.
-emit_style_explicit(sb: ptr, node: ptr, indent: int, vn: string) {
-    fillv = style_attr(node, "fill")
+// Emit vg.fill/stroke/opacity/transform lines from already-resolved effective
+// values (shape's own, cascaded under any flattened ancestor <g>s).
+emit_eff_style_explicit(sb: ptr, indent: int, vn: string,
+                        fillv: string, strokev: string, sw_in: string,
+                        opv: string, eff_tf: string) {
     if string.length(fillv) > 0 {
         pad(sb, indent)
         _ = strbuilder.append(sb, "vg.fill(")
@@ -361,9 +400,8 @@ emit_style_explicit(sb: ptr, node: ptr, indent: int, vn: string) {
         _ = strbuilder.append(sb, escape_str(fillv))
         _ = strbuilder.append(sb, "\")\n")
     }
-    strokev = style_attr(node, "stroke")
     if string.length(strokev) > 0 {
-        sw = style_attr(node, "stroke-width")
+        sw = sw_in
         if string.length(sw) == 0 { sw = "1" }
         pad(sb, indent)
         _ = strbuilder.append(sb, "vg.stroke(")
@@ -374,7 +412,6 @@ emit_style_explicit(sb: ptr, node: ptr, indent: int, vn: string) {
         _ = strbuilder.append(sb, as_float_literal(sw))
         _ = strbuilder.append(sb, ")\n")
     }
-    opv = style_attr(node, "opacity")
     if string.length(opv) > 0 {
         if is_numeric(opv) == 1 {
             pad(sb, indent)
@@ -384,6 +421,14 @@ emit_style_explicit(sb: ptr, node: ptr, indent: int, vn: string) {
             _ = strbuilder.append(sb, as_float_literal(opv))
             _ = strbuilder.append(sb, ")\n")
         }
+    }
+    if string.length(eff_tf) > 0 {
+        pad(sb, indent)
+        _ = strbuilder.append(sb, "vg.transform(")
+        _ = strbuilder.append(sb, vn)
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, escape_str(eff_tf))
+        _ = strbuilder.append(sb, "\")\n")
     }
 }
 
@@ -614,13 +659,40 @@ emit_style_inline(sb: ptr, node: ptr) {
             _ = strbuilder.append(sb, ")")
         }
     }
+    tf = node_transform(node)
+    if string.length(tf) > 0 {
+        _ = strbuilder.append(sb, " transform(\"")
+        _ = strbuilder.append(sb, escape_str(tf))
+        _ = strbuilder.append(sb, "\")")
+    }
 }
 
-// Does the node carry any fill/stroke/opacity (attr or inline style)?
+// The element's `transform` attribute (e.g. "scale(0.1)"), "" if none. Plain
+// attr, not part of the style cascade — read directly.
+node_transform(node: ptr) -> string {
+    if parser.node_has_attr(node, "transform") == 1 {
+        return string.trim(parser.node_attr(node, "transform"))
+    }
+    return ""
+}
+
+// Compose an inherited transform prefix with a node's own transform. SVG
+// applies the outer (ancestor) transform first, so it comes first in the
+// space-joined string (parse_transform composes left-to-right). Either side
+// may be empty.
+compose_transform(inherited: string, node: ptr) -> string {
+    own = node_transform(node)
+    if string.length(inherited) == 0 { return own }
+    if string.length(own) == 0 { return inherited }
+    return string.concat(string.concat(inherited, " "), own)
+}
+
+// Does the node carry any fill/stroke/opacity/transform (attr or inline style)?
 has_style(node: ptr) -> int {
     if string.length(style_attr(node, "fill")) > 0 { return 1 }
     if string.length(style_attr(node, "stroke")) > 0 { return 1 }
     if string.length(style_attr(node, "opacity")) > 0 { return 1 }
+    if string.length(node_transform(node)) > 0 { return 1 }
     return 0
 }
 

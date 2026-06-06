@@ -118,6 +118,19 @@ main() {
     assert_contains("inline-style: fill", out_in, "fill(\"teal\")")
     assert_contains("inline-style: stroke", out_in, "stroke(\"black\"")
 
+    // ─── shape-level transform → transform("…") modifier ──────
+    svg_tf = "<svg viewBox='0 0 100 100'><path d='M 0 0 L 10 0' transform='scale(0.1)'/></svg>"
+    out_tf = transpiler.transpile_svg(svg_tf)
+    assert_contains("shape transform modifier", out_tf, "transform(\"scale(0.1)\")")
+
+    // ─── <g transform> composes onto children (headless harness form) ─
+    // The PNG-harness (explicit-node) form flattens groups, folding the g's
+    // transform onto each descendant — outer transform first per SVG spec.
+    svg_gt = "<svg viewBox='0 0 100 100'><g transform='translate(50,50)'><rect x='0' y='0' width='4' height='4' transform='rotate(30)'/></g></svg>"
+    out_gt = transpiler.transpile_svg_to_png_harness(svg_gt)
+    assert_contains("g transform composed onto child", out_gt,
+                    "vg.transform(c0, \"translate(50,50) rotate(30)\")")
+
     // ─── <desc> → comment; <g fill> → g() { fill(…) … } ───────
     svg6 = "<svg viewBox='0 0 100 100'><desc>A scene</desc><g fill='red'><circle cx='1' cy='1' r='1'/></g></svg>"
     out6 = transpiler.transpile_svg(svg6)

@@ -143,5 +143,21 @@ main() {
     assert_eq_str("resize: fill preserved across re-flush",
                   aevg_backend.backend_opt_get(dbk, 0, "fillColor"), "#abc123")
 
+    // ── transform modifier (deferred) ───────────────────────────────
+    // transform("translate(10 0)") on a circle shifts its dispatch by +10 in
+    // x. Recorded, folded into attrs at flush as the "transform" key, applied
+    // by maybe_push_transform. Fresh identity scene: bbox x = (50+10)-20 = 40.
+    tctx = mk_ctx()
+    tbk = aevg_backend.backend_new()
+    tscene = vg.scene_new(tctx, tbk)
+    vg.scene_set_deferred(tscene, 1)
+    troot = vg.vg_root(tscene)
+    tc = vg.circle(troot, 50.0, 50.0, 20.0)
+    vg.transform(tc, "translate(10 0)")
+    assert_eq_str("transform cached on element",
+                  grammar_element.element_last_transform(vg.node_element(tc)), "translate(10 0)")
+    vg.vg_flush(tscene)
+    assert_near("transform: circle shifted +10 in x", parse_opt(tbk, 0, "x"), 40.0)
+
     println("=== test_vg passed ===")
 }

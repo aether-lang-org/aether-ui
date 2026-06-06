@@ -40,7 +40,7 @@
 exports (
     view_box,
     circle, rect, line, path, text, g,
-    fill, stroke, opacity,
+    fill, stroke, opacity, transform,
     // Scene construction — backend-agnostic (recording stub, GTK adapter, …).
     scene_new, vg_root, node_element, scene_ctx, scene_backend, node_scene,
     scene_set_canvas, scene_canvas, scene_set_ctx, mk_node,
@@ -303,6 +303,16 @@ opacity(_ctx: ptr, value: float) {
     }
 }
 
+// transform("scale(0.1)") — apply an SVG transform to this shape. In deferred
+// mode it's cached on the element and folded into the dispatch attrs at flush
+// (maybe_push_transform applies it). Mirrors the SVG `transform=` attribute.
+transform(_ctx: ptr, t: string) {
+    el = node_payload(_ctx)
+    if el != null {
+        grammar_element.element_set_transform(el, t)
+    }
+}
+
 // ─── deferred recording + flush (live path) ──────────────────────
 //
 // record_shape / record_text build a placeholder element (the fill/stroke/
@@ -415,6 +425,10 @@ apply_cached_style(a: ptr, el: ptr) {
     if grammar_element.element_has_opacity(el) == 1 {
         ov = grammar_element.element_last_opacity(el)
         _ = map.put(a, "opacity", string.from_float(ov))
+    }
+    tf = grammar_element.element_last_transform(el)
+    if string.length(tf) > 0 {
+        _ = map.put(a, "transform", tf)
     }
 }
 
