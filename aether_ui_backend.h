@@ -160,29 +160,29 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
 int aether_ui_canvas_create_impl(int width, int height);
 int aether_ui_canvas_get_widget(int canvas_id);
 void aether_ui_canvas_begin_path_impl(int canvas_id);
-void aether_ui_canvas_move_to_impl(int canvas_id, float x, float y);
-void aether_ui_canvas_line_to_impl(int canvas_id, float x, float y);
-void aether_ui_canvas_stroke_impl(int canvas_id, float r, float g, float b,
-                             float a, float line_width);
-void aether_ui_canvas_fill_rect_impl(int canvas_id, float x, float y,
-                                float w, float h,
-                                float r, float g, float b, float a);
-void aether_ui_canvas_arc_impl(int canvas_id, float cx, float cy, float radius,
-                                float start_angle, float end_angle);
+void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y);
+void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y);
+void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b,
+                             double a, double line_width);
+void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
+                                double w, double h,
+                                double r, double g, double b, double a);
+void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
+                                double start_angle, double end_angle);
 void aether_ui_canvas_close_path_impl(int canvas_id);
-void aether_ui_canvas_fill_impl(int canvas_id, float r, float g, float b, float a);
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a);
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
-                                      float x, float y, float font_size,
-                                      float r, float g, float b, float a);
-void aether_ui_canvas_draw_image_impl(int canvas_id, float x, float y,
+                                      double x, double y, double font_size,
+                                      double r, double g, double b, double a);
+void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
                                        int iw, int ih,
                                        const unsigned char* rgba, int byte_len);
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
-        float x1, float y1, float x2, float y2,
-        int n_stops, void* offsets, void* rgba, float line_width);
+        double x1, double y1, double x2, double y2,
+        int n_stops, void* offsets, void* rgba, double line_width);
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
-        float cx, float cy, float radius, float fx, float fy,
-        int n_stops, void* offsets, void* rgba, float line_width);
+        double cx, double cy, double radius, double fx, double fy,
+        int n_stops, void* offsets, void* rgba, double line_width);
 void aether_ui_canvas_clear_impl(int canvas_id);
 void aether_ui_canvas_redraw_impl(int canvas_id);
 // Off-screen render of the canvas command buffer to a PNG. Headless-capable

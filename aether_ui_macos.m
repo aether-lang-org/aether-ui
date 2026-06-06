@@ -1462,32 +1462,32 @@ void aether_ui_canvas_begin_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_BEGIN_PATH });
 }
 
-void aether_ui_canvas_move_to_impl(int canvas_id, float x, float y) {
+void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_MOVE_TO, .x = x, .y = y });
 }
 
-void aether_ui_canvas_line_to_impl(int canvas_id, float x, float y) {
+void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_LINE_TO, .x = x, .y = y });
 }
 
-void aether_ui_canvas_stroke_impl(int canvas_id, float r, float g, float b,
-                                  float a, float line_width) {
+void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b,
+                                  double a, double line_width) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_STROKE, .r = r, .g = g, .b = b, .a = a, .x = line_width
     });
 }
 
-void aether_ui_canvas_fill_rect_impl(int canvas_id, float x, float y,
-                                     float w, float h,
-                                     float r, float g, float b, float a) {
+void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
+                                     double w, double h,
+                                     double r, double g, double b, double a) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL_RECT, .x = x, .y = y, .w = w, .h = h,
         .r = r, .g = g, .b = b, .a = a
     });
 }
 
-void aether_ui_canvas_arc_impl(int canvas_id, float cx, float cy, float radius,
-                                float start_angle, float end_angle) {
+void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
+                                double start_angle, double end_angle) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_ARC, .x = cx, .y = cy, .w = radius,
         .a0 = start_angle, .a1 = end_angle
@@ -1498,15 +1498,15 @@ void aether_ui_canvas_close_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLOSE_PATH });
 }
 
-void aether_ui_canvas_fill_impl(int canvas_id, float r, float g, float b, float a) {
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL, .r = r, .g = g, .b = b, .a = a
     });
 }
 
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
-                                      float x, float y, float font_size,
-                                      float r, float g, float b, float a) {
+                                      double x, double y, double font_size,
+                                      double r, double g, double b, double a) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size,
         .r = r, .g = g, .b = b, .a = a,
@@ -1514,7 +1514,7 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
     });
 }
 
-void aether_ui_canvas_draw_image_impl(int canvas_id, float x, float y,
+void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
                                        int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
     if (iw <= 0 || ih <= 0 || !rgba) return;
@@ -1545,8 +1545,8 @@ static void macos_copy_stops(CanvasCmd* c, int n_stops,
 }
 
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
-        float x1, float y1, float x2, float y2,
-        int n_stops, void* offsets, void* rgba, float line_width) {
+        double x1, double y1, double x2, double y2,
+        int n_stops, void* offsets, void* rgba, double line_width) {
     CanvasCmd cmd = { .type = CANVAS_FILL_LINEAR,
                       .gx1 = x1, .gy1 = y1, .gx2 = x2, .gy2 = y2,
                       .grad_line_width = line_width };
@@ -1555,8 +1555,8 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
 }
 
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
-        float cx, float cy, float radius, float fx, float fy,
-        int n_stops, void* offsets, void* rgba, float line_width) {
+        double cx, double cy, double radius, double fx, double fy,
+        int n_stops, void* offsets, void* rgba, double line_width) {
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
                       .grad_line_width = line_width };
