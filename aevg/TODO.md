@@ -4,6 +4,18 @@ Tracked items not yet built. The live-region abstraction (raster + draw sources,
 in-scene glitch-free composition, scaled blit, per-region z-index, animated
 sources, raw-RGBA frame source) is feature-complete; these are the next layers.
 
+## Build system (aeb)
+
+- **Build aether-ui through `aeb` instead of `build.sh`/`ci.sh`.** `bootstrap.sh`
+  (toolchain bootstrap, mirrors servirtium-vcr) is in; `aevg/.analog_clock.build.ae`
+  is a spike. BLOCKED on an aeb gap: its `aether.program` manual path
+  `--emit=lib`s the whole transitive import closure, which fails for aether-ui's
+  Aether-thin-over-C-backend modules (extern function bodies → E0301). Need an
+  opt-out so the entry compiles with plain `aetherc` + links the C backend, like
+  `build.sh` does. Full ask: `docs/aeb-ask-thin-aether-over-c-backend.md`. Once
+  aeb supports it: convert the examples + the 41 Phase-0 tests to `.build.ae` /
+  `.tests.ae` and retire the bash.
+
 ## Toolchain migrations
 
 - **Replace `aether_local_secs_of_day()` with `std.os.now_local()`** — the

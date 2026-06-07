@@ -1,0 +1,64 @@
+// aeb build descriptor for the AeVG analog clock — a SPIKE proving aether-ui
+// can build through aeb instead of build.sh.
+//
+// STATUS: blocked on an aeb gap. aeb's aether.program manual path --emit=lib's
+// the transitive import closure, which fails for aether-ui's Aether-thin-over-C
+// modules (aether_ui.ae / vg_live.ae have extern function bodies → E0301). The
+// model is right; aeb needs an opt-out to compile the entry with plain aetherc
+// + link the C backend (like build.sh). Filed: docs/aeb-ask-thin-aether-over-
+// c-backend.md. Until then this descriptor doesn't build; build.sh remains the
+// build. Kept as the reproduction + forward-looking spike.
+//
+// aeb's aether SDK shells out to `ae build` by default; declaring extra_source/
+// link_flag/include_dir opts into the manual aetherc+gcc path — exactly the
+// shape build.sh hand-rolls. Here we link the GTK4 backend C files + the AeVG
+// canvas glue, with the GTK / libaether flags pulled from pkg-config / `ae
+// cflags` at gcc time (the $(...) expands in the shell aeb runs the link under,
+// the same trick aeb's own lib/aether uses for zlib/openssl).
+//
+// PLATFORM: this spike wires the Linux/GTK4 backend (the host we build on).
+// macOS (aether_ui_macos.m + AppKit/Foundation/QuartzCore frameworks) and
+// Windows (aether_ui_win32.c + win32 libs) would branch the extra_source /
+// link_flag set on the OS — build.sh's `uname` case, expressed in this main()
+// via std.os instead of bash. Generalizing that is the next step (see
+// aevg/TODO.md). Build + run:
+//   ./bootstrap.sh aevg/.analog_clock.build.ae
+//   ./target/.../bin/analog_clock     (DISPLAY=:0 for the live window)
+
+import build
+import std.os
+import aether
+import aether (source, output, extra_source, link_flag, include_dir)
+
+main() {
+    b = build.start()
+    root = build._get(b, "root")
+
+    aether.program(b) {
+        source("analog_clock.ae")
+        output("analog_clock")
+
+        // The native backend C files build.sh links on Linux/GTK4.
+        extra_source("${root}/aether_ui_gtk4.c")
+        extra_source("${root}/aether_ui_system_extras.c")
+        extra_source("${root}/aether_ui_sni.c")
+
+        // Aether runtime headers (mirrors build.sh's AETHER_INCLUDES).
+        include_dir("/usr/local/include/aether/runtime")
+        include_dir("/usr/local/include/aether/runtime/actors")
+        include_dir("/usr/local/include/aether/std")
+        include_dir("/usr/local/include/aether/std/collections")
+
+        // GTK4 cflags+libs and libaether's transitive deps (PCRE2/SSL/zlib/…),
+        // expanded by the shell at gcc time. -laether + its lib dir, then the
+        // window/audio/notify framework libs.
+        link_flag("$(pkg-config --cflags gtk4)")
+        link_flag("-L/usr/local/lib/aether")
+        link_flag("-laether")
+        link_flag("-pthread")
+        link_flag("-lm")
+        link_flag("$(pkg-config --libs gtk4)")
+        link_flag("$(ae cflags --libs 2>/dev/null)")
+    }
+    return 0
+}
