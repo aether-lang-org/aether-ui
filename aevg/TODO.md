@@ -16,9 +16,13 @@ sources, raw-RGBA frame source) is feature-complete; these are the next layers.
   aevg/.analog_clock.build.ae`) so its root-discovery puts the repo root on the
   aetherc `--lib` path — `analog_clock.ae` lives in `aevg/` but imports
   root-level `aether_ui`; from inside `aevg/` that import doesn't resolve.
+  The Mac/Win/Lin backend-C/framework branching is now expressed in
+  `.analog_clock.build.ae`'s `main()` via `os.platform()` (Aether 0.203),
+  mirroring build.sh's `uname` case — linux verified, darwin/windows wired
+  but untested on this host.
   NEXT: convert the other examples + the 41 Phase-0 tests to `.build.ae` /
-  `.tests.ae`, express the Mac/Win/Lin backend-C/framework branching in the
-  `.build.ae` via `std.os` (vs build.sh's `uname`), and retire the bash.
+  `.tests.ae` (the platform branch is a copy-paste block — factor it into a
+  shared helper once a 2nd descriptor needs it), and retire the bash.
 
 ## Live regions / video
 
