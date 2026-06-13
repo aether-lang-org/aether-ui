@@ -25,3 +25,6 @@ aevg/test/screenshots/
 aevg/_gen_*.ae
 build/_gen_*
 __pycache__/
+
+# Scratch planning doc — local working notes, never committed
+current_plan_dont_check_this_in.md
