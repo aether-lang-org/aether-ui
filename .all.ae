@@ -1,10 +1,10 @@
-// .aether_ui.aeb.ae — build EVERY aether-ui binary in one go, through aeb.
+// .all.ae — build EVERY aether-ui binary in one go, through aeb.
 //
 // One descriptor, a list of (source, output) pairs, a loop. Each iteration is
 // an aether.program(b) {…} that compiles the entry plain (no_closure_regen,
 // since aether-ui's .ae surface is extern declarations of the C backend) and
 // links the per-platform backend C — exactly what build.sh does per uname, and
-// what aevg/.analog_clock.build.ae did for one app.
+// what aevg/.analog-clock.ae did for one app.
 //
 // Trade-off vs aeb's one-node-per-.name.ae grain: this is a single node that
 // builds N binaries sequentially, so there's no per-app caching or
@@ -13,7 +13,7 @@
 // split into N tiny .build.ae's sharing an .aeb/lib/aetherui helper + --scan.)
 //
 // Run from the repo ROOT:
-//   ./bootstrap.sh .aether_ui.aeb.ae      (or: aeb .aether_ui.aeb.ae)
+//   ./bootstrap.sh .all.ae      (or: aeb .all.ae)
 //   ./target/build/aether_ui/bin/<name>   (DISPLAY=:0 for windowed apps)
 
 import build

@@ -28,3 +28,6 @@ __pycache__/
 
 # Scratch planning doc — local working notes, never committed
 current_plan_dont_check_this_in.md
+
+# aeb build output
+target/

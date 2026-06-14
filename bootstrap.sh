@@ -20,7 +20,7 @@
 #   AETHER_REF    ae tag/branch/SHA to install   (default: latest tag) — pin in CI
 #   AEB_REF       aeb tag/branch/SHA to install  (default: latest tag) — pin in CI
 #   MIN_AE        minimum acceptable ae version  (default: 0.196.0)
-# Extra args pass through to `aeb` (e.g. ./bootstrap.sh aevg/.analog_clock.build.ae).
+# Extra args pass through to `aeb` (e.g. ./bootstrap.sh aevg/.analog-clock.ae).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

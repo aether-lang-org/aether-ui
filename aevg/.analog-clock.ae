@@ -18,7 +18,7 @@
 // Run from the repo ROOT (so aeb's root-discovery puts the repo root on the
 // aetherc --lib path — analog_clock.ae lives in aevg/ but imports root-level
 // aether_ui):
-//   ./bootstrap.sh aevg/.analog_clock.build.ae        (or: aeb aevg/.analog_clock.build.ae)
+//   ./bootstrap.sh aevg/.analog-clock.ae        (or: aeb aevg/.analog-clock.ae)
 //   ./target/build/aevg/bin/analog_clock              (DISPLAY=:0 for the window)
 
 import build
