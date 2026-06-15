@@ -42,11 +42,12 @@ struct AppState {
     rects: ptr       // list of *Rect for the current view
     scheme: int
     total: int
-    status: int      // handle of the status-line label (set after window build)
+    status: int      // handle of the hover status-line label (bottom of window)
+    crumbs: int      // handle of the breadcrumb label (top, under the buttons)
 }
 
 mk_state(root: ptr) -> *AppState {
-    s = malloc(56) as *AppState
+    s = malloc(64) as *AppState
     s.root = root
     s.current = root
     s.stack = list.new()
@@ -55,8 +56,28 @@ mk_state(root: ptr) -> *AppState {
     s.scheme = 0
     s.total = entry_total_size(root)
     s.status = 0
+    s.crumbs = 0
     relayout(s)
     return s
+}
+
+// Breadcrumb string from the drill stack: "root / aevg / test".
+crumbs_str(s: *AppState) -> string {
+    out = ""
+    n = list.size(s.stack)
+    i = 0
+    while i < n {
+        e, _ = list.get(s.stack, i)
+        if i > 0 { out = string.concat(out, "  /  ") }
+        out = string.concat(out, entry_name(e))
+        i = i + 1
+    }
+    return out
+}
+
+// Refresh the breadcrumb label from the current stack (after a drill).
+update_crumbs(s: *AppState) {
+    if s.crumbs != 0 { aether_ui_text_set_string(s.crumbs, crumbs_str(s)) }
 }
 
 // Recompute the treemap rects for the current entry.
@@ -71,6 +92,7 @@ drill_into(s: *AppState, entry: ptr) {
         _ = list.add(s.stack, entry)
         s.current = entry
         relayout(s)
+        update_crumbs(s)
     }
 }
 
@@ -82,6 +104,7 @@ drill_up(s: *AppState) {
         top, _ = list.get(s.stack, list.size(s.stack) - 1)
         s.current = top
         relayout(s)
+        update_crumbs(s)
     }
 }
 
@@ -130,9 +153,8 @@ main() {
             btn("by Type") callback { set_scheme(st, 2) }
         }
 
-        // Status line: updated on hover with the pointed-at tile's name + size.
-        // Covers the tiles too small (or too dominant) to carry their own label.
-        st.status = text("Hover a tile for its name and size")
+        // Breadcrumb: the drill path (root / … / current). Updated on drill.
+        st.crumbs = text(crumbs_str(st))
 
         vg(view_box(0, 0, 800, 600), 800, 600) {
             // Anchor: a BARE shape verb gets _ctx injected; derive the vg root
@@ -168,6 +190,10 @@ main() {
                 }
             }
         }
+
+        // Hover status line at the BOTTOM: name + size of the tile under the
+        // cursor (covers tiles too small or too dominant to carry a label).
+        st.status = text("Hover a tile for its name and size")
       }
     }
 }
