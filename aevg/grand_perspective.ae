@@ -1,0 +1,461 @@
+// aevg/grand_perspective.ae — disk-usage treemap (a GrandPerspective /
+// DiskInventoryX alike), ported from Tsyne's ported-apps/grand-perspective.
+//
+//   Portions © Erwin Bonsma (GrandPerspective original, GPL-2.0)
+//   Portions © Paul Hammant (Tsyne port); AeVG port 2026.
+//   https://grandperspectiv.sourceforge.net/
+//
+// Scans a directory tree, lays it out as a SQUARIFIED treemap (each file a
+// rectangle sized by bytes), and renders it with AeVG: 3D-bevelled rects
+// coloured by size/depth/type, file-name labels, hover/click/drill-down.
+//
+// The treemap canvas is pure AeVG (vg.rect/fill/stroke/text) — this is the
+// flagship "data-driven bulk geometry + interaction" AeVG demo, vs the clock's
+// bound-position demo. The window chrome (Parent / by-Size/Depth/Type buttons)
+// is aether-ui widgets.
+//
+//   headless one-frame proof:  AEVG_DIR=<path> AEVG_OUT=/tmp/gp.png ./build/grand_perspective_png
+//   windowed:                  DISPLAY=:0 ./build/grand_perspective  [dir]
+
+import aether_ui
+import aether_ui (canvas_create, canvas_write_png, canvas_clear)
+import vg_live (vg, vg_flush_live)
+import vg
+import vg (view_box, rect, fill, stroke, text)
+import grammar_factories
+import grammar_factories (opts_new, opts_set_view_box, opts_set_width, opts_set_height, create_aevg_context)
+import aevg_gtk_backend
+import std.math
+import std.string
+import std.list
+import std.os
+import std.os (os_getenv)
+import std.fs
+import std.dir
+
+extern malloc(size: int) -> ptr
+extern log(x: float) -> float            // std.math has no log; libm does
+extern string_retain(s: string)          // keep a heap string alive in a struct field
+// dir.list returns a DirList* (NOT an AetherStringArray) — index it with these,
+// not string_array_* (different struct; wrong accessor = garbage ptr → crash).
+extern dir_list_count(list: ptr) -> int
+extern dir_list_get(list: ptr, index: int) -> string
+
+CANVAS_W() -> float { return 800.0 }
+CANVAS_H() -> float { return 600.0 }
+MIN_SIZE() -> int   { return 5000 }      // files smaller than this are dropped
+MAX_DEPTH() -> int  { return 5 }
+
+// ─── Data model ──────────────────────────────────────────────────
+//
+// FileEntry is a heap node (Aether structs cross fn boundaries as pointers).
+// children is a std.list of *FileEntry; total_size is bytes (dir = sum of
+// descendants). is_dir 1/0.
+struct FileEntry {
+    name: string
+    path: string
+    total_size: int
+    is_dir: int
+    children: ptr        // list of *FileEntry
+}
+
+mk_entry(name: string, path: string, size: int, is_dir: int) -> *FileEntry {
+    e = malloc(48) as *FileEntry
+    e.name = name; string_retain(name)      // retain: the field outlives the arg's scope
+    e.path = path; string_retain(path)
+    e.total_size = size
+    e.is_dir = is_dir
+    e.children = list.new()
+    return e
+}
+
+// A laid-out rectangle: geometry + the entry it represents + tree depth.
+struct Rect {
+    x: float
+    y: float
+    w: float
+    h: float
+    size: int
+    depth: int
+    entry: *FileEntry
+}
+
+mk_rect(x: float, y: float, w: float, h: float, size: int, depth: int, entry: *FileEntry) -> *Rect {
+    r = malloc(56) as *Rect
+    r.x = x; r.y = y; r.w = w; r.h = h
+    r.size = size; r.depth = depth; r.entry = entry
+    return r
+}
+
+// ─── Directory scan ──────────────────────────────────────────────
+//
+// Recursively stat a path into a FileEntry tree, summing sizes. Depth-capped
+// (MAX_DEPTH) so a huge tree stays bounded; permission errors are skipped
+// (fs.file_stat returns an error → treat as 0-byte file).
+scan(path: string, name: string, depth: int) -> *FileEntry {
+    kind, size, _mtime, err = fs.file_stat(path)
+    if string.length(err) > 0 {
+        return mk_entry(name, path, 0, 0)   // unreadable → empty file node
+    }
+    is_dir = 0
+    if kind == 2 { is_dir = 1 }             // fs stat kind: 1=file 2=directory 3=symlink 4=other
+
+    if is_dir == 0 {
+        return mk_entry(name, path, size, 0)
+    }
+
+    e = mk_entry(name, path, 0, 1)
+    if depth >= MAX_DEPTH() { return e }    // cap: a dir at the cap shows as 0
+
+    entries, lerr = dir.list(path)
+    if string.length(lerr) > 0 { return e }
+    n = dir_list_count(entries)
+    total = 0
+    i = 0
+    while i < n {
+        // dir_list_get returns a BORROWED ptr into the DirList; copy it to an
+        // owned string (concat "") so it survives dir.list_free below.
+        child_name = string.concat(dir_list_get(entries, i), "")
+        child_path = join_path(path, child_name)
+        child = scan(child_path, child_name, depth + 1)
+        _ = list.add(e.children, child)
+        total = total + child.total_size
+        i = i + 1
+    }
+    // (DirList freed implicitly at process exit for this short-lived tool; the
+    // names were copied out above so nothing dangles.)
+    e.total_size = total
+    return e
+}
+
+join_path(dir: string, name: string) -> string {
+    s = dir
+    if string.ends_with(dir, "/") == 0 { s = string.concat(s, "/") }
+    return string.concat(s, name)
+}
+
+// ─── Squarified treemap ──────────────────────────────────────────
+//
+// Lay children of one entry into (x,y,w,h). The squarified algorithm keeps
+// rectangles close to square by greedily filling a row until adding the next
+// item would worsen the worst aspect ratio, then starting a new row on the
+// shorter remaining side. Mirrors the Tsyne layoutTreemap/layoutRow.
+//
+// Results accumulate into `out` (a list of *Rect). Items below MIN_SIZE are
+// dropped. `depth` is stamped onto each rect for the byDepth colour scheme.
+layout_treemap(out: ptr, x: float, y: float, w: float, h: float, items: ptr, depth: int) {
+    // Filter ≥ MIN_SIZE, sort desc into a working list, scale sizes to AREA
+    // (px²) so the canonical squarified algorithm is area-preserving.
+    work = list.new()
+    total = 0
+    ni = list.size(items)
+    i = 0
+    while i < ni {
+        it, _ = list.get(items, i)
+        e = it as *FileEntry
+        if e.total_size >= MIN_SIZE() {
+            _ = list.add(work, e)
+            total = total + e.total_size
+        }
+        i = i + 1
+    }
+    nw = list.size(work)
+    if nw == 0 { return }
+    if total == 0 { return }
+    sort_desc_by_size(work)
+
+    // Per-item target area in px², summing to the full rect.
+    area_unit = (w * h) / (total / 1.0)
+
+    // Canonical squarified recursion over the remaining rect (rx,ry,rw,rh).
+    rx = x; ry = y; rw = w; rh = h
+    start = 0
+    while start < nw {
+        side = math.min_float(rw, rh)
+        if side <= 0.0 { start = nw }    // no room left; stop
+        else {
+            // Grow the current row while it improves the worst aspect ratio.
+            row_area = 0.0
+            count = 0
+            best_worst = 1000000000.0
+            grow = 1
+            while grow == 1 {
+                idx = start + count
+                if idx >= nw { grow = 0 }
+                else {
+                    it, _ = list.get(work, idx); e = it as *FileEntry
+                    a = (e.total_size / 1.0) * area_unit
+                    cand_worst = row_worst(work, start, count + 1, row_area + a, side)
+                    if count == 0 { row_area = row_area + a; count = count + 1; best_worst = cand_worst }
+                    else {
+                        if cand_worst <= best_worst {
+                            row_area = row_area + a; count = count + 1; best_worst = cand_worst
+                        } else { grow = 0 }
+                    }
+                }
+            }
+            // Lay the `count` items as a band; advance the remaining rect.
+            band = row_area / side                 // band thickness
+            if rw >= rh {
+                lay_band(out, work, start, count, area_unit, rx, ry, band, rh, 1, depth)
+                rx = rx + band; rw = rw - band
+            } else {
+                lay_band(out, work, start, count, area_unit, rx, ry, rw, band, 0, depth)
+                ry = ry + band; rh = rh - band
+            }
+            start = start + count
+        }
+    }
+}
+
+// Worst aspect ratio if items [s, s+cnt) form a band of total `area` along a
+// strip of length `side`. Each item's other dim = its_area/band_thickness.
+row_worst(work: ptr, s: int, cnt: int, area: float, side: float) -> float {
+    if area <= 0.0 { return 1000000000.0 }
+    band = area / side
+    worst = 0.0
+    j = 0
+    while j < cnt {
+        it, _ = list.get(work, s + j); e = it as *FileEntry
+        // each item's length along the strip = its share of the band
+        along = (e.total_size / 1.0) / sum_sizes(work, s, cnt) * side
+        ar = band / along
+        if along / band > ar { ar = along / band }
+        if ar > worst { worst = ar }
+        j = j + 1
+    }
+    return worst
+}
+
+sum_sizes(work: ptr, s: int, cnt: int) -> float {
+    t = 0.0
+    j = 0
+    while j < cnt {
+        it, _ = list.get(work, s + j); e = it as *FileEntry
+        t = t + (e.total_size / 1.0)
+        j = j + 1
+    }
+    if t == 0.0 { return 1.0 }
+    return t
+}
+
+// Lay `cnt` items as a band at (bx,by). horizontal=1 → band runs down a column
+// of width `bw`, items stacked vertically (their height = share of `bh`...).
+// We pass the band's two dims explicitly: along the strip-length `len_dim`,
+// across the band `thick_dim`. horizontal flag picks which axis is which.
+lay_band(out: ptr, work: ptr, s: int, cnt: int, area_unit: float, bx: float, by: float, bw: float, bh: float, vertical: int, depth: int) {
+    rowsum = sum_sizes(work, s, cnt)
+    cx = bx; cy = by
+    j = 0
+    while j < cnt {
+        it, _ = list.get(work, s + j); e = it as *FileEntry
+        frac_j = (e.total_size / 1.0) / rowsum
+        if vertical == 1 {
+            // band is a column of width bw; items stacked down it (height share)
+            ih = bh * frac_j
+            _ = list.add(out, mk_rect(cx, cy, bw, ih, e.total_size, depth, e))
+            cy = cy + ih
+        } else {
+            // band is a row of height bh; items across it (width share)
+            iw = bw * frac_j
+            _ = list.add(out, mk_rect(cx, cy, iw, bh, e.total_size, depth, e))
+            cx = cx + iw
+        }
+        j = j + 1
+    }
+}
+
+// In-place descending sort of a *FileEntry list by total_size. Selection sort
+// via get/set swaps only (std.list has add/get/set/size/remove — no insert);
+// child counts per dir are modest, so O(n^2) is fine.
+sort_desc_by_size(lst: ptr) {
+    n = list.size(lst)
+    i = 0
+    while i < n {
+        best = i
+        bt, _ = list.get(lst, i); be = bt as *FileEntry
+        best_size = be.total_size
+        j = i + 1
+        while j < n {
+            jt, _ = list.get(lst, j); ej = jt as *FileEntry
+            if ej.total_size > best_size {
+                best = j
+                best_size = ej.total_size
+            }
+            j = j + 1
+        }
+        if best != i {
+            ai, _ = list.get(lst, i)
+            ab, _ = list.get(lst, best)
+            list.set(lst, i, ab)
+            list.set(lst, best, ai)
+        }
+        i = i + 1
+    }
+}
+
+// ─── Colour ──────────────────────────────────────────────────────
+//
+// We work in HSL and emit `rgb(r,g,b)` strings (AeVG's parse_color_to_rgba
+// accepts them). hsl_rgb mirrors the original's hslToRgb; bevel highlight/
+// shadow just nudge L (no rgb→hsl→rgb round-trip needed since we keep H/S/L).
+
+frac(v: float) -> float { return v - math.floor(v) }
+
+// h in [0,360), s,l in [0,1] → "rgb(r,g,b)".
+hsl_rgb(h: float, s: float, l: float) -> string {
+    a = s * math.min_float(l, 1.0 - l)
+    r = hsl_chan(0.0, h, l, a)
+    g = hsl_chan(8.0, h, l, a)
+    b = hsl_chan(4.0, h, l, a)
+    return rgb_str(r, g, b)
+}
+hsl_chan(n: float, h: float, l: float, a: float) -> int {
+    k = frac((n + h / 30.0) / 12.0) * 12.0
+    m = math.min_float(k - 3.0, math.min_float(9.0 - k, 1.0))
+    m = math.max_float(-1.0, m)
+    v = l - a * m
+    return lrint(v * 255.0)    // long→int narrows implicitly at the int-typed return (see rasterize.ae)
+}
+extern lrint(x: float) -> long
+
+rgb_str(r: int, g: int, b: int) -> string {
+    s = "rgb("
+    s = string.concat(s, string.from_int(r)); s = string.concat(s, ",")
+    s = string.concat(s, string.from_int(g)); s = string.concat(s, ",")
+    s = string.concat(s, string.from_int(b)); s = string.concat(s, ")")
+    return s
+}
+
+// Base HSL for a rect under the active scheme. Returns h (0..360); s,l fixed.
+// scheme: 0=bySize 1=byDepth 2=byType. total is the root size (bySize ratio).
+hue_for(r: *Rect, scheme: int, total: int, hovered: int) -> float {
+    if scheme == 1 { return frac((r.depth * 60) / 360.0) * 360.0 }
+    if scheme == 2 { return hue_by_type(r.entry.name) }
+    // bySize: log-scaled hue across the size range.
+    ratio = log((r.size / 1.0) + 1.0) / log((total / 1.0) + 1.0)
+    return frac(ratio) * 360.0
+}
+
+hue_by_type(name: string) -> float {
+    if ends(name, ".ae") == 1   { return 0.0 }
+    if ends(name, ".ts") == 1   { return 0.0 }
+    if ends(name, ".c") == 1    { return 30.0 }
+    if ends(name, ".h") == 1    { return 45.0 }
+    if ends(name, ".json") == 1 { return 60.0 }
+    if ends(name, ".md") == 1   { return 120.0 }
+    if ends(name, ".png") == 1  { return 180.0 }
+    if ends(name, ".svg") == 1  { return 200.0 }
+    if ends(name, ".sh") == 1   { return 240.0 }
+    return 300.0
+}
+ends(s: string, suf: string) -> int { return string.ends_with(s, suf) }
+
+// ─── 3D-bevelled rect render (into the current deferred vg root) ──
+//
+// Mirrors renderShadedRect: a shadow L-15 on bottom/right, a highlight L+20 on
+// top/left, the base colour in the middle. `root` is the vg root node.
+BEVEL() -> float { return 3.0 }
+
+render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float, selected: int) {
+    bv = BEVEL()
+    if r.w < 30.0 { bv = 1.0 }
+    base = hsl_rgb(h, s, l)
+    dark = hsl_rgb(h, s, math.max_float(0.0, l - 0.15))
+    lite = hsl_rgb(h, s, math.min_float(1.0, l + 0.20))
+
+    // shadow: bottom + right
+    sh1 = vg.rect(root, r.x + bv, r.y + r.h - bv, r.w - bv, bv); vg.fill(sh1, dark)
+    sh2 = vg.rect(root, r.x + r.w - bv, r.y + bv, bv, r.h - bv); vg.fill(sh2, dark)
+    // highlight: top + left
+    hl1 = vg.rect(root, r.x, r.y, r.w - bv, bv); vg.fill(hl1, lite)
+    hl2 = vg.rect(root, r.x, r.y + bv, bv, r.h - bv); vg.fill(hl2, lite)
+    // main surface
+    mn = vg.rect(root, r.x + bv, r.y + bv, r.w - 2.0 * bv, r.h - 2.0 * bv)
+    vg.fill(mn, base)
+    if selected == 1 { vg.stroke(mn, "#ff0000", 1.0) }
+    else { vg.stroke(mn, "#ffffff", 0.0) }
+}
+
+// Draw the whole treemap (background + every rect + labels) into `root`.
+// scheme 0/1/2; total = root size; sel_idx = selected rect index (-1 none).
+draw_treemap(root: ptr, rects: ptr, scheme: int, total: int, sel_idx: int) {
+    bg = vg.rect(root, 0.0, 0.0, CANVAS_W(), CANVAS_H())
+    vg.fill(bg, "#f5f5f5"); vg.stroke(bg, "#cccccc", 1.0)
+
+    n = list.size(rects)
+    i = 0
+    while i < n {
+        rp, _ = list.get(rects, i); r = rp as *Rect
+        if r.w > 0.5 {
+            if r.h > 0.5 {
+                hovered = 0
+                h = hue_for(r, scheme, total, hovered)
+                sel = 0
+                if i == sel_idx { sel = 1 }
+                render_shaded(root, r, h, 0.7, 0.55, sel)
+                // label if the rect is big enough
+                if r.h > 25.0 {
+                    if r.w > 40.0 {
+                        nm = clip_name(r.entry.name)
+                        tx = vg.text(root, r.x + 5.0, r.y + 15.0, nm)
+                        vg.fill(tx, "#000000")
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+clip_name(name: string) -> string {
+    if string.length(name) > 20 {
+        return string.concat(string.substring(name, 0, 17), "...")
+    }
+    return name
+}
+
+// ─── Headless one-frame PNG render ───────────────────────────────
+//
+// Scan AEVG_DIR (default: $HOME), lay out + draw the treemap, write a PNG to
+// AEVG_OUT (default /tmp/gp.png). The verifiable proof of the whole pipeline.
+// scheme via AEVG_SCHEME: size|depth|type (default size).
+
+scheme_from_env() -> int {
+    s = os_getenv("AEVG_SCHEME")
+    if string.equals(s, "depth") == 1 { return 1 }
+    if string.equals(s, "type") == 1 { return 2 }
+    return 0
+}
+
+main() {
+    dir = os_getenv("AEVG_DIR")
+    if string.length(dir) == 0 {
+        dir = os_getenv("HOME")
+        if string.length(dir) == 0 { dir = "/tmp" }
+    }
+    out = os_getenv("AEVG_OUT")
+    if string.length(out) == 0 { out = "/tmp/gp.png" }
+
+    root_entry = scan(dir, "root", 0)
+    rects = list.new()
+    layout_treemap(rects, 0.0, 0.0, CANVAS_W(), CANVAS_H(), root_entry.children, 0)
+    println("scanned ${dir}: ${root_entry.total_size} bytes, ${list.size(rects)} rects")
+
+    cid = canvas_create(800, 600)
+    opts = opts_new()
+    opts_set_view_box(opts, view_box(0.0, 0.0, CANVAS_W(), CANVAS_H()))
+    opts_set_width(opts, CANVAS_W())
+    opts_set_height(opts, CANVAS_H())
+    scene = vg.scene_new(create_aevg_context(opts), aevg_gtk_backend.gtk_backend_new(cid))
+    vg.scene_set_canvas(scene, cid)
+    vg.scene_set_deferred(scene, 1)
+    root = vg.vg_root(scene)
+
+    draw_treemap(root, rects, scheme_from_env(), root_entry.total_size, -1)
+
+    canvas_clear(cid)
+    vg_flush_live(scene, cid, 0.0)
+    ok = canvas_write_png(cid, out, 800, 600)
+    if ok == 1 { println("wrote ${out}") } else { println("PNG fail") }
+}

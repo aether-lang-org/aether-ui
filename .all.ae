@@ -115,6 +115,7 @@ main() {
     build_app(b, root, os_name, "aevg/example_raster.ae",        "raster_demo")
     build_app(b, root, os_name, "aevg/example_vg.ae",            "vg_demo")
     build_app(b, root, os_name, "aevg/example_vg_png.ae",        "vg_png")
+    build_app(b, root, os_name, "aevg/grand_perspective.ae",     "grand_perspective")
 
     // ── AeVG SVG-transpiler CLI tools (stdin → source/PNG) ──
     build_app(b, root, os_name, "aevg/svg_render_png.ae",            "svg_render_png")
