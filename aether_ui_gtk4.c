@@ -1315,6 +1315,11 @@ typedef struct {
     // for hover hit-testing (e.g. a treemap status line tracking the tile under
     // the cursor). Widget enter/leave (on_hover_enter/leave) gives no coords.
     AeClosure* on_move;
+    // Key-press hook — receives a key NAME string (e.g. "Left", "a", "space",
+    // "Escape") on every key-down while the canvas has focus. For games /
+    // keyboard-driven canvases. The scene's event model already has the
+    // dispatch side (grammar_events.dispatch_key_down); this bridges real keys.
+    AeClosure* on_key;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -1541,6 +1546,9 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
 int aether_ui_canvas_create_impl(int width, int height) {
     ensure_gtk_init();
     GtkWidget* da = gtk_drawing_area_new();
+    // Focusable so it can receive key events (canvas_on_key); a GtkDrawingArea
+    // isn't focusable by default. Harmless for canvases that never take keys.
+    gtk_widget_set_focusable(da, TRUE);
     // content_width/height is the canvas's NATURAL (minimum) size — used when
     // no parent forces a size (headless PNG, canvas in a scroll view). But a
     // GtkDrawingArea won't grow past its content size on its own, so a canvas
@@ -1564,6 +1572,7 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->capacity = 0;
     cs->on_resize = NULL;
     cs->on_move = NULL;
+    cs->on_key = NULL;
     cs->on_click = NULL;
     cs->last_w = width;
     cs->last_h = height;
@@ -1650,6 +1659,35 @@ void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     GtkEventController* motion = gtk_event_controller_motion_new();
     g_signal_connect(motion, "motion", G_CALLBACK(on_canvas_move), boxed_closure);
     gtk_widget_add_controller(w, motion);
+}
+
+// Key-press on the canvas: forward the key NAME (gdk_keyval_name, e.g. "Left",
+// "a", "space", "Escape") to the boxed closure. The widget must have focus —
+// the canvas is set focusable at creation, and on_key registration grabs it.
+static gboolean on_canvas_key(GtkEventControllerKey* ctrl, guint keyval,
+                               guint keycode, GdkModifierType state, gpointer data) {
+    (void)ctrl; (void)keycode; (void)state;
+    AeClosure* c = (AeClosure*)data;
+    if (c && c->fn) {
+        const char* name = gdk_keyval_name(keyval);
+        ((void(*)(void*, const char*))c->fn)(c->env, name ? name : "");
+    }
+    return TRUE;   // handled
+}
+
+// Register a key-down hook on a canvas. The boxed Aether closure takes
+// (key: string). Bridges real GTK key events into the scene's keyboard model
+// (which already has grammar_events.dispatch_key_down on the Aether side).
+void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_key = (AeClosure*)boxed_closure;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    GtkEventController* keys = gtk_event_controller_key_new();
+    g_signal_connect(keys, "key-pressed", G_CALLBACK(on_canvas_key), boxed_closure);
+    gtk_widget_add_controller(w, keys);
+    gtk_widget_grab_focus(w);   // so keys arrive without a click first
 }
 
 void aether_ui_canvas_begin_path_impl(int canvas_id) {

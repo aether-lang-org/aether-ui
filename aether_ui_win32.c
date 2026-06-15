@@ -2364,6 +2364,13 @@ void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     canvases[canvas_id - 1].on_move = (AeClosure*)boxed_closure;
 }
 
+// Keyboard input on a canvas. No-op stub for now — the Win32 bridge would
+// route WM_KEYDOWN → key-name string into the closure (mirrors the GTK4
+// GtkEventControllerKey path). The Linux backend is the reference impl.
+void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
 // begin_path starts a fresh command stream — drop any previously-recorded
 // commands so a redraw-per-frame loop doesn't accumulate unboundedly.
 // Previously this was an append-only op, which meant an animated canvas

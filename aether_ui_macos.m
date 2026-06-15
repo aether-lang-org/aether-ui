@@ -1536,6 +1536,13 @@ void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     }
 }
 
+// Keyboard input on a canvas. No-op stub for now — the AppKit bridge would
+// route NSView keyDown: → key-name string into the closure (mirrors the GTK4
+// GtkEventControllerKey path). The Linux backend is the reference impl.
+void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_BEGIN_PATH });
 }
