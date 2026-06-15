@@ -1,11 +1,28 @@
 // aevg/grand_perspective_core.ae — shared core for the GrandPerspective treemap
-// (scan + squarified layout + colour + draw). Imported by both the headless PNG
-// renderer (grand_perspective.ae) and the windowed interactive app
-// (grand_perspective_app.ae). NO main.
+// (scan + squarified layout + colour + draw). Imported by the windowed
+// interactive app (grand_perspective_app.ae). NO main.
 //
-// GPL-2.0 lineage: derivative of GrandPerspective (Erwin Bonsma, GPL-2.0); see
-// grand_perspective.ae for the full provenance/licence notice. This file shares
-// that GPL-2.0-or-later, no-warranty status.
+// ─── Provenance & licence (GPL lineage) ──────────────────────────
+//
+// This is a derivative work of GrandPerspective, a macOS disk-usage visualiser
+// by Erwin Bonsma, which is licensed under the GNU GENERAL PUBLIC LICENSE,
+// version 2 (GPL-2.0). Upstream: https://grandperspectiv.sourceforge.net/
+//
+//   Portions © Erwin Bonsma — GrandPerspective (GPL-2.0)
+//   Portions © Paul Hammant — Tsyne port; AeVG (Aether) port, 2026
+//
+// Because the squarified-treemap design, the colour-by-size/depth/type scheme,
+// and the 3D-bevel rendering are carried over from GrandPerspective, this code
+// inherits its copyleft: distributed under the GPL-2.0 (or, at your option, any
+// later version), WITH NO WARRANTY to the extent permitted by law. GPL-2.0 text:
+// https://www.gnu.org/licenses/old-licenses/gpl-2.0.html — the GPL obligation
+// applies to this file + grand_perspective_app.ae specifically (the derived
+// work), regardless of the surrounding aether-ui / AeVG project's licence.
+//
+// MAINTAINER NOTE: these GrandPerspective files are a copyleft island in the
+// repo. Keep them self-contained; don't let GPL-incompatible code copy from
+// them, and confirm the repo's overall licence is GPL-compatible before
+// shipping a binary built from them.
 
 exports (
     CANVAS_W, CANVAS_H, MIN_SIZE, MAX_DEPTH,

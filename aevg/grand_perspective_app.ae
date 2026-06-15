@@ -6,8 +6,8 @@
 // button row (Parent / by-Size / by-Depth / by-Type) driving the view.
 //
 // GPL-2.0 lineage: derivative of GrandPerspective (Erwin Bonsma, GPL-2.0) — see
-// grand_perspective.ae for the full provenance/licence notice. GPL-2.0-or-later,
-// no warranty.
+// grand_perspective_core.ae for the full provenance/licence notice.
+// GPL-2.0-or-later, no warranty.
 //
 //   DISPLAY=:0 ./build/grand_perspective_app  [dir]      (dir via argv[1] or $HOME)
 //   click a directory tile to drill in; the buttons re-scheme / go up a level.
