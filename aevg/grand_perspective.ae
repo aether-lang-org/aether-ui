@@ -1,9 +1,28 @@
 // aevg/grand_perspective.ae — disk-usage treemap (a GrandPerspective /
 // DiskInventoryX alike), ported from Tsyne's ported-apps/grand-perspective.
 //
-//   Portions © Erwin Bonsma (GrandPerspective original, GPL-2.0)
-//   Portions © Paul Hammant (Tsyne port); AeVG port 2026.
-//   https://grandperspectiv.sourceforge.net/
+// ─── Provenance & licence (GPL lineage) ──────────────────────────
+//
+// This program is a derivative work of GrandPerspective, a macOS disk-usage
+// visualiser by Erwin Bonsma, which is licensed under the GNU GENERAL PUBLIC
+// LICENSE, version 2 (GPL-2.0). Upstream: https://grandperspectiv.sourceforge.net/
+//
+//   Portions © Erwin Bonsma — GrandPerspective (GPL-2.0)
+//   Portions © Paul Hammant — Tsyne port; AeVG (Aether) port, 2026
+//
+// Because the squarified-treemap design, the colour-by-size/depth/type scheme,
+// and the 3D-bevel rendering are carried over from GrandPerspective, this file
+// inherits its copyleft: it is distributed under the GPL-2.0 (or, at your
+// option, any later version). It comes WITH NO WARRANTY, to the extent
+// permitted by law. See the GPL-2.0 text at
+// https://www.gnu.org/licenses/old-licenses/gpl-2.0.html — and note that this
+// GPL obligation applies to THIS file specifically (a derived work), regardless
+// of the licence of the surrounding aether-ui / AeVG project.
+//
+// NOTE for the project maintainer: because this single file is GPL-derived, it
+// is a copyleft island within the repo. Keep it self-contained / clearly
+// marked; do not let GPL-incompatible code copy from it, and confirm the repo's
+// overall licence is GPL-compatible before shipping a binary built from it.
 //
 // Scans a directory tree, lays it out as a SQUARIFIED treemap (each file a
 // rectangle sized by bytes), and renders it with AeVG: 3D-bevelled rects
