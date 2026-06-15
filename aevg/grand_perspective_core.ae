@@ -106,6 +106,12 @@ scan(path: string, name: string, depth: int) -> ptr {
     if string.length(err) > 0 {
         return mk_entry(name, path, 0, 0)   // unreadable → empty file node
     }
+    // fs_get_stat_size is a 32-bit C int (std.fs has no 64-bit size primitive),
+    // so a file ≥2GB reports a wrapped-negative size. Clamp to 0 rather than let
+    // it poison the parent sum (a single negative made a whole tree's total go
+    // negative). Treemap areas for >2GB files are under-counted — an accepted
+    // limitation until std.fs grows a long-returning size.
+    if size < 0 { size = 0 }
     is_dir = 0
     if kind == 2 { is_dir = 1 }             // fs stat kind: 1=file 2=directory 3=symlink 4=other
 

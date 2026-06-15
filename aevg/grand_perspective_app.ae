@@ -13,10 +13,10 @@
 //   click a directory tile to drill in; the buttons re-scheme / go up a level.
 
 import aether_ui
-import aether_ui (window, hstack, btn, canvas_on_click)
+import aether_ui (window, vstack, hstack, btn, canvas_on_click)
 import vg_live (vg, canvas_region)
 import vg
-import vg (view_box)
+import vg (view_box, rect)
 import grand_perspective_core
 import grand_perspective_core (CANVAS_W, CANVAS_H, scan, layout_treemap, draw_treemap,
     entry_total_size, entry_is_dir, entry_name, entry_children,
@@ -24,7 +24,7 @@ import grand_perspective_core (CANVAS_W, CANVAS_H, scan, layout_treemap, draw_tr
 import std.string
 import std.list
 import std.os
-import std.os (os_getenv)
+import std.os (os_getenv, aether_args_count, aether_args_get)
 
 extern malloc(size: int) -> ptr
 
@@ -106,14 +106,19 @@ hit(s: *AppState, cx: float, cy: float) -> ptr {
 }
 
 main() {
-    start = os_getenv("AEVG_DIR")
+    // Directory to visualise: argv[1] > $AEVG_DIR > $HOME > /tmp.
+    start = ""
+    if aether_args_count() > 1 { start = aether_args_get(1) }
+    if string.length(start) == 0 { start = os_getenv("AEVG_DIR") }
     if string.length(start) == 0 { start = os_getenv("HOME") }
     if string.length(start) == 0 { start = "/tmp" }
 
     root = scan(start, "root", 0)
     st = mk_state(root)
+    println("GrandPerspective: ${start} — ${st.total} bytes, ${list.size(st.rects)} tiles. Click a folder to drill in; Parent to go up.")
 
     window("GrandPerspective — disk usage", 820, 680) {
+      vstack(6) {
         // Button row: drill up + the three colour schemes.
         hstack(6) {
             btn("Parent") callback { drill_up(st) }
@@ -123,22 +128,25 @@ main() {
         }
 
         vg(view_box(0, 0, 800, 600), 800, 600) {
-            // Anchor to derive the vg root, then a per-frame DRAW region that
-            // redraws the whole treemap from `st` each tick — so a drill-down
-            // (which changes st.current/st.rects) re-renders next frame.
-            anchor = vg.rect(0, 0, 0, 0)
+            // Anchor: a BARE shape verb gets _ctx injected; derive the vg root
+            // from it (the root isn't a nameable var in the block).
+            anchor = rect(0, 0, 0, 0)
             root_node = vg.vg_root(vg.node_scene(anchor))
             scene = vg.node_scene(root_node)
-            vg.scene_set_refreshing(scene, 1)
+            vg.scene_set_refreshing(scene, 1)   // keep the live loop redrawing the DRAW region
+
+            // Per-frame DRAW region: redraws the whole treemap from `st` each
+            // tick, so a drill-down (changing st.rects) re-renders next frame.
             canvas_region(root_node, 0.0, 0.0, 800.0, 600.0) callback |rn: ptr, t: float| {
                 draw_treemap(rn, st.rects, st.scheme, st.total, -1)
             }
-            // Canvas click → hit-test the current rects → drill into a dir.
+            // Canvas click → hit-test the current rects → drill into a clicked dir.
             cid = vg.scene_canvas(scene)
             canvas_on_click(cid) callback |cx: float, cy: float| {
                 e = hit(st, cx, cy)
                 if e != null { drill_into(st, e) }
             }
         }
+      }
     }
 }
