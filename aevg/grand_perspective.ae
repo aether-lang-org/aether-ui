@@ -1,6 +1,5 @@
-// aevg/grand_perspective_core.ae — shared core for the GrandPerspective treemap
-// (scan + squarified layout + colour + draw). Imported by the windowed
-// interactive app (grand_perspective_app.ae). NO main.
+// aevg/grand_perspective.ae — GrandPerspective / DiskInventoryX-alike disk-usage
+// treemap, windowed + interactive. Ported from Tsyne's ported-apps.
 //
 // ─── Provenance & licence (GPL lineage) ──────────────────────────
 //
@@ -12,40 +11,50 @@
 //   Portions © Paul Hammant — Tsyne port; AeVG (Aether) port, 2026
 //
 // Because the squarified-treemap design, the colour-by-size/depth/type scheme,
-// and the 3D-bevel rendering are carried over from GrandPerspective, this code
+// and the 3D-bevel rendering are carried over from GrandPerspective, this file
 // inherits its copyleft: distributed under the GPL-2.0 (or, at your option, any
 // later version), WITH NO WARRANTY to the extent permitted by law. GPL-2.0 text:
 // https://www.gnu.org/licenses/old-licenses/gpl-2.0.html — the GPL obligation
-// applies to this file + grand_perspective_app.ae specifically (the derived
-// work), regardless of the surrounding aether-ui / AeVG project's licence.
+// applies to THIS file specifically (the derived work), regardless of the
+// surrounding aether-ui / AeVG project's licence.
 //
-// MAINTAINER NOTE: these GrandPerspective files are a copyleft island in the
-// repo. Keep them self-contained; don't let GPL-incompatible code copy from
-// them, and confirm the repo's overall licence is GPL-compatible before
-// shipping a binary built from them.
+// MAINTAINER NOTE: this is a copyleft island in the repo. Keep it
+// self-contained; don't let GPL-incompatible code copy from it, and confirm the
+// repo's overall licence is GPL-compatible before shipping a binary built from it.
+//
+// ─── What it is ──────────────────────────────────────────────────
+//
+// Scans a directory tree, lays it out as a SQUARIFIED treemap (each file a
+// rect sized by bytes) drawn into a per-frame AeVG DRAW region, and adds:
+//   - a button row: Parent / by Size / by Depth / by Type
+//   - breadcrumbs (the drill path) under the buttons
+//   - click a directory tile to DRILL IN; Parent to go up
+//   - a hover status line at the bottom: name + size of the pointed-at tile
+//
+//   DISPLAY=:0 ./build/grand_perspective  [dir]     (dir via argv[1] or $HOME)
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+//     POST /widget/{id}/click drives the buttons; POST /canvas/1/click?x=&y=
+//     drives a treemap tile (drill-down). Hover has no driver route.
 
-exports (
-    CANVAS_W, CANVAS_H, MIN_SIZE, MAX_DEPTH,
-    scan, layout_treemap, draw_treemap,
-    entry_total_size, entry_is_dir, entry_name, entry_path, entry_children,
-    rect_x, rect_y, rect_w, rect_h, rect_entry,
-    fmt_size
-)
-
-import vg_live (vg)
+import aether_ui
+import aether_ui (window, vstack, hstack, btn, text, enable_test_server,
+    canvas_on_click, canvas_on_move)
+import vg_live (vg, canvas_region)
 import vg
-import vg (view_box, rect, fill, stroke, text, text_sized)
+import vg (view_box, rect, fill, stroke, text_sized)
 import std.math
 import std.string
 import std.list
 import std.os
-import std.os (os_getenv)
+import std.os (os_getenv, aether_args_count, aether_args_get)
 import std.fs
 import std.dir
 
 extern malloc(size: int) -> ptr
 extern log(x: float) -> float            // std.math has no log; libm does
+extern lrint(x: float) -> long           // round-to-nearest; narrows at an int return
 extern string_retain(s: string)          // keep a heap string alive in a struct field
+extern aether_ui_text_set_string(handle: int, text: string)  // update a label's text
 // dir.list returns a DirList* (NOT an AetherStringArray) — index it with these,
 // not string_array_* (different struct; wrong accessor = garbage ptr → crash).
 extern dir_list_count(list: ptr) -> int
@@ -58,9 +67,8 @@ MAX_DEPTH() -> int  { return 5 }
 
 // ─── Data model ──────────────────────────────────────────────────
 //
-// FileEntry is a heap node (Aether structs cross fn boundaries as pointers).
-// children is a std.list of *FileEntry; total_size is bytes (dir = sum of
-// descendants). is_dir 1/0.
+// FileEntry / Rect are heap nodes (Aether structs cross fn boundaries as
+// pointers). children is a std.list of *FileEntry; total_size is bytes.
 struct FileEntry {
     name: string
     path: string
@@ -78,20 +86,6 @@ mk_entry(name: string, path: string, size: int, is_dir: int) -> *FileEntry {
     e.children = list.new()
     return e
 }
-
-// ── ptr-based accessors (struct types don't cross module boundaries; importers
-// hold an opaque ptr and read fields through these — the std.list/regex idiom).
-entry_total_size(e: ptr) -> int { ee = e as *FileEntry; return ee.total_size }
-entry_is_dir(e: ptr) -> int     { ee = e as *FileEntry; return ee.is_dir }
-entry_name(e: ptr) -> string    { ee = e as *FileEntry; return ee.name }
-entry_path(e: ptr) -> string    { ee = e as *FileEntry; return ee.path }
-entry_children(e: ptr) -> ptr   { ee = e as *FileEntry; return ee.children }
-// rect field accessors for hit-testing from the app.
-rect_x(r: ptr) -> float    { rr = r as *Rect; return rr.x }
-rect_y(r: ptr) -> float    { rr = r as *Rect; return rr.y }
-rect_w(r: ptr) -> float    { rr = r as *Rect; return rr.w }
-rect_h(r: ptr) -> float    { rr = r as *Rect; return rr.h }
-rect_entry(r: ptr) -> ptr  { rr = r as *Rect; return rr.entry }
 
 // A laid-out rectangle: geometry + the entry it represents + tree depth.
 struct Rect {
@@ -115,20 +109,16 @@ mk_rect(x: float, y: float, w: float, h: float, size: int, depth: int, entry: *F
 //
 // Recursively stat a path into a FileEntry tree, summing sizes. Depth-capped
 // (MAX_DEPTH) so a huge tree stays bounded; permission errors are skipped
-// (fs.file_stat returns an error → treat as 0-byte file).
-// Returns an opaque ptr (a *FileEntry); importers read it via the entry_*
-// accessors (struct types don't cross module boundaries, so the SIGNATURE must
-// be ptr, not *FileEntry, to be callable from another module).
-scan(path: string, name: string, depth: int) -> ptr {
+// (fs.file_stat error → treat as 0-byte file).
+scan(path: string, name: string, depth: int) -> *FileEntry {
     kind, size, _mtime, err = fs.file_stat(path)
     if string.length(err) > 0 {
         return mk_entry(name, path, 0, 0)   // unreadable → empty file node
     }
     // fs_get_stat_size is a 32-bit C int (std.fs has no 64-bit size primitive),
     // so a file ≥2GB reports a wrapped-negative size. Clamp to 0 rather than let
-    // it poison the parent sum (a single negative made a whole tree's total go
-    // negative). Treemap areas for >2GB files are under-counted — an accepted
-    // limitation until std.fs grows a long-returning size.
+    // it poison the parent sum. Treemap areas for >2GB files are under-counted —
+    // an accepted limitation until std.fs grows a long-returning size.
     if size < 0 { size = 0 }
     is_dir = 0
     if kind == 2 { is_dir = 1 }             // fs stat kind: 1=file 2=directory 3=symlink 4=other
@@ -147,16 +137,14 @@ scan(path: string, name: string, depth: int) -> ptr {
     i = 0
     while i < n {
         // dir_list_get returns a BORROWED ptr into the DirList; copy it to an
-        // owned string (concat "") so it survives dir.list_free below.
+        // owned string (concat "") so it survives the implicit free.
         child_name = string.concat(dir_list_get(entries, i), "")
         child_path = join_path(path, child_name)
-        child = scan(child_path, child_name, depth + 1) as *FileEntry
+        child = scan(child_path, child_name, depth + 1)
         _ = list.add(e.children, child)
         total = total + child.total_size
         i = i + 1
     }
-    // (DirList freed implicitly at process exit for this short-lived tool; the
-    // names were copied out above so nothing dangles.)
     e.total_size = total
     return e
 }
@@ -169,16 +157,11 @@ join_path(dir: string, name: string) -> string {
 
 // ─── Squarified treemap ──────────────────────────────────────────
 //
-// Lay children of one entry into (x,y,w,h). The squarified algorithm keeps
-// rectangles close to square by greedily filling a row until adding the next
-// item would worsen the worst aspect ratio, then starting a new row on the
-// shorter remaining side. Mirrors the Tsyne layoutTreemap/layoutRow.
-//
-// Results accumulate into `out` (a list of *Rect). Items below MIN_SIZE are
-// dropped. `depth` is stamped onto each rect for the byDepth colour scheme.
+// Lay children of one entry into (x,y,w,h). Canonical area-preserving squarified
+// layout: grow a row while it improves the worst aspect ratio, lay it as a band,
+// recurse on the leftover rect. Results accumulate into `out` (a list of *Rect);
+// items below MIN_SIZE are dropped; `depth` is stamped for the byDepth scheme.
 layout_treemap(out: ptr, x: float, y: float, w: float, h: float, items: ptr, depth: int) {
-    // Filter ≥ MIN_SIZE, sort desc into a working list, scale sizes to AREA
-    // (px²) so the canonical squarified algorithm is area-preserving.
     work = list.new()
     total = 0
     ni = list.size(items)
@@ -197,17 +180,14 @@ layout_treemap(out: ptr, x: float, y: float, w: float, h: float, items: ptr, dep
     if total == 0 { return }
     sort_desc_by_size(work)
 
-    // Per-item target area in px², summing to the full rect.
-    area_unit = (w * h) / (total / 1.0)
+    area_unit = (w * h) / (total / 1.0)     // per-byte target area in px²
 
-    // Canonical squarified recursion over the remaining rect (rx,ry,rw,rh).
     rx = x; ry = y; rw = w; rh = h
     start = 0
     while start < nw {
         side = math.min_float(rw, rh)
         if side <= 0.0 { start = nw }    // no room left; stop
         else {
-            // Grow the current row while it improves the worst aspect ratio.
             row_area = 0.0
             count = 0
             best_worst = 1000000000.0
@@ -227,7 +207,6 @@ layout_treemap(out: ptr, x: float, y: float, w: float, h: float, items: ptr, dep
                     }
                 }
             }
-            // Lay the `count` items as a band; advance the remaining rect.
             band = row_area / side                 // band thickness
             if rw >= rh {
                 lay_band(out, work, start, count, area_unit, rx, ry, band, rh, 1, depth)
@@ -242,7 +221,7 @@ layout_treemap(out: ptr, x: float, y: float, w: float, h: float, items: ptr, dep
 }
 
 // Worst aspect ratio if items [s, s+cnt) form a band of total `area` along a
-// strip of length `side`. Each item's other dim = its_area/band_thickness.
+// strip of length `side`.
 row_worst(work: ptr, s: int, cnt: int, area: float, side: float) -> float {
     if area <= 0.0 { return 1000000000.0 }
     band = area / side
@@ -250,7 +229,6 @@ row_worst(work: ptr, s: int, cnt: int, area: float, side: float) -> float {
     j = 0
     while j < cnt {
         it, _ = list.get(work, s + j); e = it as *FileEntry
-        // each item's length along the strip = its share of the band
         along = (e.total_size / 1.0) / sum_sizes(work, s, cnt) * side
         ar = band / along
         if along / band > ar { ar = along / band }
@@ -272,10 +250,8 @@ sum_sizes(work: ptr, s: int, cnt: int) -> float {
     return t
 }
 
-// Lay `cnt` items as a band at (bx,by). horizontal=1 → band runs down a column
-// of width `bw`, items stacked vertically (their height = share of `bh`...).
-// We pass the band's two dims explicitly: along the strip-length `len_dim`,
-// across the band `thick_dim`. horizontal flag picks which axis is which.
+// Lay `cnt` items as a band at (bx,by). vertical=1 → a column of width bw, items
+// stacked down it; else a row of height bh, items across it.
 lay_band(out: ptr, work: ptr, s: int, cnt: int, area_unit: float, bx: float, by: float, bw: float, bh: float, vertical: int, depth: int) {
     rowsum = sum_sizes(work, s, cnt)
     cx = bx; cy = by
@@ -284,12 +260,10 @@ lay_band(out: ptr, work: ptr, s: int, cnt: int, area_unit: float, bx: float, by:
         it, _ = list.get(work, s + j); e = it as *FileEntry
         frac_j = (e.total_size / 1.0) / rowsum
         if vertical == 1 {
-            // band is a column of width bw; items stacked down it (height share)
             ih = bh * frac_j
             _ = list.add(out, mk_rect(cx, cy, bw, ih, e.total_size, depth, e))
             cy = cy + ih
         } else {
-            // band is a row of height bh; items across it (width share)
             iw = bw * frac_j
             _ = list.add(out, mk_rect(cx, cy, iw, bh, e.total_size, depth, e))
             cx = cx + iw
@@ -298,9 +272,8 @@ lay_band(out: ptr, work: ptr, s: int, cnt: int, area_unit: float, bx: float, by:
     }
 }
 
-// In-place descending sort of a *FileEntry list by total_size. Selection sort
-// via get/set swaps only (std.list has add/get/set/size/remove — no insert);
-// child counts per dir are modest, so O(n^2) is fine.
+// In-place descending sort of a *FileEntry list by total_size (selection sort
+// via get/set swaps; std.list has no insert, child counts are modest).
 sort_desc_by_size(lst: ptr) {
     n = list.size(lst)
     i = 0
@@ -327,15 +300,10 @@ sort_desc_by_size(lst: ptr) {
     }
 }
 
-// ─── Colour ──────────────────────────────────────────────────────
-//
-// We work in HSL and emit `rgb(r,g,b)` strings (AeVG's parse_color_to_rgba
-// accepts them). hsl_rgb mirrors the original's hslToRgb; bevel highlight/
-// shadow just nudge L (no rgb→hsl→rgb round-trip needed since we keep H/S/L).
+// ─── Colour (HSL → rgb() strings AeVG's parse_color_to_rgba accepts) ──
 
 frac(v: float) -> float { return v - math.floor(v) }
 
-// h in [0,360), s,l in [0,1] → "rgb(r,g,b)".
 hsl_rgb(h: float, s: float, l: float) -> string {
     a = s * math.min_float(l, 1.0 - l)
     r = hsl_chan(0.0, h, l, a)
@@ -348,9 +316,8 @@ hsl_chan(n: float, h: float, l: float, a: float) -> int {
     m = math.min_float(k - 3.0, math.min_float(9.0 - k, 1.0))
     m = math.max_float(-1.0, m)
     v = l - a * m
-    return lrint(v * 255.0)    // long→int narrows implicitly at the int-typed return (see rasterize.ae)
+    return lrint(v * 255.0)
 }
-extern lrint(x: float) -> long
 
 rgb_str(r: int, g: int, b: int) -> string {
     s = "rgb("
@@ -360,13 +327,11 @@ rgb_str(r: int, g: int, b: int) -> string {
     return s
 }
 
-// Base HSL for a rect under the active scheme. Returns h (0..360); s,l fixed.
-// scheme: 0=bySize 1=byDepth 2=byType. total is the root size (bySize ratio).
-hue_for(r: *Rect, scheme: int, total: int, hovered: int) -> float {
+// Base hue (0..360) for a rect under the active scheme (0=bySize 1=byDepth 2=byType).
+hue_for(r: *Rect, scheme: int, total: int) -> float {
     if scheme == 1 { return frac((r.depth * 60) / 360.0) * 360.0 }
     if scheme == 2 { return hue_by_type(r.entry.name) }
-    // bySize: log-scaled hue across the size range.
-    ratio = log((r.size / 1.0) + 1.0) / log((total / 1.0) + 1.0)
+    ratio = log((r.size / 1.0) + 1.0) / log((total / 1.0) + 1.0)   // bySize: log-scaled
     return frac(ratio) * 360.0
 }
 
@@ -384,10 +349,7 @@ hue_by_type(name: string) -> float {
 }
 ends(s: string, suf: string) -> int { return string.ends_with(s, suf) }
 
-// ─── 3D-bevelled rect render (into the current deferred vg root) ──
-//
-// Mirrors renderShadedRect: a shadow L-15 on bottom/right, a highlight L+20 on
-// top/left, the base colour in the middle. `root` is the vg root node.
+// ─── 3D-bevelled rect render ──────────────────────────────────────
 BEVEL() -> float { return 3.0 }
 
 render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float, selected: int) {
@@ -397,13 +359,10 @@ render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float, selected: int) 
     dark = hsl_rgb(h, s, math.max_float(0.0, l - 0.15))
     lite = hsl_rgb(h, s, math.min_float(1.0, l + 0.20))
 
-    // shadow: bottom + right
     sh1 = vg.rect(root, r.x + bv, r.y + r.h - bv, r.w - bv, bv); vg.fill(sh1, dark)
     sh2 = vg.rect(root, r.x + r.w - bv, r.y + bv, bv, r.h - bv); vg.fill(sh2, dark)
-    // highlight: top + left
     hl1 = vg.rect(root, r.x, r.y, r.w - bv, bv); vg.fill(hl1, lite)
     hl2 = vg.rect(root, r.x, r.y + bv, bv, r.h - bv); vg.fill(hl2, lite)
-    // main surface
     mn = vg.rect(root, r.x + bv, r.y + bv, r.w - 2.0 * bv, r.h - 2.0 * bv)
     vg.fill(mn, base)
     if selected == 1 { vg.stroke(mn, "#ff0000", 1.0) }
@@ -411,8 +370,7 @@ render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float, selected: int) 
 }
 
 // Draw the whole treemap (background + every rect + labels) into `root`.
-// scheme 0/1/2; total = root size; sel_idx = selected rect index (-1 none).
-draw_treemap(root: ptr, rects: ptr, scheme: int, total: int, sel_idx: int) {
+draw_treemap(root: ptr, rects: ptr, scheme: int, total: int) {
     bg = vg.rect(root, 0.0, 0.0, CANVAS_W(), CANVAS_H())
     vg.fill(bg, "#f5f5f5"); vg.stroke(bg, "#cccccc", 1.0)
 
@@ -422,15 +380,11 @@ draw_treemap(root: ptr, rects: ptr, scheme: int, total: int, sel_idx: int) {
         rp, _ = list.get(rects, i); r = rp as *Rect
         if r.w > 0.5 {
             if r.h > 0.5 {
-                hovered = 0
-                h = hue_for(r, scheme, total, hovered)
-                sel = 0
-                if i == sel_idx { sel = 1 }
-                render_shaded(root, r, h, 0.7, 0.55, sel)
-                // label if the tile is big enough. 16 viewBox-unit font; the
-                // renderer draws at (y - baseline_offset≈17), so a baseline of
-                // y+34 lands the text visibly ~17px below the top edge — clear of
-                // the border. Gate h>50 so the label never spills past the bottom.
+                h = hue_for(r, scheme, total)
+                render_shaded(root, r, h, 0.7, 0.55, 0)
+                // Label tall-enough tiles. 16-unit font; the renderer draws at
+                // (y - baseline≈17), so baseline y+44 sits the text clear of the
+                // top edge; gate h>50 so it never spills past the bottom.
                 if r.h > 50.0 {
                     if r.w > 44.0 {
                         nm = clip_name(r.entry.name)
@@ -451,8 +405,7 @@ clip_name(name: string) -> string {
     return name
 }
 
-// Human-readable byte size: "B / KB / MB / GB" (one decimal for KB+). Used by
-// the windowed app's hover status line.
+// Human-readable byte size: "B / KB / MB / GB" (one decimal for KB+).
 fmt_size(bytes: int) -> string {
     b = bytes / 1.0
     if b < 1024.0 { return string.concat(string.from_int(bytes), " B") }
@@ -463,15 +416,176 @@ fmt_size(bytes: int) -> string {
     gb = mb / 1024.0
     return string.concat(one_dp(gb), " GB")
 }
-// Round a float to 1 decimal place as a string (no printf-style format in std).
 one_dp(v: float) -> string {
-    scaled = round_i(v * 10.0)        // tenths, rounded to nearest int
+    scaled = round_i(v * 10.0)        // tenths, rounded
     whole = scaled / 10
-    frac = scaled - whole * 10
-    if frac < 0 { frac = 0 - frac }
+    fr = scaled - whole * 10
+    if fr < 0 { fr = 0 - fr }
     return string.concat(string.from_int(whole),
-             string.concat(".", string.from_int(frac)))
+             string.concat(".", string.from_int(fr)))
 }
-// float → nearest int (libm lrint returns long; narrows at the int return).
 round_i(x: float) -> int { return lrint(x) }
 
+// ─── App state + navigation ───────────────────────────────────────
+//
+// `current` is the entry whose children are tiled now; `stack` is the drill
+// path (root first) so Parent can pop. `rects` is the current layout, used to
+// draw AND to hit-test clicks. scheme 0/1/2. total = root size (bySize ratio).
+struct AppState {
+    root: *FileEntry
+    current: *FileEntry
+    stack: ptr       // list of *FileEntry (drill path, includes root)
+    rects: ptr       // list of *Rect for the current view
+    scheme: int
+    total: int
+    status: int      // handle of the hover status-line label (bottom)
+    crumbs: int      // handle of the breadcrumb label (top)
+}
+
+mk_state(root: *FileEntry) -> *AppState {
+    s = malloc(64) as *AppState
+    s.root = root
+    s.current = root
+    s.stack = list.new()
+    _ = list.add(s.stack, root)
+    s.rects = list.new()
+    s.scheme = 0
+    s.total = root.total_size
+    s.status = 0
+    s.crumbs = 0
+    relayout(s)
+    return s
+}
+
+// Breadcrumb string from the drill stack: "root / aevg / test".
+crumbs_str(s: *AppState) -> string {
+    out = ""
+    n = list.size(s.stack)
+    i = 0
+    while i < n {
+        it, _ = list.get(s.stack, i); e = it as *FileEntry
+        if i > 0 { out = string.concat(out, "  /  ") }
+        out = string.concat(out, e.name)
+        i = i + 1
+    }
+    return out
+}
+
+update_crumbs(s: *AppState) {
+    if s.crumbs != 0 { aether_ui_text_set_string(s.crumbs, crumbs_str(s)) }
+}
+
+relayout(s: *AppState) {
+    s.rects = list.new()
+    layout_treemap(s.rects, 0.0, 0.0, CANVAS_W(), CANVAS_H(), s.current.children, 0)
+}
+
+drill_into(s: *AppState, entry: *FileEntry) {
+    if entry.is_dir == 1 {
+        _ = list.add(s.stack, entry)
+        s.current = entry
+        relayout(s)
+        update_crumbs(s)
+    }
+}
+
+drill_up(s: *AppState) {
+    n = list.size(s.stack)
+    if n > 1 {
+        list.remove(s.stack, n - 1)
+        top, _ = list.get(s.stack, list.size(s.stack) - 1)
+        s.current = top as *FileEntry
+        relayout(s)
+        update_crumbs(s)
+    }
+}
+
+set_scheme(s: *AppState, scheme: int) { s.scheme = scheme }
+
+// Hit-test (cx,cy) in canvas px against the current rects; return the entry of
+// the topmost (last-drawn) rect containing the point, or null.
+hit(s: *AppState, cx: float, cy: float) -> *FileEntry {
+    n = list.size(s.rects)
+    found = null as *FileEntry
+    i = 0
+    while i < n {
+        rp, _ = list.get(s.rects, i); r = rp as *Rect
+        if cx >= r.x {
+            if cx <= r.x + r.w {
+                if cy >= r.y {
+                    if cy <= r.y + r.h { found = r.entry }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return found
+}
+
+main() {
+    // Directory to visualise: argv[1] > $AEVG_DIR > $HOME > /tmp.
+    start = ""
+    if aether_args_count() > 1 { start = aether_args_get(1) }
+    if string.length(start) == 0 { start = os_getenv("AEVG_DIR") }
+    if string.length(start) == 0 { start = os_getenv("HOME") }
+    if string.length(start) == 0 { start = "/tmp" }
+
+    root = scan(start, "root", 0)
+    st = mk_state(root)
+    println("GrandPerspective: ${start} — ${st.total} bytes, ${list.size(st.rects)} tiles. Click a folder to drill in; Parent to go up.")
+
+    window("GrandPerspective — disk usage", 820, 680) {
+      vstack(6) {
+        hstack(6) {
+            btn("Parent") callback { drill_up(st) }
+            btn("by Size") callback { set_scheme(st, 0) }
+            btn("by Depth") callback { set_scheme(st, 1) }
+            btn("by Type") callback { set_scheme(st, 2) }
+        }
+
+        // Breadcrumb: the drill path (root / … / current). Updated on drill.
+        st.crumbs = text(crumbs_str(st))
+
+        vg(view_box(0, 0, 800, 600), 800, 600) {
+            // A BARE shape verb gets _ctx injected; derive the vg root from it.
+            anchor = rect(0, 0, 0, 0)
+            root_node = vg.vg_root(vg.node_scene(anchor))
+            scene = vg.node_scene(root_node)
+            vg.scene_set_refreshing(scene, 1)   // keep the live loop redrawing
+
+            // Per-frame DRAW region: redraws the treemap from `st` each tick, so
+            // a drill-down (changing st.rects) re-renders next frame.
+            canvas_region(root_node, 0.0, 0.0, 800.0, 600.0) callback |rn: ptr, t: float| {
+                draw_treemap(rn, st.rects, st.scheme, st.total)
+            }
+            cid = vg.scene_canvas(scene)
+            // Click → hit-test → drill into a clicked directory.
+            canvas_on_click(cid) callback |cx: float, cy: float| {
+                e = hit(st, cx, cy)
+                if e != null { drill_into(st, e) }
+            }
+            // Hover → hit-test → show name + size in the status line (covers
+            // tiles too small or too dominant to carry their own label).
+            canvas_on_move(cid) callback |mx: float, my: float| {
+                he = hit(st, mx, my)
+                if he == null {
+                    aether_ui_text_set_string(st.status, "—")
+                } else {
+                    kindw = "File"
+                    if he.is_dir == 1 { kindw = "Folder" }
+                    msg = string.concat(kindw, string.concat(": ", he.name))
+                    msg = string.concat(msg, string.concat("   ", fmt_size(he.total_size)))
+                    aether_ui_text_set_string(st.status, msg)
+                }
+            }
+        }
+
+        // Hover status line at the BOTTOM.
+        st.status = text("Hover a tile for its name and size")
+      }
+      // AetherUIDriver: arm the HTTP test server when AETHER_UI_TEST_PORT is set.
+      // Drives the buttons (/widget/{id}/click) + tile drill-down
+      // (/canvas/1/click?x=&y=). Off by default — a plain window otherwise.
+      if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
