@@ -1287,6 +1287,7 @@ typedef struct {
     int count;
     int capacity;
     int widget_handle;
+    AeClosure* on_move;   // pointer-move hook (canvas-local x,y); null = none
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -1457,6 +1458,29 @@ static void canvas_add_cmd(int canvas_id, CanvasCmd cmd) {
         }
     }
 }
+
+// Pointer-move hover: a tracking area over the whole view delivers mouseMoved:;
+// we forward the view-local point (already top-left origin since isFlipped) to
+// the canvas's on_move closure. updateTrackingAreas keeps it sized to the view.
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    for (NSTrackingArea* ta in [self.trackingAreas copy]) {
+        [self removeTrackingArea:ta];
+    }
+    NSTrackingArea* ta = [[NSTrackingArea alloc]
+        initWithRect:[self bounds]
+             options:(NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect)
+               owner:self
+            userInfo:nil];
+    [self addTrackingArea:ta];
+}
+
+- (void)mouseMoved:(NSEvent*)event {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || !cs->on_move || !cs->on_move->fn) return;
+    NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+    ((void(*)(void*, double, double))cs->on_move->fn)(cs->on_move->env, p.x, p.y);
+}
 @end
 
 int aether_ui_canvas_create_impl(int width, int height) {
@@ -1473,6 +1497,7 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->cmds = NULL;
     cs->count = 0;
     cs->capacity = 0;
+    cs->on_move = NULL;
     canvas_state_count++;
     int canvas_id = canvas_state_count;
 
@@ -1499,7 +1524,16 @@ void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
 }
 
 void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
-    (void)canvas_id; (void)boxed_closure;   // TODO: NSTrackingArea mouseMoved → (x,y)
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_move = (AeClosure*)boxed_closure;
+    // Ensure the view has a tracking area now (updateTrackingAreas also runs on
+    // layout). The window must accept mouse-moved events for mouseMoved: to fire.
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(cs->widget_handle);
+    if (v) {
+        [v updateTrackingAreas];
+        if (v.window) { [v.window setAcceptsMouseMovedEvents:YES]; }
+    }
 }
 
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
