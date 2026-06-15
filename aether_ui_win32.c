@@ -2357,6 +2357,10 @@ void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
     (void)canvas_id; (void)boxed_closure;
 }
 
+void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;   // TODO: WM_MOUSEMOVE → (x,y)
+}
+
 // begin_path starts a fresh command stream — drop any previously-recorded
 // commands so a redraw-per-frame loop doesn't accumulate unboundedly.
 // Previously this was an append-only op, which meant an animated canvas

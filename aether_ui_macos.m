@@ -1498,6 +1498,10 @@ void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
     (void)canvas_id; (void)boxed_closure;
 }
 
+void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;   // TODO: NSTrackingArea mouseMoved → (x,y)
+}
+
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_BEGIN_PATH });
 }

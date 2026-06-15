@@ -11,7 +11,8 @@ exports (
     CANVAS_W, CANVAS_H, MIN_SIZE, MAX_DEPTH,
     scan, layout_treemap, draw_treemap,
     entry_total_size, entry_is_dir, entry_name, entry_path, entry_children,
-    rect_x, rect_y, rect_w, rect_h, rect_entry
+    rect_x, rect_y, rect_w, rect_h, rect_entry,
+    fmt_size
 )
 
 import vg_live (vg)
@@ -432,4 +433,28 @@ clip_name(name: string) -> string {
     }
     return name
 }
+
+// Human-readable byte size: "B / KB / MB / GB" (one decimal for KB+). Used by
+// the windowed app's hover status line.
+fmt_size(bytes: int) -> string {
+    b = bytes / 1.0
+    if b < 1024.0 { return string.concat(string.from_int(bytes), " B") }
+    kb = b / 1024.0
+    if kb < 1024.0 { return string.concat(one_dp(kb), " KB") }
+    mb = kb / 1024.0
+    if mb < 1024.0 { return string.concat(one_dp(mb), " MB") }
+    gb = mb / 1024.0
+    return string.concat(one_dp(gb), " GB")
+}
+// Round a float to 1 decimal place as a string (no printf-style format in std).
+one_dp(v: float) -> string {
+    scaled = round_i(v * 10.0)        // tenths, rounded to nearest int
+    whole = scaled / 10
+    frac = scaled - whole * 10
+    if frac < 0 { frac = 0 - frac }
+    return string.concat(string.from_int(whole),
+             string.concat(".", string.from_int(frac)))
+}
+// float → nearest int (libm lrint returns long; narrows at the int return).
+round_i(x: float) -> int { return lrint(x) }
 

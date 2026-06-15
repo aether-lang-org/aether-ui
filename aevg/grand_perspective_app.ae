@@ -13,20 +13,21 @@
 //   click a directory tile to drill in; the buttons re-scheme / go up a level.
 
 import aether_ui
-import aether_ui (window, vstack, hstack, btn, canvas_on_click)
+import aether_ui (window, vstack, hstack, btn, text, canvas_on_click, canvas_on_move)
 import vg_live (vg, canvas_region)
 import vg
 import vg (view_box, rect)
 import grand_perspective_core
 import grand_perspective_core (CANVAS_W, CANVAS_H, scan, layout_treemap, draw_treemap,
     entry_total_size, entry_is_dir, entry_name, entry_children,
-    rect_x, rect_y, rect_w, rect_h, rect_entry)
+    rect_x, rect_y, rect_w, rect_h, rect_entry, fmt_size)
 import std.string
 import std.list
 import std.os
 import std.os (os_getenv, aether_args_count, aether_args_get)
 
 extern malloc(size: int) -> ptr
+extern aether_ui_text_set_string(handle: int, text: string)  // update the status label
 
 // ─── App state (heap; captured by the draw + click closures) ─────
 //
@@ -41,10 +42,11 @@ struct AppState {
     rects: ptr       // list of *Rect for the current view
     scheme: int
     total: int
+    status: int      // handle of the status-line label (set after window build)
 }
 
 mk_state(root: ptr) -> *AppState {
-    s = malloc(48) as *AppState
+    s = malloc(56) as *AppState
     s.root = root
     s.current = root
     s.stack = list.new()
@@ -52,6 +54,7 @@ mk_state(root: ptr) -> *AppState {
     s.rects = list.new()
     s.scheme = 0
     s.total = entry_total_size(root)
+    s.status = 0
     relayout(s)
     return s
 }
@@ -127,6 +130,10 @@ main() {
             btn("by Type") callback { set_scheme(st, 2) }
         }
 
+        // Status line: updated on hover with the pointed-at tile's name + size.
+        // Covers the tiles too small (or too dominant) to carry their own label.
+        st.status = text("Hover a tile for its name and size")
+
         vg(view_box(0, 0, 800, 600), 800, 600) {
             // Anchor: a BARE shape verb gets _ctx injected; derive the vg root
             // from it (the root isn't a nameable var in the block).
@@ -145,6 +152,20 @@ main() {
             canvas_on_click(cid) callback |cx: float, cy: float| {
                 e = hit(st, cx, cy)
                 if e != null { drill_into(st, e) }
+            }
+            // Canvas hover → hit-test → show the tile's name + size in the status
+            // line (works for every tile, including ones too small to label).
+            canvas_on_move(cid) callback |mx: float, my: float| {
+                he = hit(st, mx, my)
+                if he == null {
+                    aether_ui_text_set_string(st.status, "—")
+                } else {
+                    kindw = "File"
+                    if entry_is_dir(he) == 1 { kindw = "Folder" }
+                    msg = string.concat(kindw, string.concat(": ", entry_name(he)))
+                    msg = string.concat(msg, string.concat("   ", fmt_size(entry_total_size(he))))
+                    aether_ui_text_set_string(st.status, msg)
+                }
             }
         }
       }

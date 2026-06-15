@@ -1311,6 +1311,10 @@ typedef struct {
     // canvas-local (x, y) on a single click, so it can hit-test shapes and
     // dispatch per-element handlers (the widget-level on_click gives no coords).
     AeClosure* on_click;
+    // Pointer-move hook — receives canvas-local (x, y) on every motion event,
+    // for hover hit-testing (e.g. a treemap status line tracking the tile under
+    // the cursor). Widget enter/leave (on_hover_enter/leave) gives no coords.
+    AeClosure* on_move;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -1559,6 +1563,7 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->count = 0;
     cs->capacity = 0;
     cs->on_resize = NULL;
+    cs->on_move = NULL;
     cs->on_click = NULL;
     cs->last_w = width;
     cs->last_h = height;
@@ -1618,6 +1623,33 @@ void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 1);
     g_signal_connect(gesture, "pressed", G_CALLBACK(on_canvas_click), boxed_closure);
     gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
+}
+
+// Pointer-move on the canvas: forward canvas-local (x, y) to the boxed closure.
+// The GtkEventControllerMotion "motion" signal already reports widget-relative
+// coords (unlike the enter/leave handlers, which discard them).
+static void on_canvas_move(GtkEventControllerMotion* ctrl, double x, double y,
+                            gpointer data) {
+    (void)ctrl;
+    AeClosure* c = (AeClosure*)data;
+    if (c && c->fn) {
+        ((void(*)(void*, double, double))c->fn)(c->env, x, y);
+    }
+}
+
+// Register a pointer-move hook on a canvas. The boxed Aether closure takes
+// (x: float, y: float) in canvas-local pixels — fired on every motion event.
+// Used for hover hit-testing (e.g. a status line tracking the item under the
+// cursor) where the widget-level enter/leave hooks are too coarse.
+void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_move = (AeClosure*)boxed_closure;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    GtkEventController* motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "motion", G_CALLBACK(on_canvas_move), boxed_closure);
+    gtk_widget_add_controller(w, motion);
 }
 
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
