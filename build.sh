@@ -22,7 +22,12 @@ AETHER_LIB_PATH="$(ae cflags --libs 2>/dev/null | tr ' ' '\n' | grep -E '^-L' | 
 [ -n "$AETHER_LIB_PATH" ] || AETHER_LIB_PATH="/usr/local/lib/aether"
 
 SOURCE="${1:?Usage: $0 <source.ae> [output_binary]}"
-OUTPUT="${2:-build/$(basename "$SOURCE" .ae)}"
+# Binaries always live under build/ (gitignored), never the repo root. A passed
+# output name is reduced to its basename and re-anchored there, so
+# `./build.sh x.ae foo` → build/foo — there's no way to drop an artifact in the
+# tree root. Default is build/<source-basename>.
+OUTPUT_NAME="$(basename "${2:-$(basename "$SOURCE" .ae)}")"
+OUTPUT="build/${OUTPUT_NAME}"
 C_FILE="${OUTPUT}.c"
 
 mkdir -p "$(dirname "$C_FILE")"
