@@ -1,0 +1,70 @@
+// aetherui — consumer-local aeb library module for building aether-ui apps.
+//
+// Factors the ~50-line per-platform backend-link block (GTK4 / AppKit / Win32)
+// out of every app's .build.ae. `ui_backend` is a `builder` so its bare setter
+// calls (include_dir/link_flag/extra_source) bind to the enclosing
+// aether.program(b){} block's injected _ctx — call it INSIDE that block:
+//
+//   aether.program(b) {
+//       source("../../<app>.ae")    // path relative to this app's module dir
+//       output("<app>")
+//       no_closure_regen()
+//       ui_backend(root)            // applies the native backend for this OS
+//   }
+//
+// The backend C/ObjC/headers live under backend/, addressed absolutely via root.
+
+import std.string
+import std.os (platform)
+import aether
+import aether (extra_source, link_flag, include_dir)
+
+builder ui_backend(root: string) {
+    // Aether runtime headers + libaether (+ its transitive deps via ae cflags).
+    include_dir("/usr/local/include/aether/runtime")
+    include_dir("/usr/local/include/aether/runtime/actors")
+    include_dir("/usr/local/include/aether/std")
+    include_dir("/usr/local/include/aether/std/collections")
+    link_flag("-L/usr/local/lib/aether")
+    link_flag("-laether")
+    link_flag("-pthread")
+    link_flag("-lm")
+    // PCRE2/SSL/zlib etc. — apps importing std.regex-using modules need these
+    // (same reason build.sh appended it on Linux + macOS).
+    link_flag("$(ae cflags --libs 2>/dev/null)")
+
+    os_name = platform()
+    if string.equals(os_name, "linux") == 1 {
+        extra_source("${root}/backend/aether_ui_gtk4.c")
+        extra_source("${root}/backend/aether_ui_system_extras.c")
+        extra_source("${root}/backend/aether_ui_sni.c")
+        link_flag("$(pkg-config --cflags gtk4)")
+        link_flag("$(pkg-config --libs gtk4)")
+    }
+    if string.equals(os_name, "darwin") == 1 {
+        extra_source("${root}/backend/aether_ui_macos.m")
+        extra_source("${root}/backend/aether_ui_system_extras.c")
+        link_flag("-fobjc-arc")
+        link_flag("-framework AppKit")
+        link_flag("-framework Foundation")
+        link_flag("-framework QuartzCore")
+    }
+    if string.equals(os_name, "windows") == 1 {
+        extra_source("${root}/backend/aether_ui_win32.c")
+        extra_source("${root}/backend/aether_ui_test_server.c")
+        extra_source("${root}/backend/aether_ui_system_extras.c")
+        link_flag("-luser32")
+        link_flag("-lgdi32")
+        link_flag("-lgdiplus")
+        link_flag("-lmsimg32")
+        link_flag("-lcomctl32")
+        link_flag("-lcomdlg32")
+        link_flag("-lshell32")
+        link_flag("-lole32")
+        link_flag("-luuid")
+        link_flag("-ldwmapi")
+        link_flag("-luxtheme")
+        link_flag("-lws2_32")
+        link_flag("-lbcrypt")   // libaether crypto: BCryptGenRandom
+    }
+}

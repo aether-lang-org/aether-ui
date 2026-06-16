@@ -1,129 +1,18 @@
-// .all.ae — build EVERY aether-ui binary in one go, through aeb.
+// .all.ae — build EVERY aether-ui binary, as a FAN-OUT of cached per-app nodes.
 //
-// One descriptor, a list of (source, output) pairs, a loop. Each iteration is
-// an aether.program(b) {…} that compiles the entry plain (no_closure_regen,
-// since aether-ui's .ae surface is extern declarations of the C backend) and
-// links the per-platform backend C — exactly what build.sh does per uname, and
-// what aevg/.analog-clock.ae did for one app.
+// Each app under examples/<app>/ (and, once the aeb per-node lib() setter lands,
+// aevg/apps/<app>/) carries its own .build.ae — a cached, individually
+// addressable node. This root just scans + deps them all, so:
+//   aeb .all.ae              builds everything (parallel, incrementally cached)
+//   aeb examples/calculator  builds just that one app
 //
-// Trade-off vs aeb's one-node-per-.name.ae grain: this is a single node that
-// builds N binaries sequentially, so there's no per-app caching or
-// `aeb <one-app>` addressing — but it's the whole fleet in one command, which
-// is what we want for a two-person project. (If per-target caching ever bites,
-// split into N tiny .build.ae's sharing an .aeb/lib/aetherui helper + --scan.)
-//
-// Run from the repo ROOT:
-//   ./bootstrap.sh .all.ae      (or: aeb .all.ae)
-//   ./target/build/aether_ui/bin/<name>   (DISPLAY=:0 for windowed apps)
+// Replaces the old 32-call single-node monolith (no caching/addressing/parallel).
+// The shared per-platform backend-link block lives in .aeb/lib/aetherui (ui_backend).
 
 import build
-import std.os
-import std.os (platform)
-import std.string
-import std.list
-import aether
-import aether (source, output, extra_source, link_flag, include_dir, no_closure_regen)
-
-// Build one app: source path (relative to repo root) + output binary name.
-// The whole shared backend (runtime headers + libaether + per-platform C files
-// & libs, mirroring build.sh's uname case) is written ONCE here, inside the
-// aether.program block — `_ctx` is auto-injected and only usable as bare
-// setters in the block body (it isn't a nameable variable a helper can take),
-// so the block can't be factored into a fn; instead this whole fn is the single
-// definition, called once per app. The $(...) link flags expand in the shell
-// aeb runs the link under (pkg-config/ae cflags), per platform.
-build_app(b: ptr, root: string, os_name: string, src: string, out: string) {
-    aether.program(b) {
-        source(src)
-        output(out)
-        no_closure_regen()
-
-        include_dir("/usr/local/include/aether/runtime")
-        include_dir("/usr/local/include/aether/runtime/actors")
-        include_dir("/usr/local/include/aether/std")
-        include_dir("/usr/local/include/aether/std/collections")
-        link_flag("-L/usr/local/lib/aether")
-        link_flag("-laether")
-        link_flag("-pthread")
-        link_flag("-lm")
-        link_flag("$(ae cflags --libs 2>/dev/null)")
-
-        if string.equals(os_name, "linux") == 1 {
-            extra_source("${root}/aether_ui_gtk4.c")
-            extra_source("${root}/aether_ui_system_extras.c")
-            extra_source("${root}/aether_ui_sni.c")
-            link_flag("$(pkg-config --cflags gtk4)")
-            link_flag("$(pkg-config --libs gtk4)")
-        }
-        if string.equals(os_name, "darwin") == 1 {
-            extra_source("${root}/aether_ui_macos.m")
-            extra_source("${root}/aether_ui_system_extras.c")
-            link_flag("-fobjc-arc")
-            link_flag("-framework AppKit")
-            link_flag("-framework Foundation")
-            link_flag("-framework QuartzCore")
-        }
-        if string.equals(os_name, "windows") == 1 {
-            extra_source("${root}/aether_ui_win32.c")
-            extra_source("${root}/aether_ui_test_server.c")
-            extra_source("${root}/aether_ui_system_extras.c")
-            link_flag("-luser32")
-            link_flag("-lgdi32")
-            link_flag("-lgdiplus")
-            link_flag("-lmsimg32")
-            link_flag("-lcomctl32")
-            link_flag("-lcomdlg32")
-            link_flag("-lshell32")
-            link_flag("-lole32")
-            link_flag("-luuid")
-            link_flag("-ldwmapi")
-            link_flag("-luxtheme")
-            link_flag("-lws2_32")
-            link_flag("-lbcrypt")   // libaether crypto: BCryptGenRandom
-        }
-    }
-}
 
 main() {
     b = build.start()
-    root = build._get(b, "root")
-    os_name = platform()
-
-    // ── root toolkit examples ──
-    build_app(b, root, os_name, "example_counter.ae",    "counter")
-    build_app(b, root, os_name, "example_calculator.ae", "calculator")
-    build_app(b, root, os_name, "example_canvas.ae",     "canvas")
-    build_app(b, root, os_name, "example_form.ae",       "form")
-    build_app(b, root, os_name, "example_grid.ae",       "grid")
-    build_app(b, root, os_name, "example_menu.ae",       "menu")
-    build_app(b, root, os_name, "example_picker.ae",     "picker")
-    build_app(b, root, os_name, "example_styled.ae",     "styled")
-    build_app(b, root, os_name, "example_system.ae",     "system")
-    build_app(b, root, os_name, "example_testable.ae",   "testable")
-    build_app(b, root, os_name, "example_tray.ae",       "tray")
-
-    // ── AeVG apps + the analog clock ──
-    build_app(b, root, os_name, "aevg/analog_clock.ae",          "analog_clock")
-    build_app(b, root, os_name, "aevg/analog_clock_png.ae",      "analog_clock_png")
-    build_app(b, root, os_name, "aevg/example_aevg.ae",          "aevg_demo")
-    build_app(b, root, os_name, "aevg/example_aevg_anim.ae",     "aevg_anim")
-    build_app(b, root, os_name, "aevg/example_aevg_clip.ae",     "aevg_clip")
-    build_app(b, root, os_name, "aevg/example_aevg_interactive.ae", "aevg_interactive")
-    build_app(b, root, os_name, "aevg/example_aevg_live.ae",     "aevg_live")
-    build_app(b, root, os_name, "aevg/example_aevg_live_png.ae", "aevg_live_png")
-    build_app(b, root, os_name, "aevg/example_aevg_video.ae",    "aevg_video")
-    build_app(b, root, os_name, "aevg/example_aevg_video_png.ae","aevg_video_png")
-    build_app(b, root, os_name, "aevg/example_raster.ae",        "raster_demo")
-    build_app(b, root, os_name, "aevg/example_vg.ae",            "vg_demo")
-    build_app(b, root, os_name, "aevg/example_vg_png.ae",        "vg_png")
-    build_app(b, root, os_name, "aevg/grand_perspective.ae",     "grand_perspective")
-    build_app(b, root, os_name, "aevg/falling_blocks.ae",        "falling_blocks")
-    build_app(b, root, os_name, "aevg/rubiks_cube.ae",           "rubiks_cube")
-
-    // ── AeVG SVG-transpiler CLI tools (stdin → source/PNG) ──
-    build_app(b, root, os_name, "aevg/svg_render_png.ae",            "svg_render_png")
-    build_app(b, root, os_name, "aevg/svg_transpile_harness.ae",     "svg_transpile_harness")
-    build_app(b, root, os_name, "aevg/svg_transpile_module.ae",      "svg_transpile_module")
-    build_app(b, root, os_name, "aevg/svg_transpile_render_fn.ae",   "svg_transpile_render_fn")
+    build.scan(b, "examples/**/.build.ae")
     return 0
 }

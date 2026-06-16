@@ -164,18 +164,22 @@ for t in "${AEVG_TESTS[@]}"; do
 done
 echo
 
-echo "=== Phase 1: build all aether_ui examples ==="
-for ex in "${EXAMPLES[@]}"; do
-    src="example_${ex}.ae"
-    out="build/${ex}"
-    if "$SCRIPT_DIR/build.sh" "$src" "$out" > "/tmp/ci_build_${ex}.log" 2>&1; then
-        echo "  OK   $ex"
-    else
-        echo "  FAIL $ex"
-        tail -15 "/tmp/ci_build_${ex}.log" | sed 's/^/       /'
-        FAIL=$((FAIL + 1))
-    fi
-done
+echo "=== Phase 1: build all aether_ui examples (aeb fan-out) ==="
+# Each example is a per-app .build.ae node under examples/<app>/; the root
+# .all.ae scans + deps them, so this one command builds all 11 (cached,
+# parallel). Binaries land at target/build/examples/<app>/bin/<app>; EX_BIN
+# resolves that for the smoke/driver phases below.
+EX_BIN() { echo "$ROOT/target/build/examples/$1/bin/$1"; }
+if ( cd "$ROOT" && aeb .all.ae ) > /tmp/ci_build_all.log 2>&1; then
+    for ex in "${EXAMPLES[@]}"; do
+        if [ -x "$(EX_BIN "$ex")" ]; then echo "  OK   $ex"; else
+            echo "  FAIL $ex (no binary)"; FAIL=$((FAIL + 1)); fi
+    done
+else
+    echo "  FAIL: aeb .all.ae fan-out build failed"
+    tail -25 /tmp/ci_build_all.log | sed 's/^/       /'
+    FAIL=$((FAIL + 1))
+fi
 
 # Phase 1.5: build the AeVG GTK demo. Proves the aevg_gtk_backend
 # adapter links against the real aether_ui canvas primitives (arc /
@@ -311,17 +315,17 @@ fi
 echo
 echo "=== Phase 2: smoke-launch non-driver examples ==="
 for ex in "${SMOKE_EXAMPLES[@]}"; do
-    run_smoke_test "$ROOT/build/${ex}" "$ex" || FAIL=$((FAIL + 1))
+    run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))
 done
 
 echo
 echo "=== Phase 3: AetherUIDriver calculator tests ==="
-run_server_test "$ROOT/build/calculator" \
+run_server_test "$(EX_BIN calculator)" \
                 "$SCRIPT_DIR/test_calculator.sh" calculator || FAIL=$((FAIL + 1))
 
 echo
 echo "=== Phase 4: AetherUIDriver testable tests ==="
-run_server_test "$ROOT/build/testable" \
+run_server_test "$(EX_BIN testable)" \
                 "$SCRIPT_DIR/test_automation.sh" testable || FAIL=$((FAIL + 1))
 
 echo

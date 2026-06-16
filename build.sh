@@ -45,8 +45,8 @@ case "$OS" in
         AETHER_LIBS="$(ae cflags --libs 2>/dev/null || true)"
         clang -O0 -g -fobjc-arc \
             $AETHER_INCLUDES \
-            "$C_FILE" "$SCRIPT_DIR/aether_ui_macos.m" \
-            "$SCRIPT_DIR/aether_ui_system_extras.c" \
+            "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_macos.m" \
+            "$SCRIPT_DIR/backend/aether_ui_system_extras.c" \
             -L"$AETHER_LIB_PATH" -laether \
             -o "$OUTPUT" \
             -framework AppKit -framework Foundation -framework QuartzCore -pthread -lm \
@@ -79,9 +79,9 @@ case "$OS" in
             $(pkg-config --cflags gtk4) \
             $AETHER_INCLUDES \
             $LIBNOTIFY_CFLAGS \
-            "$C_FILE" "$SCRIPT_DIR/aether_ui_gtk4.c" \
-            "$SCRIPT_DIR/aether_ui_system_extras.c" \
-            "$SCRIPT_DIR/aether_ui_sni.c" \
+            "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_gtk4.c" \
+            "$SCRIPT_DIR/backend/aether_ui_system_extras.c" \
+            "$SCRIPT_DIR/backend/aether_ui_sni.c" \
             -L"$AETHER_LIB_PATH" -laether \
             -o "$OUTPUT" \
             -pthread -lm $(pkg-config --libs gtk4) $LIBNOTIFY_LIBS $AETHER_LIBS
@@ -92,9 +92,9 @@ case "$OS" in
         [[ "$OUTPUT" != *.exe ]] && ACTUAL_OUT="$OUT_EXE" || ACTUAL_OUT="$OUTPUT"
         gcc -O2 -g -pipe \
             $AETHER_INCLUDES \
-            "$C_FILE" "$SCRIPT_DIR/aether_ui_win32.c" \
-            "$SCRIPT_DIR/aether_ui_test_server.c" \
-            "$SCRIPT_DIR/aether_ui_system_extras.c" \
+            "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_win32.c" \
+            "$SCRIPT_DIR/backend/aether_ui_test_server.c" \
+            "$SCRIPT_DIR/backend/aether_ui_system_extras.c" \
             -L"$AETHER_LIB_PATH" -laether \
             -o "$ACTUAL_OUT" \
             -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
