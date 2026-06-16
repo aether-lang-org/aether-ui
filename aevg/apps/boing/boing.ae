@@ -1,0 +1,229 @@
+// boing.ae — the classic Amiga Boing Ball (1984), in AeVG.
+//
+// ─── Provenance ──────────────────────────────────────────────────────────────
+// Ported (via Tsyne) from Chris Hinsley's ChrysaLisp Boing
+//   https://github.com/vygr/ChrysaLisp/blob/master/apps/boing/app.lisp
+//   (~/scm/tsyne/tsyne/ported-apps/boing/{boing,sprites}.ts)
+// recreating the Dale Luck / R.J. Mical Amiga demo shown at CES 1984. Licence:
+// see the ChrysaLisp repo. Under aether-ui's own licence otherwise.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The AeVG showcase for a CPU-rendered RASTER live region: the whole 640×480
+// scene is one video_region whose per-frame source paints, pixel by pixel, a
+// black grid background, a soft elliptical shadow, and the red/white checkered
+// sphere — the sphere built the original's way (project each pixel onto the
+// sphere, z = sqrt(r²-dx²-dy²); to spherical (phi,theta); theta spun by the
+// frame clock; checker = (squareH+squareV) odd; shaded by depth z/r). Physics
+// (gravity + bounce off the walls/floor) is a stepped state struct, not a pure
+// function of t — same game-loop shape as falling_blocks.
+//
+//   DISPLAY=:0 ./build/boing
+
+import aether_ui
+import aether_ui (window, enable_test_server)
+import vg_live (vg, video_region, video_source)
+import vg
+import vg (view_box, rect, fill)
+import live_region
+import std.math
+import std.os
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+
+// ─── Scene / ball constants (faithful to the original) ───────────────────────
+CW()  -> int { return 640 }       // canvas px
+CH()  -> int { return 480 }
+RAD() -> int { return 48 }        // BALL_RADIUS
+GRID() -> int { return 64 }       // grid line spacing
+SQH() -> float { return 8.0 }     // checker squares around the equator
+SQV() -> float { return 6.0 }     // checker squares pole-to-pole
+SHADOW_DX() -> int { return 8 }   // shadow offset from the ball
+SHADOW_DY() -> int { return 64 }
+
+PI()  -> float { return 3.14159265358979 }
+TAU() -> float { return 6.28318530717959 }
+
+// ─── Physics state ────────────────────────────────────────────────────────────
+// Stepped each frame (gravity, bounce). x/y is the ball CENTRE in canvas px.
+struct Ball {
+    x: float
+    y: float
+    vx: float
+    vy: float
+}
+
+mk_ball() -> *Ball {
+    b = malloc(40) as *Ball
+    b.x = RAD() * 1.0 + 50.0
+    b.y = RAD() * 1.0 + 50.0
+    b.vx = 4.0
+    b.vy = 0.0
+    return b
+}
+
+// One physics step: gravity, integrate, bounce off all four edges (matching the
+// original's fixed -22 bottom-bounce velocity).
+step(b: *Ball) {
+    r = RAD() * 1.0
+    b.vy = b.vy + 1.0                 // gravity
+    b.x = b.x + b.vx
+    b.y = b.y + b.vy
+    bottom = CH() * 1.0 - r
+    if b.y > bottom {
+        b.y = bottom
+        b.vy = -22.0
+    }
+    if b.x < r {
+        b.x = r
+        b.vx = math.abs_float(b.vx)
+    } else {
+        if b.x > CW() * 1.0 - r {
+            b.x = CW() * 1.0 - r
+            b.vx = -math.abs_float(b.vx)
+        }
+    }
+    if b.y < r {
+        b.y = r
+        b.vy = math.abs_float(b.vy)
+    }
+}
+
+// ─── Per-frame raster paint ───────────────────────────────────────────────────
+// Paints the whole 640×480 frame: background grid, shadow, then the ball. `t` is
+// the frame clock in seconds — the ball's spin is derived from it.
+paint(b: *Ball, buf: ptr, t: float) {
+    w = CW(); h = CH()
+    paint_background(buf, w, h)
+    bx = round_i(b.x); by = round_i(b.y)
+    paint_shadow(buf, w, h, bx + SHADOW_DX(), by + SHADOW_DY())
+    paint_ball(buf, w, h, bx, by, t)
+}
+
+// Black field with a grey grid (1px lines every GRID px).
+paint_background(buf: ptr, w: int, h: int) {
+    y = 0
+    while y < h {
+        on_hline = 0
+        if y % GRID() == 0 { on_hline = 1 }
+        x = 0
+        while x < w {
+            i = y * w + x
+            if on_hline == 1 {
+                live_region.buf_set_px(buf, i, 100, 100, 100, 255)
+            } else {
+                if x % GRID() == 0 {
+                    live_region.buf_set_px(buf, i, 100, 100, 100, 255)
+                } else {
+                    live_region.buf_set_px(buf, i, 0, 0, 0, 255)
+                }
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+}
+
+// Soft flattened ellipse shadow under the ball (half-height, blended toward
+// black). Centre (cx,cy) in canvas px.
+paint_shadow(buf: ptr, w: int, h: int, cx: int, cy: int) {
+    r = RAD()
+    rx = r * 1.0
+    ry = r * 0.5                       // flattened
+    dy = 0 - r
+    while dy <= r {
+        dx = 0 - r
+        while dx <= r {
+            fx = dx * 1.0 / rx
+            fy = dy * 1.0 / ry
+            if fx * fx + fy * fy <= 1.0 {
+                px = cx + dx
+                py = cy + dy
+                if px >= 0 && px < w && py >= 0 && py < h {
+                    i = py * w + px
+                    // a dim grey shadow over whatever's there (simple darken)
+                    live_region.buf_set_px(buf, i, 30, 30, 30, 255)
+                }
+            }
+            dx = dx + 1
+        }
+        dy = dy + 1
+    }
+}
+
+// The checkered sphere. For each pixel in the ball's bounding box: if inside the
+// circle, lift it onto the sphere (z), convert to spherical (phi/theta), spin
+// theta by the frame angle, pick the checker square, shade by depth.
+paint_ball(buf: ptr, w: int, h: int, cx: int, cy: int, t: float) {
+    r = RAD()
+    rf = r * 1.0
+    // one full rotation every ~1.6s (12 frames at 30fps in the original)
+    angle = frac(t / 1.6) * TAU()
+    dy = 0 - r
+    while dy <= r {
+        dx = 0 - r
+        while dx <= r {
+            d2 = dx * dx + dy * dy
+            if d2 <= r * r {
+                z = math.sqrt(rf * rf - dx * 1.0 * dx - dy * 1.0 * dy)
+                if z > 0.0 {
+                    phi = math.acos(dy * 1.0 / rf)
+                    theta = math.atan2(dx * 1.0, z) + angle
+                    nt = fmod_pos(theta, TAU())
+                    sqh = floor_i(nt / TAU() * SQH())
+                    sqv = floor_i(phi / PI() * SQV())
+                    is_white = 0
+                    if (sqh + sqv) % 2 == 1 { is_white = 1 }
+                    shade = 0.5 + 0.5 * (z / rf)
+                    cr = 204; cg = 0; cb = 0
+                    if is_white == 1 { cr = 255; cg = 255; cb = 255 }
+                    px = cx + dx
+                    py = cy + dy
+                    if px >= 0 && px < w && py >= 0 && py < h {
+                        i = py * w + px
+                        live_region.buf_set_px(buf, i,
+                            shade_i(cr, shade), shade_i(cg, shade), shade_i(cb, shade), 255)
+                    }
+                }
+            }
+            dx = dx + 1
+        }
+        dy = dy + 1
+    }
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+round_i(v: float) -> int { return lrint(v) }
+floor_i(v: float) -> int { return lrint(math.floor(v)) }
+frac(v: float) -> float { return v - math.floor(v) }
+shade_i(c: int, s: float) -> int { return lrint(c * 1.0 * s) }
+// positive floating mod into [0, m)
+fmod_pos(v: float, m: float) -> float {
+    r = v - math.floor(v / m) * m
+    return r
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+main() {
+    b = mk_ball()
+    window("Boing", 660, 520) {
+        vg(view_box(0, 0, 640, 480), 640, 480) {
+            bg = rect(0, 0, 640, 480) { fill("#000000") }
+            // The whole scene is ONE raster region, repainted each frame: step
+            // the physics, then paint background+shadow+ball into the buffer.
+            ball_region = video_region(root_of(bg), 0.0, 0.0, 640.0, 480.0, CW(), CH())
+            video_source(ball_region) callback |region: ptr, t: float| {
+                step(b)
+                buf = live_region.new_frame_buffer(CW(), CH())
+                paint(b, buf, t)
+                frame = live_region.frame_finish(buf, CW(), CH())
+                live_region.region_push(region, frame, CW() * CH() * 4)
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
+
+// vg root from any shape node (the node carries the scene).
+root_of(node: ptr) -> ptr { return vg.vg_root(vg.node_scene(node)) }
