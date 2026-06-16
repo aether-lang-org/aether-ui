@@ -38,13 +38,19 @@ OS="$(uname -s)"
 case "$OS" in
     Darwin)
         echo "Platform: macOS (AppKit)"
+        # AETHER_LIBS pulls in libaether's transitive deps (PCRE2 / SSL / zlib /
+        # …) via `ae cflags --libs`. Apps importing std.regex-using modules need
+        # -lpcre2-8 at link time; plain -laether doesn't pull it in (same as the
+        # Linux branch — falling_blocks / rubiks_cube hit this on the Mac).
+        AETHER_LIBS="$(ae cflags --libs 2>/dev/null || true)"
         clang -O0 -g -fobjc-arc \
             $AETHER_INCLUDES \
             "$C_FILE" "$SCRIPT_DIR/aether_ui_macos.m" \
             "$SCRIPT_DIR/aether_ui_system_extras.c" \
             -L"$AETHER_LIB_PATH" -laether \
             -o "$OUTPUT" \
-            -framework AppKit -framework Foundation -framework QuartzCore -pthread -lm
+            -framework AppKit -framework Foundation -framework QuartzCore -pthread -lm \
+            $AETHER_LIBS
         ;;
     Linux)
         if ! pkg-config --exists gtk4 2>/dev/null; then
