@@ -42,7 +42,7 @@ fi
 
 mkdir -p "$ROOT/build"
 cd "$ROOT"
-./build.sh example_tray.ae build/example_tray >/tmp/sni_build.log 2>&1 || {
+./build.sh examples/tray/tray.ae build/example_tray >/tmp/sni_build.log 2>&1 || {
     echo "FAIL: build failed"; tail -30 /tmp/sni_build.log; exit 1
 }
 

@@ -36,7 +36,7 @@ case "$OS" in
 esac
 
 cd "$ROOT"
-./build.sh example_tray.ae build/example_tray > /tmp/tray_build.log 2>&1 || {
+./build.sh examples/tray/tray.ae build/example_tray > /tmp/tray_build.log 2>&1 || {
     echo "FAIL: build failed"
     tail -30 /tmp/tray_build.log
     exit 1
@@ -92,7 +92,7 @@ ICON=$(CURL -s "http://127.0.0.1:$PORT/tray/$TRAY_ID/icon")
 assert_contains "tray icon path includes clean.svg" "$ICON" "clean.svg"
 
 # --- POST /tray/{id}/click — fires the left-click handler, which
-# pushes another notification onto the registry (see example_tray.ae). ---
+# pushes another notification onto the registry (see examples/tray/tray.ae). ---
 PRE=$(CURL -s "http://127.0.0.1:$PORT/notifications" | grep -o '"id":[0-9]*' | wc -l)
 RC=$(CURL -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:$PORT/tray/$TRAY_ID/click")
 [ "$RC" = "200" ] && pass "tray click returns 200" || fail "tray click rc" "$RC"
