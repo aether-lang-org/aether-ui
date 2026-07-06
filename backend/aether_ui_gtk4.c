@@ -565,8 +565,15 @@ static void ctx_menu_open_local(CtxMenu* cm, double x, double y) {
 // button 3 silently drops the two-finger-tap button-3 events on sommelier;
 // the legacy controller sees them on every backend. Release (not press) is
 // the context-menu convention.
-static void on_ctx_menu_legacy_event(GtkEventControllerLegacy* c,
-                                     GdkEvent* ev, gpointer data) {
+//
+// MUST return gboolean: the legacy "event" signal treats a truthy return as
+// "handled — stop propagating". This handler was originally declared void,
+// so it returned register garbage (usually the nonzero result of the last
+// call) and silently ATE every button event for any controller attached
+// after it — on the treemap canvas that killed all left-clicks the moment
+// the canvas grew a context menu. Return TRUE only when the menu opens.
+static gboolean on_ctx_menu_legacy_event(GtkEventControllerLegacy* c,
+                                         GdkEvent* ev, gpointer data) {
     (void)c;
     CtxMenu* cm = (CtxMenu*)data;
     GdkEventType t = gdk_event_get_event_type(ev);
@@ -579,7 +586,9 @@ static void on_ctx_menu_legacy_event(GtkEventControllerLegacy* c,
         double x = 0, y = 0;
         gdk_event_get_position(ev, &x, &y);
         ctx_menu_open_local(cm, x, y);
+        return TRUE;
     }
+    return FALSE;
 }
 
 // Whichever surface is in use, is it currently mapped?
@@ -1910,16 +1919,85 @@ void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
 // "pressed" signal of a GtkGestureClick reports coordinates relative to the
 // widget the controller is attached to (the drawing area), which is the same
 // space AeVG stores shape bounds in (post-flush canvas px).
-static void on_canvas_click(GtkGestureClick* gesture, int n_press,
-                             double x, double y, gpointer data) {
-    (void)gesture;
-    if (aeui_ctx_debug())
-        fprintf(stderr, "aeui: canvas press n_press=%d px=(%.1f, %.1f)\n",
-                n_press, x, y);
-    AeClosure* c = (AeClosure*)data;
-    if (c && c->fn) {
-        ((void(*)(void*, double, double))c->fn)(c->env, x, y);
+// Canvas button events use a LEGACY event controller, NOT GtkGestureClick.
+// sommelier (ChromeOS Crostini) delivers touchpad taps as button press/
+// release pairs that GtkGestureClick silently drops — first seen with
+// button-3 in the context-menu saga, and equally true for BUTTON-1 taps on
+// the treemap canvas (raw events reached the widget, "pressed" never fired,
+// so clicks did nothing on the Chromebook). The legacy controller sees every
+// event on every backend; filter by type + button ourselves.
+//
+// Translate an event's surface position into WIDGET-local coordinates
+// (gdk_event_get_position is surface-relative; hit-testing needs canvas px).
+static void event_widget_coords(GtkWidget* w, GdkEvent* ev,
+                                 double* wx, double* wy) {
+    double sx = 0, sy = 0;
+    gdk_event_get_position(ev, &sx, &sy);
+    GtkNative* native = gtk_widget_get_native(w);
+    if (native) {
+        double nx = 0, ny = 0;
+        gtk_native_get_surface_transform(native, &nx, &ny);
+        graphene_point_t p = GRAPHENE_POINT_INIT((float)(sx - nx), (float)(sy - ny));
+        graphene_point_t out;
+        if (gtk_widget_compute_point(GTK_WIDGET(native), w, &p, &out)) {
+            *wx = out.x;
+            *wy = out.y;
+            return;
+        }
     }
+    *wx = sx;
+    *wy = sy;
+}
+
+// One hook instance per registration: which widget (for coords + focus),
+// which closure, and which event type it fires on.
+typedef struct {
+    GtkWidget* widget;
+    AeClosure* closure;
+    GdkEventType fires_on;   // GDK_BUTTON_PRESS (click) or _RELEASE (release)
+} CanvasButtonHook;
+
+static gboolean on_canvas_button_legacy(GtkEventControllerLegacy* c,
+                                         GdkEvent* ev, gpointer data) {
+    (void)c;
+    CanvasButtonHook* hook = (CanvasButtonHook*)data;
+    GdkEventType t = gdk_event_get_event_type(ev);
+    if (t != hook->fires_on) return FALSE;
+    if (gdk_button_event_get_button(ev) != 1) return FALSE;
+    if (aeui_ctx_debug()) {
+        GdkDevice* dev = gdk_event_get_device(ev);
+        fprintf(stderr, "aeui: canvas btn1 %s dev=%s src=%d time=%u\n",
+                t == GDK_BUTTON_PRESS ? "press" : "release",
+                dev ? gdk_device_get_name(dev) : "(null)",
+                dev ? (int)gdk_device_get_source(dev) : -1,
+                gdk_event_get_time(ev));
+    }
+    double x = 0, y = 0;
+    event_widget_coords(hook->widget, ev, &x, &y);
+    if (aeui_ctx_debug())
+        fprintf(stderr, "aeui: canvas %s px=(%.1f, %.1f)\n",
+                t == GDK_BUTTON_PRESS ? "press" : "release", x, y);
+    // Keep keyboard input flowing back to the canvas after a toolbar button
+    // stole focus (the gesture-based focus-click never fires on sommelier).
+    if (t == GDK_BUTTON_PRESS) gtk_widget_grab_focus(hook->widget);
+    AeClosure* cl = hook->closure;
+    if (cl && cl->fn) {
+        ((void(*)(void*, double, double))cl->fn)(cl->env, x, y);
+    }
+    return FALSE;   // propagate — the ctx-menu legacy controller needs it too
+}
+
+static void canvas_add_button_hook(GtkWidget* w, AeClosure* closure,
+                                    GdkEventType fires_on) {
+    CanvasButtonHook* hook = g_new0(CanvasButtonHook, 1);
+    hook->widget = w;
+    hook->closure = closure;
+    hook->fires_on = fires_on;
+    GtkEventController* legacy = gtk_event_controller_legacy_new();
+    g_signal_connect_data(legacy, "event",
+                          G_CALLBACK(on_canvas_button_legacy), hook,
+                          (GClosureNotify)g_free, 0);
+    gtk_widget_add_controller(w, legacy);
 }
 
 // Register a single-click hook on a canvas. The boxed Aether closure takes
@@ -1931,37 +2009,20 @@ void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
     cs->on_click = (AeClosure*)boxed_closure;
     GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
     if (!w) return;
-    GtkGesture* gesture = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 1);
-    g_signal_connect(gesture, "pressed", G_CALLBACK(on_canvas_click), boxed_closure);
-    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
-}
-
-// Pointer-release on the canvas: the "released" end of a GtkGestureClick,
-// reporting widget-relative coords (same space as on_click). With on_click +
-// on_move this completes a press→drag→release gesture so callers can compute a
-// swipe (drag delta) without per-element drag tracking. Built for the cube.
-static void on_canvas_release(GtkGestureClick* gesture, int n_press,
-                               double x, double y, gpointer data) {
-    (void)gesture; (void)n_press;
-    AeClosure* c = (AeClosure*)data;
-    if (c && c->fn) {
-        ((void(*)(void*, double, double))c->fn)(c->env, x, y);
-    }
+    canvas_add_button_hook(w, cs->on_click, GDK_BUTTON_PRESS);
 }
 
 // Register a pointer-release hook on a canvas. Closure takes (x, y) in
-// canvas-local px (the point where the button was released).
+// canvas-local px (the point where the button was released). With on_click +
+// on_move this completes a press→drag→release gesture so callers can compute
+// a swipe (drag delta) without per-element drag tracking. Built for the cube.
 void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
     cs->on_release = (AeClosure*)boxed_closure;
     GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
     if (!w) return;
-    GtkGesture* gesture = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 1);
-    g_signal_connect(gesture, "released", G_CALLBACK(on_canvas_release), boxed_closure);
-    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
+    canvas_add_button_hook(w, cs->on_release, GDK_BUTTON_RELEASE);
 }
 
 // Pointer-move on the canvas: forward canvas-local (x, y) to the boxed closure.
