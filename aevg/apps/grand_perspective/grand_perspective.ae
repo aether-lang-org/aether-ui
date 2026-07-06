@@ -69,12 +69,16 @@ extern lrint(x: float) -> long           // round-to-nearest; narrows at an int 
 extern string_retain(s: string)          // keep a heap string alive in a struct field
 extern aether_ui_text_set_string(handle: int, text: string)  // update a label's text
 
-CANVAS_W() -> float { return 800.0 }
+CANVAS_W() -> float { return 800.0 }     // treemap area width (canvas px)
 CANVAS_H() -> float { return 600.0 }
+LEGEND_X() -> float { return 812.0 }     // type-legend pane (right of the map)
+LEGEND_W() -> float { return 348.0 }
+TOTAL_W() -> float  { return 1160.0 }    // full canvas: treemap + legend
 MIN_TILE_AREA() -> float { return 2.0 }  // px²: tiles projecting smaller are dropped
 MIN_NEST_AREA() -> float { return 120.0 } // px²: dir tiles smaller don't nest deeper
 NEST_INSET() -> float { return 2.0 }     // px ring of parent visible around children
 RECT_BUDGET() -> int { return 4000 }     // global cap on laid rects per view
+TOP_TYPES() -> int  { return 12 }        // legend rows with their own colour
 
 // ─── Data model ──────────────────────────────────────────────────
 //
@@ -116,6 +120,122 @@ bump_ancestors(e: *FileEntry, delta: long) {
     while p != null {
         p.total_size = p.total_size + delta
         p = p.parent
+    }
+}
+
+// ─── Per-type (extension) statistics — the legend's data ─────────
+//
+// One row per extension: total bytes + file count. Rebuilt by walking the
+// tree at scan finish (subtree rescans would otherwise need retraction
+// bookkeeping); ranked desc by bytes; the top TOP_TYPES get a stable
+// palette colour, everything else renders gray and aggregates into the
+// legend's "other" row — the WinDirStat model.
+struct TypeStat {
+    ext: string
+    bytes: long
+    files: int
+    hue: float
+    ranked: int      // 1 = has a palette colour (top-N by bytes)
+}
+
+mk_tstat(ext: string) -> *TypeStat {
+    t = malloc(48) as *TypeStat
+    t.ext = ext; string_retain(ext)
+    t.bytes = 0
+    t.files = 0
+    t.hue = 0.0
+    t.ranked = 0
+    return t
+}
+
+// Extension of a filename, lowercased, "" when none ("Makefile", ".bashrc"
+// counts its tail). Scans backwards for '.' (46), stopping at '/' (47).
+ext_of(name: string) -> string {
+    n = string.length(name)
+    i = n - 1
+    while i > 0 {
+        c = string.char_at(name, i)
+        if c == 47 { return "" }
+        if c == 46 { return string.to_lower(string.substring(name, i + 1, n)) }
+        i = i - 1
+    }
+    return ""
+}
+
+// The legend palette — spaced hues so adjacent ranks contrast (WinDirStat-ish).
+palette_hue(i: int) -> float {
+    h = 0.0
+    if i == 0  { h = 210.0 }
+    if i == 1  { h = 30.0 }
+    if i == 2  { h = 120.0 }
+    if i == 3  { h = 270.0 }
+    if i == 4  { h = 0.0 }
+    if i == 5  { h = 60.0 }
+    if i == 6  { h = 180.0 }
+    if i == 7  { h = 330.0 }
+    if i == 8  { h = 90.0 }
+    if i == 9  { h = 240.0 }
+    if i == 10 { h = 150.0 }
+    if i == 11 { h = 300.0 }
+    return h
+}
+
+// Find a TypeStat by extension (linear — extension counts are small).
+find_tstat(stats: ptr, ext: string) -> *TypeStat {
+    n = list.size(stats)
+    i = 0
+    while i < n {
+        it, _ = list.get(stats, i)
+        t = it as *TypeStat
+        if string.equals(t.ext, ext) == 1 { return t }
+        i = i + 1
+    }
+    return null as *TypeStat
+}
+
+walk_stats(stats: ptr, e: *FileEntry) {
+    if e.is_dir == 0 {
+        x = ext_of(e.name)
+        t = find_tstat(stats, x)
+        if t == null {
+            t = mk_tstat(x)
+            _ = list.add(stats, t)
+        }
+        t.bytes = t.bytes + e.total_size
+        t.files = t.files + 1
+        return
+    }
+    n = list.size(e.children)
+    i = 0
+    while i < n {
+        it, _ = list.get(e.children, i)
+        walk_stats(stats, it as *FileEntry)
+        i = i + 1
+    }
+}
+
+// In-place descending sort of a *TypeStat list by bytes (same selection-sort
+// idiom as sort_desc_by_size; type counts are tiny).
+sort_tstats(lst: ptr) {
+    n = list.size(lst)
+    i = 0
+    while i < n {
+        best = i
+        bt, _ = list.get(lst, i); be = bt as *TypeStat
+        best_b = be.bytes
+        j = i + 1
+        while j < n {
+            jt, _ = list.get(lst, j); ej = jt as *TypeStat
+            if ej.bytes > best_b { best = j; best_b = ej.bytes }
+            j = j + 1
+        }
+        if best != i {
+            ai, _ = list.get(lst, i)
+            ab, _ = list.get(lst, best)
+            list.set(lst, i, ab)
+            list.set(lst, best, ai)
+        }
+        i = i + 1
     }
 }
 
@@ -413,27 +533,29 @@ rgb_str(r: int, g: int, b: int) -> string {
     return s
 }
 
-// Base hue (0..360) for a rect under the active scheme (0=bySize 1=byDepth 2=byType).
-hue_for(r: *Rect, scheme: int, total: long) -> float {
-    if scheme == 1 { return frac((r.depth * 60) / 360.0) * 360.0 }
-    if scheme == 2 { return hue_by_type(r.entry.name) }
-    ratio = log(to_float(r.size) + 1.0) / log(to_float(total) + 1.0)   // bySize: log-scaled
+// Base hue (0..360) + ranked flag for a FILE rect under the active scheme
+// (0=bySize 1=byDepth 2=byType). byType colours come from the ranked
+// TypeStats so tiles and legend agree; unranked types render gray
+// (hue_ranked returns 0 → the renderer desaturates).
+hue_for(r: *Rect, s: *AppState) -> float {
+    if s.scheme == 1 { return frac((r.depth * 60) / 360.0) * 360.0 }
+    if s.scheme == 2 {
+        t = find_tstat(s.tstats, ext_of(r.entry.name))
+        if t != null { if t.ranked == 1 { return t.hue } }
+        return 0.0
+    }
+    ratio = log(to_float(r.size) + 1.0) / log(to_float(s.total) + 1.0)   // bySize: log-scaled
     return frac(ratio) * 360.0
 }
 
-hue_by_type(name: string) -> float {
-    if ends(name, ".ae") == 1   { return 0.0 }
-    if ends(name, ".ts") == 1   { return 0.0 }
-    if ends(name, ".c") == 1    { return 30.0 }
-    if ends(name, ".h") == 1    { return 45.0 }
-    if ends(name, ".json") == 1 { return 60.0 }
-    if ends(name, ".md") == 1   { return 120.0 }
-    if ends(name, ".png") == 1  { return 180.0 }
-    if ends(name, ".svg") == 1  { return 200.0 }
-    if ends(name, ".sh") == 1   { return 240.0 }
-    return 300.0
+// 1 when the rect's type carries a palette colour under byType (or scheme
+// isn't byType at all — then everything is "coloured").
+type_is_ranked(r: *Rect, s: *AppState) -> int {
+    if s.scheme != 2 { return 1 }
+    t = find_tstat(s.tstats, ext_of(r.entry.name))
+    if t != null { if t.ranked == 1 { return 1 } }
+    return 0
 }
-ends(s: string, suf: string) -> int { return string.ends_with(s, suf) }
 
 // ─── 3D-bevelled rect render ──────────────────────────────────────
 BEVEL() -> float { return 3.0 }
@@ -465,23 +587,26 @@ render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float) {
 
 // Draw the whole treemap into `root`, in three passes over the laid rects:
 //   1. tiles — dirs as darker/muted nesting rings (children overlay their
-//      inner area), files in full colour
+//      inner area), files coloured by the active scheme (byType uses the
+//      legend palette; unranked types render gray). When a legend type is
+//      HIGHLIGHTED, non-matching files dim right down so the type pops.
 //   2. labels — top-level dir tiles only (nested leaves stay clean, like the
 //      references), drawn after tiles so text sits on top
 //   3. selection — a GrandPerspective-style double outline (white + blue),
 //      drawn last so no later tile overpaints it
-// `sel` (nullable) is the selected entry at ANY depth.
-draw_treemap(root: ptr, rects: ptr, scheme: int, total: long, sel: *FileEntry) {
+draw_treemap(root: ptr, s: *AppState) {
     bg = vg.rect(root, 0.0, 0.0, CANVAS_W(), CANVAS_H())
     vg.fill(bg, "#f5f5f5"); vg.stroke(bg, "#cccccc", 1.0)
 
+    rects = s.rects
+    sel = s.selected
     n = list.size(rects)
     i = 0
     while i < n {
         rp, _ = list.get(rects, i); r = rp as *Rect
         if r.w > 0.5 {
             if r.h > 0.5 {
-                h = hue_for(r, scheme, total)
+                h = hue_for(r, s)
                 if r.entry.is_dir == 1 {
                     if r.nested == 1 {
                         // Children overlay the interior — paint only the
@@ -499,7 +624,17 @@ draw_treemap(root: ptr, rects: ptr, scheme: int, total: long, sel: *FileEntry) {
                         render_shaded(root, r, h, 0.35, 0.40)
                     }
                 } else {
-                    render_shaded(root, r, h, 0.70, 0.55)
+                    sat = 0.70
+                    lit = 0.55
+                    if type_is_ranked(r, s) == 0 { sat = 0.05; lit = 0.62 }
+                    if s.hl_on == 1 {
+                        if string.equals(ext_of(r.entry.name), s.hl_ext) == 0 {
+                            sat = 0.04; lit = 0.80    // dim non-matching
+                        } else {
+                            sat = 0.85; lit = 0.50    // pop matching
+                        }
+                    }
+                    render_shaded(root, r, h, sat, lit)
                 }
             }
         }
@@ -546,6 +681,114 @@ clip_name(name: string) -> string {
         return string.concat(string.substring(name, 0, 17), "...")
     }
     return name
+}
+
+// ─── Type legend pane (right of the treemap) ─────────────────────
+LEG_TOP() -> float   { return 52.0 }
+LEG_ROW_H() -> float { return 27.0 }
+
+// Display name of an extension row: ".c", ".png", "(no ext)".
+ext_label(ext: string) -> string {
+    if string.length(ext) == 0 { return "(no ext)" }
+    return string.concat(".", ext)
+}
+
+// Draw the legend: colour chip, extension, bytes, file count — top
+// TOP_TYPES ranked rows plus an aggregate "other" row. The highlighted
+// row (if any) carries a blue outline. Click handling mirrors this
+// geometry (legend_click).
+draw_legend(root: ptr, s: *AppState) {
+    bg = vg.rect(root, LEGEND_X(), 0.0, LEGEND_W(), CANVAS_H())
+    vg.fill(bg, "#fafafa"); vg.stroke(bg, "#cccccc", 1.0)
+    ti = vg.text_sized(root, LEGEND_X() + 12.0, 30.0, 17.0, "File types (click to highlight)")
+    vg.fill(ti, "#000000")
+
+    n = list.size(s.tstats)
+    shown = n
+    if shown > TOP_TYPES() { shown = TOP_TYPES() }
+    long other_bytes = 0
+    other_files = 0
+    i = 0
+    while i < n {
+        it, _ = list.get(s.tstats, i)
+        t = it as *TypeStat
+        if i >= shown {
+            other_bytes = other_bytes + t.bytes
+            other_files = other_files + t.files
+        }
+        i = i + 1
+    }
+
+    i = 0
+    while i < shown {
+        it, _ = list.get(s.tstats, i)
+        t = it as *TypeStat
+        ry = LEG_TOP() + LEG_ROW_H() * (i / 1.0)
+        chip = vg.rect(root, LEGEND_X() + 12.0, ry, 16.0, 16.0)
+        vg.fill(chip, hsl_rgb(t.hue, 0.70, 0.55)); vg.stroke(chip, "#888888", 1.0)
+        lb = vg.text_sized(root, LEGEND_X() + 38.0, ry + 14.0, 14.0, ext_label(t.ext))
+        vg.fill(lb, "#000000")
+        sz = vg.text_sized(root, LEGEND_X() + 150.0, ry + 14.0, 14.0, fmt_size(t.bytes))
+        vg.fill(sz, "#000000")
+        fc = vg.text_sized(root, LEGEND_X() + 260.0, ry + 14.0, 14.0, "${t.files} files")
+        vg.fill(fc, "#666666")
+        if s.hl_on == 1 {
+            if string.equals(s.hl_ext, t.ext) == 1 {
+                hl = vg.rect(root, LEGEND_X() + 6.0, ry - 4.0, LEGEND_W() - 12.0, LEG_ROW_H() - 3.0)
+                vg.fill(hl, "none"); vg.stroke(hl, "#3399ff", 1.5)
+            }
+        }
+        i = i + 1
+    }
+    if n > shown {
+        ry2 = LEG_TOP() + LEG_ROW_H() * (shown / 1.0)
+        chip2 = vg.rect(root, LEGEND_X() + 12.0, ry2, 16.0, 16.0)
+        vg.fill(chip2, "#bbbbbb"); vg.stroke(chip2, "#888888", 1.0)
+        lb2 = vg.text_sized(root, LEGEND_X() + 38.0, ry2 + 14.0, 14.0, "other")
+        vg.fill(lb2, "#000000")
+        sz2 = vg.text_sized(root, LEGEND_X() + 150.0, ry2 + 14.0, 14.0, fmt_size(other_bytes))
+        vg.fill(sz2, "#000000")
+        fc2 = vg.text_sized(root, LEGEND_X() + 260.0, ry2 + 14.0, 14.0, "${other_files} files")
+        vg.fill(fc2, "#666666")
+    }
+}
+
+// Click in the legend: toggle the highlight for the clicked type row.
+// Clicking the active row (or "other") clears the highlight.
+legend_click(s: *AppState, cx: float, cy: float) {
+    n = list.size(s.tstats)
+    shown = n
+    if shown > TOP_TYPES() { shown = TOP_TYPES() }
+    row = lrint(math.floor((cy - LEG_TOP()) / LEG_ROW_H()))
+    if row < 0 { return }
+    if row >= shown {
+        s.hl_on = 0
+        s.hl_ext = ""
+        s.dirty = 1
+        if s.status != 0 { aether_ui_text_set_string(s.status, "Highlight off") }
+        return
+    }
+    it, _ = list.get(s.tstats, row)
+    t = it as *TypeStat
+    if s.hl_on == 1 {
+        if string.equals(s.hl_ext, t.ext) == 1 {
+            s.hl_on = 0
+            s.hl_ext = ""
+            s.dirty = 1
+            if s.status != 0 { aether_ui_text_set_string(s.status, "Highlight off") }
+            return
+        }
+    }
+    cp = string.copy(t.ext)
+    string_retain(cp)
+    s.hl_ext = cp
+    s.hl_on = 1
+    s.dirty = 1
+    if s.status != 0 {
+        el = ext_label(t.ext)
+        msg = "Highlighting ${el}   ${t.files} files   "
+        aether_ui_text_set_string(s.status, string.concat(msg, fmt_size(t.bytes)))
+    }
 }
 
 // Human-readable byte size: "B / KB / MB / GB" (one decimal for KB+).
@@ -622,6 +865,13 @@ struct AppState {
     dirty: int
     cid: int         // the vg canvas handle (for clear/flush/redraw)
     scene: ptr       // the vg scene (for vg_flush_live)
+    // Per-type legend state: ranked TypeStats (rebuilt at scan finish) and
+    // the currently highlighted extension ("" = none) — clicking a legend
+    // row dims every tile that is not of that type (WinDirStat's killer
+    // legend feature).
+    tstats: ptr      // list of *TypeStat, sorted desc by bytes
+    hl_ext: string   // highlighted extension, "" = no highlight
+    hl_on: int       // 1 = highlight active ("" ext is a valid type)
 }
 
 CRUMBS() -> int { return 8 }
@@ -645,7 +895,7 @@ mk_state(root: *FileEntry) -> *AppState {
     s.stack = list.new()
     _ = list.add(s.stack, root)
     s.rects = list.new()
-    s.scheme = 0
+    s.scheme = 2
     s.total = root.total_size
     s.status = 0
     s.crumb0 = 0; s.crumb1 = 0; s.crumb2 = 0; s.crumb3 = 0
@@ -665,6 +915,9 @@ mk_state(root: *FileEntry) -> *AppState {
     s.dirty = 1
     s.cid = 0
     s.scene = null
+    s.tstats = list.new()
+    s.hl_ext = ""
+    s.hl_on = 0
     relayout(s)
     retarget_watch(s)
     return s
@@ -869,9 +1122,30 @@ scan_step(s: *AppState, budget: int) {
     }
 }
 
+// Rebuild the per-type stats from the tree (one walk), rank, colour top-N.
+rebuild_type_stats(s: *AppState) {
+    s.tstats = list.new()
+    walk_stats(s.tstats, s.root)
+    sort_tstats(s.tstats)
+    n = list.size(s.tstats)
+    i = 0
+    while i < n {
+        it, _ = list.get(s.tstats, i)
+        t = it as *TypeStat
+        if i < TOP_TYPES() {
+            t.ranked = 1
+            t.hue = palette_hue(i)
+        } else {
+            t.ranked = 0
+        }
+        i = i + 1
+    }
+}
+
 finish_scan(s: *AppState) {
     s.scanning = 0
     s.total = s.root.total_size
+    rebuild_type_stats(s)
     relayout(s)
     update_crumbs(s)
     retarget_watch(s)   // events during the scan were stale; re-arm fresh
@@ -961,7 +1235,7 @@ main() {
     if is_dir == 1 { start_rescan(st, root) }
     println("GrandPerspective: scanning ${start} — the window is live while it fills in; Stop abandons the scan.")
 
-    window("GrandPerspective — disk usage", 820, 680) {
+    window("GrandPerspective — disk usage", 1180, 680) {
       vstack(6) {
         hstack(6) {
             btn("Zoom In") callback {
@@ -990,7 +1264,7 @@ main() {
         // The leftmost segment sits 10px further in than the row above.
         _ = margin_of(st.crumb0, 0, 0, 0, 10)
 
-        vg(view_box(0, 0, 800, 600), 800, 600) {
+        vg(view_box(0, 0, 1160, 600), 1160, 600) {
             // A BARE shape verb gets _ctx injected; derive the vg root from it.
             anchor = rect(0, 0, 0, 0)
             root_node = vg.vg_root(vg.node_scene(anchor))
@@ -1002,8 +1276,9 @@ main() {
 
             // DRAW region: renders the treemap from `st` whenever the tick
             // flushes (dirty), not on a fixed frame clock.
-            treg = canvas_region(root_node, 0.0, 0.0, 800.0, 600.0) callback |rn: ptr, t: float| {
-                draw_treemap(rn, st.rects, st.scheme, st.total, st.selected)
+            treg = canvas_region(root_node, 0.0, 0.0, 1160.0, 600.0) callback |rn: ptr, t: float| {
+                draw_treemap(rn, st)
+                draw_legend(rn, st)
             }
             // STATIC-UNTIL-DIRTY: without this, any live region makes the
             // 60fps loop render continuously (right for video/animated draws,
@@ -1016,6 +1291,7 @@ main() {
             // the references' model. Double-click (two clicks within 0.45s,
             // ~6px) = DRILL to the clicked tile (a file drills to its dir).
             canvas_on_click(cid) callback |cx: float, cy: float| {
+                if cx >= LEGEND_X() { legend_click(st, cx, cy) }
                 e = hit(st, cx, cy)
                 if e != null {
                     dt = st.frame_t - st.last_click_t
