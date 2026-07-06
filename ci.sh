@@ -242,7 +242,9 @@ echo
 echo "=== Phase 6: AetherUIDriver grand_perspective tests ==="
 # The app scans $AEVG_DIR on launch; the test script asserts against the
 # same fixture via $GP_FIXTURE (incl. that Delete really trashes a file).
-GP_FIX=$(mktemp -d)
+# Fixture under $HOME: gio trash refuses /tmp on some OSes
+# (FreeBSD: "Trashing on system internal mounts is not supported").
+GP_FIX=$(mktemp -d "$HOME/.gp-ci-XXXXXX")
 mkdir -p "$GP_FIX/sub"
 head -c 400000 /dev/urandom > "$GP_FIX/big.bin"
 head -c 250000 /dev/urandom > "$GP_FIX/mid.bin"

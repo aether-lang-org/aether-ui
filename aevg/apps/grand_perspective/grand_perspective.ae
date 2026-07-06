@@ -1215,7 +1215,11 @@ mk_state(root: *FileEntry) -> *AppState {
     s.scanning = 0
     s.dirs_done = 0
     s.files_seen = 0
-    s.frame_t = 0.0
+    // Real clock from birth: the initial scan starts BEFORE the first timer
+    // tick, so a zero frame_t would make the first "scanned in Ns" read as
+    // system uptime.
+    ns0 = os.now_monotonic_ns()
+    s.frame_t = to_float(ns0) / 1000000000.0
     s.last_click_t = 0.0 - 10.0
     s.last_click_x = 0.0 - 100.0
     s.last_click_y = 0.0 - 100.0
