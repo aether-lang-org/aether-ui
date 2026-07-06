@@ -448,10 +448,22 @@ static void ctx_menu_build(CtxMenu* cm) {
     gtk_widget_set_parent(cm->popover, cm->owner);
 }
 
-static void on_ctx_menu_pressed(GtkGestureClick* gesture, int n_press,
-                                double x, double y, gpointer data) {
+static int aeui_ctx_debug(void) {
+    const char* v = getenv("AETHER_UI_DEBUG");
+    return v && v[0] && v[0] != '0';
+}
+
+// Open on button RELEASE, not press. Opening on press means the popup takes
+// its grab while the button is still down; on some Wayland compositors
+// (ChromeOS sommelier) the following release is then delivered to the popup
+// as an outside click and dismisses it instantly — the menu never visibly
+// appears. Opening on release (the Windows context-menu convention) leaves
+// no trailing input to swallow. X11 is indifferent to either.
+static void on_ctx_menu_released(GtkGestureClick* gesture, int n_press,
+                                 double x, double y, gpointer data) {
     (void)gesture; (void)n_press;
     CtxMenu* cm = (CtxMenu*)data;
+    if (aeui_ctx_debug()) fprintf(stderr, "[aeui-ctxmenu] release at %.0f,%.0f\n", x, y);
     if (!cm->popover) ctx_menu_build(cm);
     GdkRectangle at = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(cm->popover), &at);
@@ -461,6 +473,10 @@ static void on_ctx_menu_pressed(GtkGestureClick* gesture, int n_press,
     // this the popup's focus grab has nothing to move and key events never
     // reach the menu.
     gtk_widget_grab_focus(cm->list);
+    if (aeui_ctx_debug()) {
+        fprintf(stderr, "[aeui-ctxmenu] popup requested; mapped=%d\n",
+                gtk_widget_get_mapped(cm->popover));
+    }
 }
 
 // GTK4 requires a parented popover to be unparented while its parent is
@@ -487,7 +503,7 @@ void aether_ui_context_menu_item_impl(int handle, const char* label,
         GtkGesture* gesture = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture),
                                       GDK_BUTTON_SECONDARY);
-        g_signal_connect(gesture, "pressed", G_CALLBACK(on_ctx_menu_pressed), cm);
+        g_signal_connect(gesture, "released", G_CALLBACK(on_ctx_menu_released), cm);
         gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
         g_signal_connect(w, "destroy", G_CALLBACK(on_ctx_menu_owner_destroy), cm);
         g_object_set_data(G_OBJECT(w), "aeui-ctxmenu", cm);
