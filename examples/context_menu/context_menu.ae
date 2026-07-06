@@ -1,0 +1,72 @@
+// Aether UI context-menu example — right-click menus on ordinary widgets.
+//
+// Demonstrates aether_ui.context_menu_item(handle, label) callback { … }:
+// attach one or more right-click menu items to ANY widget by handle. The
+// popover and its button-3 gesture are created lazily on the first item;
+// each further call appends an item. Choosing an item closes the menu and
+// fires the item's closure.
+//
+//   - the QUOTE label carries a three-item menu (Copy text / Shout / Reset)
+//   - the button carries its own separate one-item menu (Rename me) —
+//     left-click keeps its normal callback, right-click opens the menu
+//   - the status line at the bottom reports each action
+//
+// Platform note: GTK4 (Linux) has the full popover implementation;
+// AppKit/Win32 are currently no-op stubs (same precedent as canvas_on_move).
+//
+// Automation note: the menu is a GtkListBox of activatable rows, so it can
+// be driven by synthetic X11 input (XTest) on a WM-less Xvfb — mouse-click a
+// row directly, or use the keyboard (first row is focused on popup: Return
+// activates it, Down/Up move between rows).
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). GET /widgets shows the label/status mutations after menu use.
+
+import aether_ui
+import aether_ui (window, vstack, btn, text, divider,
+    context_menu_item, clipboard_write, set_button_label, enable_test_server)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+QUOTE() -> string   { return "The quick brown fox jumps over the lazy dog" }
+SHOUTED() -> string { return "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG" }
+
+main() {
+    window("Context menu demo", 560, 240) {
+        vstack(10) {
+            text("Right-click the quote or the button below.")
+            divider()
+
+            quote = text(QUOTE())
+            action = btn("A button with its own menu") callback {
+                // Left-click keeps its ordinary behavior; menus are on
+                // right-click only. `status` is set below, before any
+                // click can happen (the window shows after this block).
+            }
+            divider()
+            status = text("—")
+
+            // Three items on the quote label.
+            context_menu_item(quote, "Copy text") callback {
+                clipboard_write(QUOTE())
+                aether_ui_text_set_string(status, "Copied the quote to the clipboard")
+            }
+            context_menu_item(quote, "Shout") callback {
+                aether_ui_text_set_string(quote, SHOUTED())
+                aether_ui_text_set_string(status, "Shouted")
+            }
+            context_menu_item(quote, "Reset") callback {
+                aether_ui_text_set_string(quote, QUOTE())
+                aether_ui_text_set_string(status, "Reset")
+            }
+
+            // A separate one-item menu on the button.
+            context_menu_item(action, "Rename me") callback {
+                _ = set_button_label(action, "Renamed via the context menu")
+                aether_ui_text_set_string(status, "Button renamed")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

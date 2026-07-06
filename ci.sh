@@ -37,11 +37,11 @@ cd "$ROOT"
 mkdir -p build
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator)
+EXAMPLES=(counter form picker styled system canvas testable calculator context_menu)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
-SMOKE_EXAMPLES=(counter form picker styled system canvas)
+SMOKE_EXAMPLES=(counter form picker styled system canvas context_menu)
 FAIL=0
 
 OS="$(uname -s)"

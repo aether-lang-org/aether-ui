@@ -399,20 +399,17 @@ void aether_ui_button_set_label(int handle, const char* label) {
 // ---------------------------------------------------------------------------
 typedef struct {
     GtkWidget* popover;             // GtkPopover, parented to the owner
-    GtkWidget* box;                 // vertical box of item buttons
+    GtkWidget* list;                // GtkListBox of items (menu-like rows)
 } CtxMenu;
 
-typedef struct {
-    CtxMenu* cm;
-    AeClosure* closure;
-} CtxMenuItem;
-
-static void on_ctx_menu_item_clicked(GtkButton* btn, gpointer data) {
-    (void)btn;
-    CtxMenuItem* it = (CtxMenuItem*)data;
-    gtk_popover_popdown(GTK_POPOVER(it->cm->popover));
-    if (it->closure && it->closure->fn) {
-        ((void(*)(void*))it->closure->fn)(it->closure->env);
+static void on_ctx_menu_row_activated(GtkListBox* lb, GtkListBoxRow* row,
+                                      gpointer data) {
+    (void)lb;
+    CtxMenu* cm = (CtxMenu*)data;
+    gtk_popover_popdown(GTK_POPOVER(cm->popover));
+    AeClosure* c = g_object_get_data(G_OBJECT(row), "aeui-closure");
+    if (c && c->fn) {
+        ((void(*)(void*))c->fn)(c->env);
     }
 }
 
@@ -423,6 +420,11 @@ static void on_ctx_menu_pressed(GtkGestureClick* gesture, int n_press,
     GdkRectangle at = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(cm->popover), &at);
     gtk_popover_popup(GTK_POPOVER(cm->popover));
+    // Focus the list so keyboard navigation (arrows + Return) works even
+    // when the owning widget is non-focusable (e.g. a GtkLabel) — without
+    // this the popup's focus grab has nothing to move and key events never
+    // reach the menu.
+    gtk_widget_grab_focus(cm->list);
 }
 
 // GTK4 requires a parented popover to be unparented while its parent is
@@ -443,11 +445,15 @@ void aether_ui_context_menu_item_impl(int handle, const char* label,
     CtxMenu* cm = g_object_get_data(G_OBJECT(w), "aeui-ctxmenu");
     if (!cm) {
         cm = g_new0(CtxMenu, 1);
-        cm->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        cm->list = gtk_list_box_new();
+        gtk_list_box_set_selection_mode(GTK_LIST_BOX(cm->list),
+                                        GTK_SELECTION_NONE);
         cm->popover = gtk_popover_new();
         gtk_popover_set_has_arrow(GTK_POPOVER(cm->popover), FALSE);
-        gtk_popover_set_child(GTK_POPOVER(cm->popover), cm->box);
+        gtk_popover_set_child(GTK_POPOVER(cm->popover), cm->list);
         gtk_widget_set_parent(cm->popover, w);
+        g_signal_connect(cm->list, "row-activated",
+                         G_CALLBACK(on_ctx_menu_row_activated), cm);
         GtkGesture* gesture = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture),
                                       GDK_BUTTON_SECONDARY);
@@ -456,17 +462,16 @@ void aether_ui_context_menu_item_impl(int handle, const char* label,
         g_signal_connect(w, "destroy", G_CALLBACK(on_ctx_menu_owner_destroy), cm);
         g_object_set_data(G_OBJECT(w), "aeui-ctxmenu", cm);
     }
-    GtkWidget* item = gtk_button_new_with_label(label ? label : "");
-    gtk_button_set_has_frame(GTK_BUTTON(item), FALSE);
-    GtkWidget* item_label = gtk_button_get_child(item ? GTK_BUTTON(item) : NULL);
-    if (item_label && GTK_IS_LABEL(item_label)) {
-        gtk_label_set_xalign(GTK_LABEL(item_label), 0.0);
-    }
-    CtxMenuItem* it = g_new0(CtxMenuItem, 1);
-    it->cm = cm;
-    it->closure = (AeClosure*)boxed_closure;
-    g_signal_connect(item, "clicked", G_CALLBACK(on_ctx_menu_item_clicked), it);
-    gtk_box_append(GTK_BOX(cm->box), item);
+    GtkWidget* item_label = gtk_label_new(label ? label : "");
+    gtk_label_set_xalign(GTK_LABEL(item_label), 0.0);
+    gtk_widget_set_margin_start(item_label, 8);
+    gtk_widget_set_margin_end(item_label, 8);
+    gtk_widget_set_margin_top(item_label, 4);
+    gtk_widget_set_margin_bottom(item_label, 4);
+    GtkWidget* row = gtk_list_box_row_new();
+    gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), item_label);
+    g_object_set_data(G_OBJECT(row), "aeui-closure", boxed_closure);
+    gtk_list_box_append(GTK_LIST_BOX(cm->list), row);
 }
 
 static void on_button_clicked(GtkButton* btn, gpointer data) {
