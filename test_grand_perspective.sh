@@ -193,7 +193,23 @@ else
 fi
 
 echo ""
-echo "--- Test 10: clicks still land after a window resize ---"
+echo "--- Test 10: scheme buttons act as a radio group (active = ghosted) ---"
+enabled_of() {
+    curl -s "$BASE/widgets" | python3 -c "
+import json,sys
+print(next(str(w['enabled']).lower() for w in json.load(sys.stdin) if w.get('text')==sys.argv[1]))" "$1"
+}
+assert_contains "by Type ghosted initially (the default scheme)" "false" "$(enabled_of 'by Type')"
+BD=$(wid_of "by Depth")
+curl -s -X POST "$BASE/widget/$BD/click" > /dev/null; sleep 0.3
+assert_contains "by Depth ghosted after click" "false" "$(enabled_of 'by Depth')"
+assert_contains "by Type re-enabled" "true" "$(enabled_of 'by Type')"
+BT=$(wid_of "by Type")
+curl -s -X POST "$BASE/widget/$BT/click" > /dev/null; sleep 0.3   # restore default
+assert_contains "Stop ghosted when idle" "false" "$(enabled_of 'Stop')"
+
+echo ""
+echo "--- Test 11: clicks still land after a window resize ---"
 # Grow the window, then double-click sub's tile at its NEW pixel position,
 # computed through the same xMidYMid-meet mapping the scene uses. Before the
 # px→viewBox unmapping fix this hit the wrong pane and nothing drilled.

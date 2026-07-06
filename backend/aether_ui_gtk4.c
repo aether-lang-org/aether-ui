@@ -2517,12 +2517,14 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
     int sealed = is_widget_sealed(handle) ? 1 : 0;
     int is_banner = (handle == banner_handle) ? 1 : 0;
 
+    int enabled = gtk_widget_get_sensitive(w) ? 1 : 0;
     int n = snprintf(buf, bufsize,
-        "{\"id\":%d,\"type\":\"%s\",\"text\":\"%s\",\"visible\":%s,\"sealed\":%s,\"banner\":%s",
+        "{\"id\":%d,\"type\":\"%s\",\"text\":\"%s\",\"visible\":%s,\"sealed\":%s,\"banner\":%s,\"enabled\":%s",
         handle, type, text ? text : "",
         visible ? "true" : "false",
         sealed ? "true" : "false",
-        is_banner ? "true" : "false");
+        is_banner ? "true" : "false",
+        enabled ? "true" : "false");
 
     // Parent handle
     int parent_id = parent_handle_for(handle);

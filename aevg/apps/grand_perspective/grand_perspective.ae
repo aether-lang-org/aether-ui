@@ -1222,6 +1222,12 @@ struct AppState {
     // synthetic, and acting on them lets a repaint clobber status text.
     hov_px_x: float
     hov_px_y: float
+    // Colour-scheme buttons act as a radio group: the ACTIVE scheme's
+    // button is ghosted ("you are here"). A real dropdown is out — its
+    // popover never displays under sommelier (ChromeOS).
+    scheme_btn0: int
+    scheme_btn1: int
+    scheme_btn2: int
 }
 
 CRUMBS() -> int { return 8 }
@@ -1282,6 +1288,9 @@ mk_state(root: *FileEntry) -> *AppState {
     s.rescan_btn = 0
     s.hov_px_x = 0.0 - 1.0
     s.hov_px_y = 0.0 - 1.0
+    s.scheme_btn0 = 0
+    s.scheme_btn1 = 0
+    s.scheme_btn2 = 0
     relayout(s)
     retarget_watch(s)
     return s
@@ -1561,7 +1570,29 @@ stop_scan(s: *AppState) {
     }
 }
 
-set_scheme(s: *AppState, scheme: int) { s.scheme = scheme; s.dirty = 1 }
+set_scheme(s: *AppState, scheme: int) {
+    s.scheme = scheme
+    s.dirty = 1
+    scheme_buttons(s)
+}
+
+// Radio-group behaviour for the three colour-scheme buttons: ghost the
+// active one so the toolbar always shows which scheme is in effect.
+scheme_buttons(s: *AppState) {
+    if s.scheme_btn0 == 0 { return }
+    if dbg_on() == 1 {
+        println("gp-scheme: active=${s.scheme} handles=${s.scheme_btn0},${s.scheme_btn1},${s.scheme_btn2}")
+    }
+    on0 = 1
+    on1 = 1
+    on2 = 1
+    if s.scheme == 0 { on0 = 0 }
+    if s.scheme == 1 { on1 = 0 }
+    if s.scheme == 2 { on2 = 0 }
+    aether_ui_set_enabled(s.scheme_btn0, on0)
+    aether_ui_set_enabled(s.scheme_btn1, on1)
+    aether_ui_set_enabled(s.scheme_btn2, on2)
+}
 
 // Ghost the scan-lifecycle buttons to match state: Stop is clickable only
 // while a scan runs; Rescan only when idle. (No-op before the toolbar is
@@ -1653,12 +1684,14 @@ main() {
             btn("Open") callback { do_open(st) }
             btn("Reveal") callback { do_reveal(st) }
             st.del_btn = btn("Delete") callback { do_delete(st) }
-            btn("by Size") callback { set_scheme(st, 0) }
-            btn("by Depth") callback { set_scheme(st, 1) }
-            btn("by Type") callback { set_scheme(st, 2) }
+            st.scheme_btn0 = btn("by Size") callback { set_scheme(st, 0) }
+            st.scheme_btn1 = btn("by Depth") callback { set_scheme(st, 1) }
+            st.scheme_btn2 = btn("by Type") callback { set_scheme(st, 2) }
         }
-        // Reflect the already-running initial scan in the fresh toolbar.
+        // Reflect the already-running initial scan in the fresh toolbar,
+        // and mark the active colour scheme.
         scan_buttons(st)
+        scheme_buttons(st)
 
         // Breadcrumb NAV: the drill path as clickable segments (a fixed pool,
         // relabelled/hidden by update_crumbs as the stack changes).
