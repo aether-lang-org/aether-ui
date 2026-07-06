@@ -697,7 +697,7 @@ clip_name(name: string) -> string {
 // children, largest first — colour chip, name, size, %-of-current bar,
 // file count. ".." walks up; rows past the pane height fold into
 // "+N more". Selection syncs both ways with the treemap.
-LIST_TOP() -> float   { return 68.0 }
+LIST_TOP() -> float   { return 82.0 }
 LIST_ROW_H() -> float { return 25.0 }
 LIST_MAX() -> int     { return 20 }
 
@@ -718,6 +718,22 @@ draw_list(root: ptr, s: *AppState) {
     sub = "${sub0}   ${s.current.file_count} files"
     hs = vg.text_sized(root, 10.0, 44.0, 12.0, sub)
     vg.fill(hs, "#666666")
+    // Scan-info strip: duration of the last scan + freed-space rollup
+    // (GrandPerspective's info panel, folded into the header).
+    info = ""
+    if s.scan_secs > 0.0 {
+        secs = one_dp(s.scan_secs)
+        info = "scanned in ${secs}s"
+    }
+    if s.freed > 0 {
+        fr = fmt_size(s.freed)
+        if string.length(info) > 0 { info = string.concat(info, "   ") }
+        info = string.concat(info, string.concat("freed ", fr))
+    }
+    if string.length(info) > 0 {
+        inf = vg.text_sized(root, 10.0, 60.0, 12.0, info)
+        vg.fill(inf, "#999999")
+    }
 
     // ".." row (when not at the root of the drill stack).
     if list.size(s.stack) > 1 {
@@ -1148,6 +1164,8 @@ struct AppState {
     freed: long
     del_armed_t: float   // when the confirm was armed; <=0 = disarmed
     del_btn: int         // Delete button handle (label swaps while armed)
+    scan_start_t: float  // when the current scan started (frame clock)
+    scan_secs: float     // duration of the last completed scan
 }
 
 CRUMBS() -> int { return 8 }
@@ -1198,6 +1216,8 @@ mk_state(root: *FileEntry) -> *AppState {
     s.freed = 0
     s.del_armed_t = 0.0 - 1.0
     s.del_btn = 0
+    s.scan_start_t = 0.0
+    s.scan_secs = 0.0
     relayout(s)
     retarget_watch(s)
     return s
@@ -1377,6 +1397,7 @@ start_rescan(s: *AppState, e: *FileEntry) {
     s.dirs_done = 0
     s.files_seen = 0
     s.scanning = 1
+    s.scan_start_t = s.frame_t
     clear_selection(s)
     relayout(s)
 }
@@ -1436,6 +1457,7 @@ rebuild_type_stats(s: *AppState) {
 
 finish_scan(s: *AppState) {
     s.scanning = 0
+    s.scan_secs = s.frame_t - s.scan_start_t
     s.total = s.root.total_size
     rebuild_type_stats(s)
     relayout(s)
