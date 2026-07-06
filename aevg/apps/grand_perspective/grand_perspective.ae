@@ -59,7 +59,7 @@ import std.math
 import std.string
 import std.list
 import std.os
-import std.os (os_getenv, aether_args_count, aether_args_get)
+import std.os (os_getenv, aether_args_count, aether_args_get, run_capture)
 import std.fs
 import std.dir
 
@@ -68,6 +68,7 @@ extern log(x: float) -> float            // std.math has no log; libm does
 extern lrint(x: float) -> long           // round-to-nearest; narrows at an int return
 extern string_retain(s: string)          // keep a heap string alive in a struct field
 extern aether_ui_text_set_string(handle: int, text: string)  // update a label's text
+extern aether_ui_canvas_get_widget(canvas_id: int) -> int    // canvas id → widget handle
 
 LIST_W() -> float   { return 280.0 }     // directory list pane (left)
 MAP_X() -> float    { return 288.0 }     // treemap area origin
@@ -834,6 +835,47 @@ nav_move(s: *AppState, delta: int) {
     select_entry(s, it2 as *FileEntry)
 }
 
+// ─── File operations: Open / Reveal (Trash arrives with its confirm) ──
+//
+// The entry ops act on: the SELECTION, else the tile under the pointer
+// (so the canvas right-click menu works on whatever was right-clicked).
+op_target(s: *AppState) -> *FileEntry {
+    if s.selected != null { return s.selected }
+    return s.hovered
+}
+
+// xdg-open a path (file → default app, dir → file manager). Argv-based,
+// no shell. Reports to the status line either way.
+open_path(s: *AppState, p: string) {
+    av = list.new()
+    _ = list.add(av, p)
+    _out, xstatus, xerr = run_capture("xdg-open", av, null)
+    list.free(av)
+    ok = 1
+    if string.length(xerr) > 0 { ok = 0 }
+    if xstatus != 0 { ok = 0 }
+    if s.status != 0 {
+        if ok == 1 { aether_ui_text_set_string(s.status, string.concat("Opened: ", p)) }
+        else { aether_ui_text_set_string(s.status, string.concat("Open failed: ", p)) }
+    }
+}
+
+do_open(s: *AppState) {
+    t = op_target(s)
+    if t == null { return }
+    open_path(s, t.path)
+}
+
+// Reveal: open the CONTAINING directory in the file manager (a file's
+// parent; a dir reveals its own parent so you see it in context).
+do_reveal(s: *AppState) {
+    t = op_target(s)
+    if t == null { return }
+    d = t.path
+    if t.parent != null { d = t.parent.path }
+    open_path(s, d)
+}
+
 // ─── Type legend pane (right of the treemap) ─────────────────────
 LEG_TOP() -> float   { return 52.0 }
 LEG_ROW_H() -> float { return 27.0 }
@@ -1409,6 +1451,8 @@ main() {
             btn("Zoom Out") callback { drill_up(st) }
             btn("Rescan") callback { start_rescan(st, st.current) }
             btn("Stop") callback { stop_scan(st) }
+            btn("Open") callback { do_open(st) }
+            btn("Reveal") callback { do_reveal(st) }
             btn("by Size") callback { set_scheme(st, 0) }
             btn("by Depth") callback { set_scheme(st, 1) }
             btn("by Type") callback { set_scheme(st, 2) }
@@ -1486,6 +1530,19 @@ main() {
             // Right/Enter drill a selected dir, Left goes up, Esc clears.
             canvas_on_key(cid) callback |key: string| {
                 handle_nav_key(st, key)
+            }
+            // Right-click menu on the map: acts on the selection, else the
+            // tile under the pointer at right-click time. NB: menus attach to
+            // WIDGET handles; scene_canvas is a canvas id (its own space).
+            cwid = aether_ui_canvas_get_widget(cid)
+            context_menu_item(cwid, "Open") callback { do_open(st) }
+            context_menu_item(cwid, "Reveal in file manager") callback { do_reveal(st) }
+            context_menu_item(cwid, "Copy path") callback {
+                tgt = op_target(st)
+                if tgt != null {
+                    clipboard_write(tgt.path)
+                    aether_ui_text_set_string(st.status, string.concat("Copied: ", tgt.path))
+                }
             }
             // Hover → hit-test → show name + size + %-of-parent in the status
             // line (covers tiles too small to carry their own label). Also
