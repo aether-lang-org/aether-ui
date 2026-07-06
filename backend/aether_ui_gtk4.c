@@ -1912,7 +1912,10 @@ void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
 // space AeVG stores shape bounds in (post-flush canvas px).
 static void on_canvas_click(GtkGestureClick* gesture, int n_press,
                              double x, double y, gpointer data) {
-    (void)gesture; (void)n_press;
+    (void)gesture;
+    if (aeui_ctx_debug())
+        fprintf(stderr, "aeui: canvas press n_press=%d px=(%.1f, %.1f)\n",
+                n_press, x, y);
     AeClosure* c = (AeClosure*)data;
     if (c && c->fn) {
         ((void(*)(void*, double, double))c->fn)(c->env, x, y);

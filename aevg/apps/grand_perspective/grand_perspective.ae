@@ -98,6 +98,18 @@ NEST_INSET() -> float { return 2.0 }     // px ring of parent visible around chi
 RECT_BUDGET() -> int { return 4000 }     // global cap on laid rects per view
 TOP_TYPES() -> int  { return 12 }        // legend rows with their own colour
 
+// AETHER_UI_DEBUG=1 (the backend's own debug gate) also traces this app's
+// click routing: raw px → viewBox coords, double-click verdict, pane, hit
+// target, and why a drill did or didn't happen. The C backend adds a
+// per-press line (n_press + raw coords) on stderr under the same variable.
+dbg_on() -> int {
+    v = os_getenv("AETHER_UI_DEBUG")
+    if v == null { return 0 }
+    if string.length(v) == 0 { return 0 }
+    if string.equals(v, "0") == 1 { return 0 }
+    return 1
+}
+
 // ─── Data model ──────────────────────────────────────────────────
 //
 // FileEntry / Rect are heap nodes (Aether structs cross fn boundaries as
@@ -1348,8 +1360,14 @@ drill_up(s: *AppState) {
 drill_deep(s: *AppState, e: *FileEntry) {
     target = e
     if target.is_dir == 0 { target = target.parent }
-    if target == null { return }
-    if target == s.current { return }
+    if target == null {
+        if dbg_on() == 1 { println("gp-drill: ${e.path} has no parent dir — no-op") }
+        return
+    }
+    if target == s.current {
+        if dbg_on() == 1 { println("gp-drill: ${target.path} is already the current dir — no-op") }
+        return
+    }
     // Collect target→…→(child of current), aborting if target isn't a
     // descendant of current at all.
     chain = list.new()
@@ -1362,7 +1380,11 @@ drill_deep(s: *AppState, e: *FileEntry) {
             p = p.parent
         }
     }
-    if found == 0 { return }
+    if found == 0 {
+        if dbg_on() == 1 { println("gp-drill: ${target.path} is not under ${s.current.path} — no-op") }
+        return
+    }
+    if dbg_on() == 1 { println("gp-drill: -> ${target.path}") }
     n = list.size(chain)
     i = n - 1
     while i >= 0 {
@@ -1647,13 +1669,27 @@ main() {
                 if dx < 0.0 { dx = 0.0 - dx }
                 dy = cy - st.last_click_y
                 if dy < 0.0 { dy = 0.0 - dy }
+                dist = dx + dy
                 dbl = 0
-                if dt < 0.45 { if dx + dy < 8.0 { dbl = 1 } }
-                if cx >= LEGEND_X() { legend_click(st, cx, cy) }
+                if dt < 0.45 { if dist < 8.0 { dbl = 1 } }
+                if dbg_on() == 1 {
+                    println("gp-click: px=(${pcx}, ${pcy}) vb=(${cx}, ${cy}) dt=${dt}s dist=${dist} dbl=${dbl}")
+                }
+                if cx >= LEGEND_X() {
+                    if dbg_on() == 1 { println("gp-click: -> legend pane") }
+                    legend_click(st, cx, cy)
+                }
                 else {
-                    if cx < LIST_W() { list_click(st, cx, cy, dbl) }
+                    if cx < LIST_W() {
+                        if dbg_on() == 1 { println("gp-click: -> list pane") }
+                        list_click(st, cx, cy, dbl)
+                    }
                     else {
                         e = hit(st, cx, cy)
+                        if dbg_on() == 1 {
+                            if e == null { println("gp-click: -> map, hit NOTHING") }
+                            else { println("gp-click: -> map, hit ${e.path} is_dir=${e.is_dir}") }
+                        }
                         if e != null {
                             if dbl == 1 { drill_deep(st, e) }
                             else { select_entry(st, e) }
