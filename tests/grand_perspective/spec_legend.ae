@@ -1,0 +1,47 @@
+// spec_legend.ae — grand_perspective: type-legend highlight toggle +
+// colour-scheme radio group + scan-lifecycle button ghosting.
+// Run via ci.sh Phase 6, or by hand:
+//   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_legend.ae
+import aeocha
+import gp_driver
+import std.string
+import std.os
+
+main() {
+    fw = aeocha.init()
+    gp_driver.wait_for_app()
+
+    aeocha.describe(fw, "grand_perspective: legend + colour schemes") {
+        aeocha.it("legend row click toggles a type highlight") callback {
+            _ = gp_driver.click(1100.0, 65.0)
+            ok = gp_driver.wait_status_contains("Highlighting", 20)
+            aeocha.assert_true(ok, "highlight on")
+            _ = gp_driver.click(1100.0, 65.0)
+            ok2 = gp_driver.wait_status_contains("Highlight off", 20)
+            aeocha.assert_true(ok2, "highlight off")
+        }
+        aeocha.it("colour-scheme toggles behave as a radio group") callback {
+            aeocha.assert_eq(gp_driver.widget_bool_by_text("by Type", "active"), 1,
+                "by Type active initially (the default scheme)")
+            bd = gp_driver.widget_id_by_text("by Depth")
+            _ = gp_driver.toggle_widget(bd)
+            sleep(300)
+            aeocha.assert_eq(gp_driver.widget_bool_by_text("by Depth", "active"), 1,
+                "by Depth active after toggle")
+            aeocha.assert_eq(gp_driver.widget_bool_by_text("by Type", "active"), 0,
+                "by Type deactivated by the group")
+            bt = gp_driver.widget_id_by_text("by Type")
+            _ = gp_driver.toggle_widget(bt)     // restore the default
+            sleep(300)
+            aeocha.assert_eq(gp_driver.widget_bool_by_text("by Type", "active"), 1,
+                "by Type active again")
+        }
+        aeocha.it("ghosts Stop when idle, Rescan stays live") callback {
+            aeocha.assert_eq(gp_driver.widget_bool_by_text("Stop", "enabled"), 0,
+                "Stop ghosted when idle")
+            aeocha.assert_eq(gp_driver.widget_bool_by_text("Rescan", "enabled"), 1,
+                "Rescan live when idle")
+        }
+    }
+    aeocha.run_summary(fw)
+}

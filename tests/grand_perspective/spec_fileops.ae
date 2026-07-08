@@ -1,0 +1,55 @@
+// spec_fileops.ae — grand_perspective: context-menu Copy path + Delete
+// guard/arm/confirm-to-trash. The delete REALLY trashes $GP_FIXTURE/mid.bin
+// (gio trash) — always run against a throwaway fixture.
+// Run via ci.sh Phase 6, or by hand:
+//   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_fileops.ae
+import aeocha
+import gp_driver
+import std.string
+import std.fs
+import std.os
+
+main() {
+    fw = aeocha.init()
+    gp_driver.wait_for_app()
+
+    aeocha.describe(fw, "grand_perspective: file operations") {
+        aeocha.it("copies the selection's path from the map context menu") callback {
+            _ = gp_driver.click(100.0, 90.0)                       // select big.bin
+            _ = gp_driver.wait_status_contains("big.bin", 20)
+            cw = gp_driver.canvas_widget_id()
+            r = gp_driver.post("/widget/${cw}/context_menu/3")     // item 3 = Copy path
+            aeocha.assert_eq(r, 1, "context-menu route reachable")
+            ok = gp_driver.wait_status_contains("Copied", 20)
+            aeocha.assert_true(ok, "status shows Copied")
+        }
+        aeocha.it("Delete arms, confirms to trash, then guards with no selection") callback {
+            del = gp_driver.widget_id_by_text("Delete")
+            _ = gp_driver.click(100.0, 115.0)                      // select mid.bin (row 1)
+            _ = gp_driver.wait_status_contains("mid.bin", 20)
+            _ = gp_driver.click_widget(del)
+            sleep(300)
+            aeocha.assert_contains(gp_driver.widget_text_by_id(del), "Confirm",
+                "armed: button relabelled")
+            _ = gp_driver.click_widget(del)                        // confirm
+            // Poll for the file leaving the disk (gio trash + watch rescan).
+            gone = 0
+            i = 0
+            while i < 30 {
+                mid = string.concat(gp_driver.fixture_path(), "/mid.bin")
+                k, _sz, _mt, serr = fs.file_stat(mid)
+                if string.length(serr) > 0 { gone = 1; i = 30 }
+                if gone == 0 { sleep(150) }
+                i = i + 1
+            }
+            aeocha.assert_true(gone, "mid.bin moved to trash (left the disk)")
+            // The watch-triggered rescan after the trash cleared the
+            // selection; a Delete press now must hit the no-selection guard.
+            sleep(500)
+            _ = gp_driver.click_widget(del)
+            ok = gp_driver.wait_status_contains("Select", 20)
+            aeocha.assert_true(ok, "guard after trash (no selection)")
+        }
+    }
+    aeocha.run_summary(fw)
+}

@@ -1,0 +1,325 @@
+// gp_driver.ae — AetherUIDriver client helpers for the grand_perspective
+// Aeocha specs. Everything the specs need to talk to the app over HTTP:
+// clicks/keys/moves/resize (POST), widget-tree queries over /widgets JSON
+// (status line, breadcrumbs, find-by-text, enabled/active flags, canvas
+// size), and the polling waits that make the specs timing-robust.
+//
+// The specs run against a FRESH app instance scanning a FRESH fixture
+// ($GP_FIXTURE = $AEVG_DIR); ci.sh launches both per spec.
+
+exports (
+    get_body, post, click, click_widget, toggle_widget, key, move_to,
+    resize_window,
+    status_line, crumbs_line, widget_id_by_text, widget_bool_by_text,
+    widget_text_by_id, canvas_w, canvas_h, canvas_widget_id,
+    wait_for_app, wait_status_contains, wait_crumbs_contains, wait_crumbs_gone,
+    root_crumb_label, fixture_path
+)
+
+import std.string
+import std.list
+import std.os
+import std.os (os_getenv)
+import std.json
+import std.http.client
+
+BASE() -> string { return "http://127.0.0.1:9222" }
+
+fixture_path() -> string { return os_getenv("GP_FIXTURE") }
+
+// The ~-abbreviated label the root breadcrumb carries (the app's
+// root_label() of the fixture path).
+root_crumb_label() -> string {
+    p = fixture_path()
+    home = os_getenv("HOME")
+    if home != null {
+        if string.length(home) > 0 {
+            if string.equals(p, home) == 1 { return "~" }
+            if string.starts_with(p, string.concat(home, "/")) == 1 {
+                rest = string.substring(p, string.length(home) + 1, string.length(p))
+                return string.concat("~/", rest)
+            }
+        }
+    }
+    return p
+}
+
+// ─── HTTP primitives ─────────────────────────────────────────────
+
+get_body(path: string) -> string {
+    req = client.request("GET", string.concat(BASE(), path))
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.length(cerr) > 0 { return "" }
+    body = string.concat(client.response_body(resp), "")   // own a copy
+    client.response_free(resp)
+    return body
+}
+
+post(path: string) -> int {
+    req = client.request("POST", string.concat(BASE(), path))
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.length(cerr) > 0 { return 0 }
+    client.response_free(resp)
+    return 1
+}
+
+click(x: float, y: float) -> int {
+    xi = f_to_i(x)
+    yi = f_to_i(y)
+    return post("/canvas/1/click?x=${xi}&y=${yi}")
+}
+
+click_widget(id: int) -> int { return post("/widget/${id}/click") }
+toggle_widget(id: int) -> int { return post("/widget/${id}/toggle") }
+key(name: string) -> int { return post(string.concat("/canvas/1/key?name=", name)) }
+
+move_to(x: float, y: float) -> int {
+    xi = f_to_i(x)
+    yi = f_to_i(y)
+    return post("/canvas/1/move?x=${xi}&y=${yi}")
+}
+
+resize_window(w: int, h: int) -> int { return post("/window/resize?w=${w}&h=${h}") }
+
+extern lrint(x: float) -> long
+f_to_i(x: float) -> int { return lrint(x) }
+
+// ─── /widgets JSON queries ───────────────────────────────────────
+
+// The bottom status line: the LAST text widget whose content carries one of
+// the app's status markers (scan/selection/hover/highlight/trash text).
+status_line() -> string {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    best = ""
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        ty = field_str(w, "type")
+        if string.equals(ty, "text") == 1 {
+            t = field_str(w, "text")
+            if is_statusish(t) == 1 { best = t }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return best
+}
+
+is_statusish(t: string) -> int {
+    if string.contains(t, "Scan") == 1 { return 1 }
+    if string.contains(t, "Folder") == 1 { return 1 }
+    if string.contains(t, "File:") == 1 { return 1 }
+    if string.contains(t, "Highlight") == 1 { return 1 }
+    if string.contains(t, "trash") == 1 { return 1 }
+    if string.contains(t, "Select") == 1 { return 1 }
+    if string.contains(t, "Copied") == 1 { return 1 }
+    if string.contains(t, "—") == 1 { return 1 }
+    return 0
+}
+
+// Visible breadcrumb labels joined " / " (buttons, minus the fixed toolbar).
+crumbs_line() -> string {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    out = ""
+    first = 1
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(field_str(w, "type"), "button") == 1 {
+            if field_bool(w, "visible") == 1 {
+                t = field_str(w, "text")
+                if is_toolbar_label(t) == 0 {
+                    if first == 0 { out = string.concat(out, " / ") }
+                    out = string.concat(out, t)
+                    first = 0
+                }
+            }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return out
+}
+
+is_toolbar_label(t: string) -> int {
+    if string.equals(t, "Zoom In") == 1 { return 1 }
+    if string.equals(t, "Zoom Out") == 1 { return 1 }
+    if string.equals(t, "Rescan") == 1 { return 1 }
+    if string.equals(t, "Stop") == 1 { return 1 }
+    if string.equals(t, "Open") == 1 { return 1 }
+    if string.equals(t, "Reveal") == 1 { return 1 }
+    if string.equals(t, "Delete") == 1 { return 1 }
+    if string.equals(t, "Confirm delete?") == 1 { return 1 }
+    return 0
+}
+
+// Widget id whose text equals `text`, or 0.
+widget_id_by_text(text: string) -> int {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    found = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(field_str(w, "text"), text) == 1 {
+            if found == 0 { found = field_int(w, "id") }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
+}
+
+// A boolean field ("enabled", "active", "visible") of the first widget whose
+// text equals `text`; -1 when no such widget/field.
+widget_bool_by_text(text: string, fieldname: string) -> int {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 - 1 }
+    r = 0 - 1
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(field_str(w, "text"), text) == 1 {
+            if r < 0 { r = field_bool(w, fieldname) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+// The text of widget `id` ("" when absent) — e.g. the Delete button's label
+// while the confirm is armed.
+widget_text_by_id(id: int) -> string {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = ""
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if field_int(w, "id") == id { r = field_str(w, "text") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+canvas_w() -> int { return canvas_field("w") }
+canvas_h() -> int { return canvas_field("h") }
+canvas_widget_id() -> int { return canvas_field("id") }
+
+canvas_field(f: string) -> int {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(field_str(w, "type"), "canvas") == 1 {
+            if r == 0 { r = field_int(w, f) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+field_str(w: ptr, name: string) -> string {
+    f = json.json_object_get_raw(w, name)
+    if f == null { return "" }
+    s, serr = json.get_string(f)
+    if string.length(serr) > 0 { return "" }
+    return s
+}
+
+field_int(w: ptr, name: string) -> int {
+    f = json.json_object_get_raw(w, name)
+    if f == null { return 0 }
+    return json.json_get_int(f)
+}
+
+field_bool(w: ptr, name: string) -> int {
+    f = json.json_object_get_raw(w, name)
+    if f == null { return 0 }
+    return json.json_get_bool(f)
+}
+
+// ─── Waits (poll every 150ms up to `tries`) ──────────────────────
+
+wait_status_contains(needle: string, tries: int) -> int {
+    i = 0
+    while i < tries {
+        if string.contains(status_line(), needle) == 1 { return 1 }
+        sleep(150)
+        i = i + 1
+    }
+    return 0
+}
+
+wait_crumbs_contains(needle: string, tries: int) -> int {
+    i = 0
+    while i < tries {
+        if string.contains(crumbs_line(), needle) == 1 { return 1 }
+        sleep(150)
+        i = i + 1
+    }
+    return 0
+}
+
+wait_crumbs_gone(needle: string, tries: int) -> int {
+    i = 0
+    while i < tries {
+        if string.contains(crumbs_line(), needle) == 0 { return 1 }
+        sleep(150)
+        i = i + 1
+    }
+    return 0
+}
+
+// Wait for: the HTTP server, the initial scan to finish, and the first-layout
+// dance to settle (clicks unmap px→viewBox through the live mapping, so a
+// click during a transient early allocation lands on the wrong row).
+wait_for_app() {
+    i = 0
+    up = 0
+    while i < 40 {
+        if up == 0 {
+            if string.length(get_body("/widgets")) > 0 { up = 1; i = 40 }
+        }
+        if up == 0 { sleep(300) }
+        i = i + 1
+    }
+    _ = wait_status_contains("Scan complete", 40)
+    pw = 0 - 1
+    ph = 0 - 1
+    i = 0
+    while i < 20 {
+        cw = canvas_w()
+        ch = canvas_h()
+        settled = 0
+        if cw == pw { if ch == ph { if cw > 0 { settled = 1 } } }
+        if settled == 1 { i = 20 }
+        else {
+            pw = cw
+            ph = ch
+            sleep(300)
+        }
+        i = i + 1
+    }
+}

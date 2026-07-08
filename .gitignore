@@ -39,3 +39,4 @@ target/
 !.aeb/lib/aetherui/
 .aeb/lib/aetherui/*
 !.aeb/lib/aetherui/module.ae
+tests/grand_perspective/aeocha.ae
