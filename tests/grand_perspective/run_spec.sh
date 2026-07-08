@@ -6,9 +6,7 @@
 # ci.sh's run_server_test passes the port as the first arg — the driver's
 # port is fixed at 9222, so a numeric $1 is ignored.
 #
-# NB: the module-search env var is AETHER_LIB_DIR (aether #413) — the
-# AETHER_INCLUDE_PATH name that aeocha's README mentions is not read by the
-# compiler at all.
+# NB: the module-search env var is AETHER_LIB_DIR (aether #413).
 #
 #   AEOCHA_DIR   where aeocha.ae lives (default ~/scm/aeocha)
 set -e
