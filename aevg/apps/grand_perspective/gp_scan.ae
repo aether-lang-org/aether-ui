@@ -1,0 +1,196 @@
+// gp_scan.ae — GrandPerspective: the incremental directory scan.
+//
+// Part of the grand_perspective app (see grand_perspective.ae for the full
+// provenance note; GPL-2.0 lineage applies).
+//
+// The scan is a work QUEUE of directory nodes, drained a batch at a time from
+// the frame tick (scan_step) so the window is live and the treemap grows
+// while scanning. Entry kinds come from readdir's d_type via dir.list_kind
+// (ae 0.342, #966) — one sweep per directory, so only FILES pay a stat (for
+// their size). Symlinks are never followed (kind 3 is skipped), so cycles are
+// impossible and no depth cap is needed. Unreadable dirs/files are skipped
+// (shown as 0 bytes).
+
+exports (
+    expand_dir, start_rescan, scan_step, rebuild_type_stats,
+    finish_scan, stop_scan, scan_buttons
+)
+
+import std.list
+import std.string
+import std.fs
+import std.dir
+import gp_model
+import gp_model (FileEntry, TypeStat, mk_entry, bump_ancestors, join_path,
+    fmt_size, walk_stats, sort_tstats, palette_hue)
+import gp_state
+import gp_state (AppState)
+import gp_nav
+import gp_nav (relayout, clear_selection, update_crumbs, retarget_watch)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+extern aether_ui_set_enabled(handle: int, enabled: int)
+
+// expand_dir: read ONE directory — file sizes stream up the parent chain
+// immediately; subdirectories are queued onto `pending`. Returns the number
+// of files seen (for the progress line).
+expand_dir(pending: ptr, d: *FileEntry) -> int {
+    files = 0
+    entries, lerr = dir.list(d.path)
+    if string.length(lerr) > 0 { return 0 }   // unreadable → empty dir node
+    n = dir.list_count(entries)
+    i = 0
+    while i < n {
+        // dir.list_get returns a BORROWED ptr into the DirList; copy it to an
+        // owned string (concat "") so it survives the implicit free.
+        child_name = string.concat(dir.list_get(entries, i), "")
+        child_path = join_path(d.path, child_name)
+        kind = dir.list_kind(entries, i)
+        if kind == 0 {                        // d_type unknown (some filesystems)
+            k2, _s2, _m2, serr = fs.file_stat(child_path)
+            if string.length(serr) == 0 { kind = k2 }
+        }
+        if kind == 2 {
+            c = mk_entry(child_name, child_path, 0, 1, d)
+            _ = list.add(d.children, c)
+            _ = list.add(pending, c)
+        }
+        if kind == 1 {
+            // fs.file_stat's size is 64-bit as of ae 0.359 (#1021), so files
+            // ≥2GB report honestly. `long sz` keeps the 64 bits (a bare
+            // `sz = 0` would infer 32-bit int and trip the E0200 narrowing
+            // guard on the assignment). The <0 clamp guards only stat quirks.
+            _k, size, _m, ferr = fs.file_stat(child_path)
+            long sz = 0
+            if string.length(ferr) == 0 { sz = size }
+            if sz < 0 { sz = 0 }
+            _ = list.add(d.children, mk_entry(child_name, child_path, sz, 0, d))
+            d.total_size = d.total_size + sz
+            d.file_count = d.file_count + 1
+            bump_ancestors(d, sz, 1)
+            files = files + 1
+        }
+        // kind 3 (symlink) / 4 (other): skipped — never followed, no cycles.
+        i = i + 1
+    }
+    return files
+}
+
+// (Re)scan a directory node IN PLACE, incrementally: retract its old bytes
+// from the ancestors, empty it, and queue it — scan_step (driven from the
+// frame tick) does the rest. The node's identity is preserved, so the drill
+// stack and `current` stay valid. One scan at a time; a request while one is
+// running is ignored (the status line says it's scanning). Old child nodes
+// are not freed — same accepted leak as relayout's rects.
+start_rescan(s: *AppState, e: *FileEntry) {
+    if s.scanning == 1 { return }
+    if e.is_dir == 0 { return }
+    bump_ancestors(e, 0 - e.total_size, 0 - e.file_count)
+    e.total_size = 0
+    e.file_count = 0
+    e.children = list.new()
+    s.pending = list.new()
+    _ = list.add(s.pending, e)
+    s.dirs_done = 0
+    s.files_seen = 0
+    s.scanning = 1
+    s.scan_start_t = s.frame_t
+    clear_selection(s)
+    scan_buttons(s)
+    relayout(s)
+}
+
+// Drain up to `budget` queued dirs (bounds the frame stall; the queue is
+// popped from the END, so traversal is depth-first and the current view
+// fills in coherently). Finishes the scan when the queue empties.
+scan_step(s: *AppState, budget: int) {
+    steps = 0
+    while steps < budget {
+        np = list.size(s.pending)
+        if np == 0 { steps = budget }
+        else {
+            it, _ = list.get(s.pending, np - 1)
+            list.remove(s.pending, np - 1)
+            s.files_seen = s.files_seen + expand_dir(s.pending, it as *FileEntry)
+            s.dirs_done = s.dirs_done + 1
+            steps = steps + 1
+        }
+    }
+    s.total = s.root.total_size
+    // Recursive layout over a growing tree is too dear to redo per frame —
+    // refresh the picture ~4×/second while scanning; every frame would burn
+    // the whole tick re-sorting big directories.
+    if s.frame_t - s.last_layout_t > 0.25 {
+        relayout(s)
+        s.last_layout_t = s.frame_t
+    }
+    if list.size(s.pending) == 0 { finish_scan(s) }
+    else {
+        if s.status != 0 {
+            msg = "Scanning…   ${s.dirs_done} folders   ${s.files_seen} files   "
+            aether_ui_text_set_string(s.status, string.concat(msg, fmt_size(s.root.total_size)))
+        }
+    }
+}
+
+// Rebuild the per-type stats from the tree (one walk), rank, colour top-N.
+rebuild_type_stats(s: *AppState) {
+    s.tstats = list.new()
+    walk_stats(s.tstats, s.root)
+    sort_tstats(s.tstats)
+    n = list.size(s.tstats)
+    i = 0
+    while i < n {
+        it, _ = list.get(s.tstats, i)
+        t = it as *TypeStat
+        if i < gp_model.TOP_TYPES() {
+            t.ranked = 1
+            t.hue = palette_hue(i)
+        } else {
+            t.ranked = 0
+        }
+        i = i + 1
+    }
+}
+
+finish_scan(s: *AppState) {
+    s.scanning = 0
+    s.scan_secs = s.frame_t - s.scan_start_t
+    s.total = s.root.total_size
+    rebuild_type_stats(s)
+    relayout(s)
+    update_crumbs(s)
+    retarget_watch(s)   // events during the scan were stale; re-arm fresh
+    scan_buttons(s)
+    if s.status != 0 {
+        msg = "Scan complete: ${s.dirs_done} folders, ${s.files_seen} files, "
+        aether_ui_text_set_string(s.status, string.concat(msg, fmt_size(s.root.total_size)))
+    }
+}
+
+// Stop button: abandon the rest of the queue; the partial view stays usable
+// (sizes are whatever had streamed in). Rescan restarts from the current dir.
+stop_scan(s: *AppState) {
+    if s.scanning == 0 { return }
+    s.pending = list.new()
+    s.scanning = 0
+    s.total = s.root.total_size
+    relayout(s)
+    update_crumbs(s)
+    retarget_watch(s)
+    scan_buttons(s)
+    if s.status != 0 {
+        aether_ui_text_set_string(s.status, "Scan stopped — sizes are partial; Rescan to redo")
+    }
+}
+
+// Ghost the scan-lifecycle buttons to match state: Stop is clickable only
+// while a scan runs; Rescan only when idle. (No-op before the toolbar is
+// built — the initial scan starts ahead of the window.)
+scan_buttons(s: *AppState) {
+    if s.stop_btn == 0 { return }
+    live = 0
+    if s.scanning == 1 { live = 1 }
+    aether_ui_set_enabled(s.stop_btn, live)
+    aether_ui_set_enabled(s.rescan_btn, 1 - live)
+}

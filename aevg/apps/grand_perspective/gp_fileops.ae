@@ -1,0 +1,137 @@
+// gp_fileops.ae — GrandPerspective: Open / Reveal / Delete-to-trash.
+//
+// Part of the grand_perspective app (see grand_perspective.ae for the full
+// provenance note; GPL-2.0 lineage applies).
+//
+// The entry ops act on: the SELECTION, else the tile under the pointer
+// (gp_state.op_target — so the canvas right-click menu works on whatever was
+// right-clicked). Delete is a two-click confirm on the toolbar button; the
+// arm times out from the app tick (disarm_delete).
+
+exports (
+    open_path, do_open, do_reveal,
+    DEL_CONFIRM_SECS, disarm_delete, do_delete, execute_trash
+)
+
+import std.list
+import std.string
+import std.os (run_capture)
+import aether_ui (set_button_label)
+import gp_model
+import gp_model (FileEntry, bump_ancestors, fmt_size)
+import gp_state
+import gp_state (AppState, op_target)
+import gp_nav
+import gp_nav (relayout, clear_selection)
+import gp_scan
+import gp_scan (rebuild_type_stats)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+// xdg-open a path (file → default app, dir → file manager). Argv-based,
+// no shell. Reports to the status line either way.
+open_path(s: *AppState, p: string) {
+    av = list.new()
+    _ = list.add(av, p)
+    _out, xstatus, xerr = run_capture("xdg-open", av, null)
+    list.free(av)
+    ok = 1
+    if string.length(xerr) > 0 { ok = 0 }
+    if xstatus != 0 { ok = 0 }
+    if s.status != 0 {
+        if ok == 1 { aether_ui_text_set_string(s.status, string.concat("Opened: ", p)) }
+        else { aether_ui_text_set_string(s.status, string.concat("Open failed: ", p)) }
+    }
+}
+
+do_open(s: *AppState) {
+    t = op_target(s)
+    if t == null { return }
+    open_path(s, t.path)
+}
+
+// Reveal: open the CONTAINING directory in the file manager (a file's
+// parent; a dir reveals its own parent so you see it in context).
+do_reveal(s: *AppState) {
+    t = op_target(s)
+    if t == null { return }
+    d = t.path
+    if t.parent != null { d = t.parent.path }
+    open_path(s, d)
+}
+
+// ─── Delete → trash, with a two-click confirm ────────────────────
+//
+// First press arms ("Confirm delete?" on the button + the path in the
+// status line); a second press within the window executes `gio trash`.
+// The arm times out (tick disarms) and any navigation clears selection,
+// which also effectively disarms. Only an explicit SELECTION can be
+// deleted — never the hover target.
+DEL_CONFIRM_SECS() -> float { return 6.0 }
+
+disarm_delete(s: *AppState) {
+    s.del_armed_t = 0.0 - 1.0
+    if s.del_btn != 0 { _ = set_button_label(s.del_btn, "Delete") }
+}
+
+do_delete(s: *AppState) {
+    if s.selected == null {
+        if s.status != 0 { aether_ui_text_set_string(s.status, "Select a tile or row first, then Delete") }
+        return
+    }
+    if s.del_armed_t > 0.0 {
+        if s.frame_t - s.del_armed_t < DEL_CONFIRM_SECS() {
+            execute_trash(s)
+            return
+        }
+    }
+    s.del_armed_t = s.frame_t
+    if s.del_btn != 0 { _ = set_button_label(s.del_btn, "Confirm delete?") }
+    if s.status != 0 {
+        aether_ui_text_set_string(s.status,
+            string.concat("Move to trash: ", string.concat(s.selected.path, "   — press Delete again to confirm")))
+    }
+}
+
+execute_trash(s: *AppState) {
+    e = s.selected
+    av = list.new()
+    _ = list.add(av, "trash")
+    _ = list.add(av, e.path)
+    _tout, tstatus, terr = run_capture("gio", av, null)
+    list.free(av)
+    disarm_delete(s)
+    ok = 1
+    if string.length(terr) > 0 { ok = 0 }
+    if tstatus != 0 { ok = 0 }
+    if ok == 0 {
+        if s.status != 0 { aether_ui_text_set_string(s.status, string.concat("Trash FAILED: ", e.path)) }
+        return
+    }
+    // Retract the subtree from the model: bytes + file counts up the
+    // ancestor chain, then unlink the node from its parent.
+    fdel = e.file_count
+    if e.is_dir == 0 { fdel = 1 }
+    long ebytes = e.total_size
+    bump_ancestors(e, 0 - ebytes, 0 - fdel)
+    if e.parent != null {
+        pc = e.parent.children
+        n = list.size(pc)
+        i = 0
+        while i < n {
+            it, _ = list.get(pc, i)
+            if it as *FileEntry == e { list.remove(pc, i); i = n }
+            i = i + 1
+        }
+    }
+    s.freed = s.freed + ebytes
+    s.total = s.root.total_size
+    clear_selection(s)
+    rebuild_type_stats(s)
+    relayout(s)
+    if s.status != 0 {
+        fmsg = fmt_size(ebytes)
+        aether_ui_text_set_string(s.status,
+            string.concat("Moved to trash: ", string.concat(e.path, string.concat("   (freed ", string.concat(fmsg, ")")))))
+    }
+}

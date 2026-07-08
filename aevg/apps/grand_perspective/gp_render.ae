@@ -1,0 +1,350 @@
+// gp_render.ae — GrandPerspective: colour + the three pane painters.
+//
+// Part of the grand_perspective app (see grand_perspective.ae for the full
+// provenance note). GPL-2.0 lineage applies to this file: the
+// colour-by-size/depth/type scheme and the 3D-bevel rendering are carried
+// over from GrandPerspective © Erwin Bonsma.
+//
+// Pure draw side: HSL → rgb() strings, the bevelled tile renderer, and
+// draw_list / draw_treemap / draw_legend, all reading AppState. No state
+// mutation happens here (the draw-region callback runs every repaint).
+
+exports (
+    hsl_rgb, hue_for, type_is_ranked, render_shaded,
+    draw_list, draw_treemap, draw_legend
+)
+
+import std.math
+import std.string
+import std.list
+import vg
+import gp_model
+import gp_model (FileEntry, TypeStat, to_float, fmt_size, one_dp, clip_name,
+    clip_list_name, ext_label, ext_of, find_tstat, pct_of_parent)
+import gp_layout
+import gp_layout (Rect, NEST_INSET)
+import gp_state
+import gp_state (AppState)
+
+extern log(x: float) -> float            // std.math has no log; libm does
+extern lrint(x: float) -> long
+
+// ─── Colour (HSL → rgb() strings AeVG's parse_color_to_rgba accepts) ──
+
+frac(v: float) -> float { return v - math.floor(v) }
+
+hsl_rgb(h: float, s: float, l: float) -> string {
+    a = s * math.min_float(l, 1.0 - l)
+    r = hsl_chan(0.0, h, l, a)
+    g = hsl_chan(8.0, h, l, a)
+    b = hsl_chan(4.0, h, l, a)
+    return rgb_str(r, g, b)
+}
+hsl_chan(n: float, h: float, l: float, a: float) -> int {
+    k = frac((n + h / 30.0) / 12.0) * 12.0
+    m = math.min_float(k - 3.0, math.min_float(9.0 - k, 1.0))
+    m = math.max_float(-1.0, m)
+    v = l - a * m
+    return lrint(v * 255.0)
+}
+
+rgb_str(r: int, g: int, b: int) -> string {
+    s = "rgb("
+    s = string.concat(s, string.from_int(r)); s = string.concat(s, ",")
+    s = string.concat(s, string.from_int(g)); s = string.concat(s, ",")
+    s = string.concat(s, string.from_int(b)); s = string.concat(s, ")")
+    return s
+}
+
+// Base hue (0..360) + ranked flag for a FILE rect under the active scheme
+// (0=bySize 1=byDepth 2=byType). byType colours come from the ranked
+// TypeStats so tiles and legend agree; unranked types render gray
+// (hue_ranked returns 0 → the renderer desaturates).
+hue_for(r: *Rect, s: *AppState) -> float {
+    if s.scheme == 1 { return frac((r.depth * 60) / 360.0) * 360.0 }
+    if s.scheme == 2 {
+        t = find_tstat(s.tstats, ext_of(r.entry.name))
+        if t != null { if t.ranked == 1 { return t.hue } }
+        return 0.0
+    }
+    ratio = log(to_float(r.size) + 1.0) / log(to_float(s.total) + 1.0)   // bySize: log-scaled
+    return frac(ratio) * 360.0
+}
+
+// 1 when the rect's type carries a palette colour under byType (or scheme
+// isn't byType at all — then everything is "coloured").
+type_is_ranked(r: *Rect, s: *AppState) -> int {
+    if s.scheme != 2 { return 1 }
+    t = find_tstat(s.tstats, ext_of(r.entry.name))
+    if t != null { if t.ranked == 1 { return 1 } }
+    return 0
+}
+
+// ─── 3D-bevelled rect render ──────────────────────────────────────
+BEVEL() -> float { return 3.0 }
+
+render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float) {
+    // Small tiles: one flat rect — with thousands of nested leaves per view,
+    // the 5-rect bevel is reserved for tiles big enough to read as 3D.
+    if r.w < 10.0 {
+        mn0 = vg.rect(root, r.x, r.y, r.w, r.h); vg.fill(mn0, hsl_rgb(h, s, l))
+        return
+    }
+    if r.h < 10.0 {
+        mn1 = vg.rect(root, r.x, r.y, r.w, r.h); vg.fill(mn1, hsl_rgb(h, s, l))
+        return
+    }
+    bv = BEVEL()
+    if r.w < 30.0 { bv = 1.0 }
+    base = hsl_rgb(h, s, l)
+    dark = hsl_rgb(h, s, math.max_float(0.0, l - 0.15))
+    lite = hsl_rgb(h, s, math.min_float(1.0, l + 0.20))
+
+    sh1 = vg.rect(root, r.x + bv, r.y + r.h - bv, r.w - bv, bv); vg.fill(sh1, dark)
+    sh2 = vg.rect(root, r.x + r.w - bv, r.y + bv, bv, r.h - bv); vg.fill(sh2, dark)
+    hl1 = vg.rect(root, r.x, r.y, r.w - bv, bv); vg.fill(hl1, lite)
+    hl2 = vg.rect(root, r.x, r.y + bv, bv, r.h - bv); vg.fill(hl2, lite)
+    mn = vg.rect(root, r.x + bv, r.y + bv, r.w - 2.0 * bv, r.h - 2.0 * bv)
+    vg.fill(mn, base)
+}
+
+// Draw the whole treemap into `root`, in three passes over the laid rects:
+//   1. tiles — dirs as darker/muted nesting rings (children overlay their
+//      inner area), files coloured by the active scheme (byType uses the
+//      legend palette; unranked types render gray). When a legend type is
+//      HIGHLIGHTED, non-matching files dim right down so the type pops.
+//   2. labels — top-level dir tiles only (nested leaves stay clean, like the
+//      references), drawn after tiles so text sits on top
+//   3. selection — a GrandPerspective-style double outline (white + blue),
+//      drawn last so no later tile overpaints it
+draw_treemap(root: ptr, s: *AppState) {
+    bg = vg.rect(root, gp_model.MAP_X(), 0.0, gp_model.CANVAS_W(), gp_model.CANVAS_H())
+    vg.fill(bg, "#f5f5f5"); vg.stroke(bg, "#cccccc", 1.0)
+
+    rects = s.rects
+    sel = s.selected
+    n = list.size(rects)
+    i = 0
+    while i < n {
+        rp, _ = list.get(rects, i); r = rp as *Rect
+        if r.w > 0.5 {
+            if r.h > 0.5 {
+                h = hue_for(r, s)
+                if r.entry.is_dir == 1 {
+                    if r.nested == 1 {
+                        // Children overlay the interior — paint only the
+                        // visible RING (4 strips), not the full area, so the
+                        // per-level overdraw is gone.
+                        ins = NEST_INSET()
+                        rim = hsl_rgb(h, 0.35, 0.40)
+                        t1 = vg.rect(root, r.x, r.y, r.w, ins); vg.fill(t1, rim)
+                        t2 = vg.rect(root, r.x, r.y + r.h - ins, r.w, ins); vg.fill(t2, rim)
+                        t3 = vg.rect(root, r.x, r.y + ins, ins, r.h - 2.0 * ins); vg.fill(t3, rim)
+                        t4 = vg.rect(root, r.x + r.w - ins, r.y + ins, ins, r.h - 2.0 * ins); vg.fill(t4, rim)
+                    } else {
+                        // Leaf-ish dir (too small to nest, or empty): muted
+                        // full tile so the nesting hierarchy still reads.
+                        render_shaded(root, r, h, 0.35, 0.40)
+                    }
+                } else {
+                    sat = 0.70
+                    lit = 0.55
+                    if type_is_ranked(r, s) == 0 { sat = 0.05; lit = 0.62 }
+                    if s.hl_on == 1 {
+                        if string.equals(ext_of(r.entry.name), s.hl_ext) == 0 {
+                            sat = 0.04; lit = 0.80    // dim non-matching
+                        } else {
+                            sat = 0.85; lit = 0.50    // pop matching
+                        }
+                    }
+                    render_shaded(root, r, h, sat, lit)
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Labels: top-level tiles big enough to carry one. 16-unit font; the
+    // renderer draws at (y - baseline≈17), so baseline y+44 clears the top
+    // edge; gate h>50 so it never spills past the bottom.
+    i = 0
+    while i < n {
+        rp, _ = list.get(rects, i); r = rp as *Rect
+        if r.depth == 0 {
+            if r.h > 50.0 {
+                if r.w > 44.0 {
+                    nm = clip_name(r.entry.name)
+                    tx = vg.text_sized(root, r.x + 8.0, r.y + 44.0, 16.0, nm)
+                    vg.fill(tx, "#ffffff")
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    // Selection outline, last.
+    if sel != null {
+        i = 0
+        while i < n {
+            rp, _ = list.get(rects, i); r = rp as *Rect
+            if r.entry == sel {
+                so = vg.rect(root, r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0)
+                vg.fill(so, "none"); vg.stroke(so, "#ffffff", 3.0)
+                si = vg.rect(root, r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0)
+                vg.fill(si, "none"); vg.stroke(si, "#3399ff", 1.5)
+                i = n
+            }
+            i = i + 1
+        }
+    }
+}
+
+// ─── Directory list pane (left of the treemap) ───────────────────
+//
+// WinDirStat's tree column, folded to one level: the CURRENT directory's
+// children, largest first — colour chip, name, size, %-of-current bar,
+// file count. ".." walks up; rows past the pane height fold into
+// "+N more". Selection syncs both ways with the treemap.
+list_chip_color(s: *AppState, e: *FileEntry) -> string {
+    if e.is_dir == 1 { return hsl_rgb(255.0, 0.25, 0.50) }
+    t = find_tstat(s.tstats, ext_of(e.name))
+    if t != null { if t.ranked == 1 { return hsl_rgb(t.hue, 0.70, 0.55) } }
+    return "#bbbbbb"
+}
+
+draw_list(root: ptr, s: *AppState) {
+    bg = vg.rect(root, 0.0, 0.0, gp_model.LIST_W(), gp_model.CANVAS_H())
+    vg.fill(bg, "#fafafa"); vg.stroke(bg, "#cccccc", 1.0)
+    // Header: the current directory + its rollup. The renderer draws text at
+    // a fixed ~17px above the given baseline, so a 16px header at y=24 had
+    // its ascenders cut by the viewport clip — sit the block lower.
+    hd = vg.text_sized(root, 10.0, 30.0, 16.0, clip_name(s.current.name))
+    vg.fill(hd, "#000000")
+    sub0 = fmt_size(s.current.total_size)
+    sub = "${sub0}   ${s.current.file_count} files"
+    hs = vg.text_sized(root, 10.0, 48.0, 12.0, sub)
+    vg.fill(hs, "#666666")
+    // Scan-info strip: duration of the last scan + freed-space rollup
+    // (GrandPerspective's info panel, folded into the header).
+    info = ""
+    if s.scan_secs > 0.0 {
+        secs = one_dp(s.scan_secs)
+        info = "scanned in ${secs}s"
+    }
+    if s.freed > 0 {
+        fr = fmt_size(s.freed)
+        if string.length(info) > 0 { info = string.concat(info, "   ") }
+        info = string.concat(info, string.concat("freed ", fr))
+    }
+    if string.length(info) > 0 {
+        inf = vg.text_sized(root, 10.0, 62.0, 12.0, info)
+        vg.fill(inf, "#999999")
+    }
+
+    // ".." row (when not at the root of the drill stack).
+    if list.size(s.stack) > 1 {
+        up = vg.text_sized(root, 12.0, gp_model.LIST_TOP() + 11.0, 14.0, "..")
+        vg.fill(up, "#333333")
+    }
+
+    n = list.size(s.lrows)
+    shown = n
+    if shown > gp_model.LIST_MAX() { shown = gp_model.LIST_MAX() }
+    i = 0
+    while i < shown {
+        it, _ = list.get(s.lrows, i)
+        e = it as *FileEntry
+        ry = gp_model.LIST_TOP() + gp_model.LIST_ROW_H() * (i / 1.0)
+        // selected row backdrop
+        if e == s.selected {
+            sb = vg.rect(root, 2.0, ry - 2.0, gp_model.LIST_W() - 4.0, gp_model.LIST_ROW_H() - 2.0)
+            vg.fill(sb, "none"); vg.stroke(sb, "#3399ff", 1.5)
+        }
+        chip = vg.rect(root, 8.0, ry + 2.0, 12.0, 12.0)
+        vg.fill(chip, list_chip_color(s, e)); vg.stroke(chip, "#888888", 0.8)
+        nm = vg.text_sized(root, 26.0, ry + 30.0, 13.0, clip_list_name(e.name))
+        vg.fill(nm, "#000000")
+        sz = vg.text_sized(root, 150.0, ry + 30.0, 12.0, fmt_size(e.total_size))
+        vg.fill(sz, "#333333")
+        // %-of-current mini bar, WinDirStat's Teilbaum-Anteil column.
+        p = pct_of_parent(e)
+        bw = (gp_model.LIST_W() - 232.0) * (p / 100.0)
+        bbg = vg.rect(root, 224.0, ry + 4.0, gp_model.LIST_W() - 232.0, 8.0)
+        vg.fill(bbg, "#e8e8e8")
+        if bw > 0.5 {
+            bfg = vg.rect(root, 224.0, ry + 4.0, bw, 8.0)
+            vg.fill(bfg, "#8899cc")
+        }
+        i = i + 1
+    }
+    if n > shown {
+        more = n - shown
+        mrow = vg.text_sized(root, 12.0, gp_model.LIST_TOP() + gp_model.LIST_ROW_H() * (shown / 1.0) + 30.0, 12.0, "+ ${more} more…")
+        vg.fill(mrow, "#888888")
+    }
+}
+
+// ─── Type legend pane (right of the treemap) ─────────────────────
+//
+// Draw the legend: colour chip, extension, bytes, file count — top
+// TOP_TYPES ranked rows plus an aggregate "other" row. The highlighted
+// row (if any) carries a blue outline. Click handling mirrors this
+// geometry (gp_nav.legend_click).
+draw_legend(root: ptr, s: *AppState) {
+    bg = vg.rect(root, gp_model.LEGEND_X(), 0.0, gp_model.LEGEND_W(), gp_model.CANVAS_H())
+    vg.fill(bg, "#fafafa"); vg.stroke(bg, "#cccccc", 1.0)
+    ti = vg.text_sized(root, gp_model.LEGEND_X() + 12.0, 30.0, 17.0, "File types (click to highlight)")
+    vg.fill(ti, "#000000")
+
+    n = list.size(s.tstats)
+    shown = n
+    if shown > gp_model.TOP_TYPES() { shown = gp_model.TOP_TYPES() }
+    long other_bytes = 0
+    other_files = 0
+    i = 0
+    while i < n {
+        it, _ = list.get(s.tstats, i)
+        t = it as *TypeStat
+        if i >= shown {
+            other_bytes = other_bytes + t.bytes
+            other_files = other_files + t.files
+        }
+        i = i + 1
+    }
+
+    i = 0
+    while i < shown {
+        it, _ = list.get(s.tstats, i)
+        t = it as *TypeStat
+        ry = gp_model.LEG_TOP() + gp_model.LEG_ROW_H() * (i / 1.0)
+        chip = vg.rect(root, gp_model.LEGEND_X() + 12.0, ry, 16.0, 16.0)
+        vg.fill(chip, hsl_rgb(t.hue, 0.70, 0.55)); vg.stroke(chip, "#888888", 1.0)
+        // Row text baselines carry the renderer's fixed ~17px offset (it
+        // draws that far above the requested baseline) or the labels float
+        // a full line above their colour chips.
+        lb = vg.text_sized(root, gp_model.LEGEND_X() + 38.0, ry + 31.0, 14.0, ext_label(t.ext))
+        vg.fill(lb, "#000000")
+        sz = vg.text_sized(root, gp_model.LEGEND_X() + 150.0, ry + 31.0, 14.0, fmt_size(t.bytes))
+        vg.fill(sz, "#000000")
+        fc = vg.text_sized(root, gp_model.LEGEND_X() + 232.0, ry + 31.0, 12.0, "${t.files} files")
+        vg.fill(fc, "#666666")
+        if s.hl_on == 1 {
+            if string.equals(s.hl_ext, t.ext) == 1 {
+                hl = vg.rect(root, gp_model.LEGEND_X() + 6.0, ry - 4.0, gp_model.LEGEND_W() - 12.0, gp_model.LEG_ROW_H() - 3.0)
+                vg.fill(hl, "none"); vg.stroke(hl, "#3399ff", 1.5)
+            }
+        }
+        i = i + 1
+    }
+    if n > shown {
+        ry2 = gp_model.LEG_TOP() + gp_model.LEG_ROW_H() * (shown / 1.0)
+        chip2 = vg.rect(root, gp_model.LEGEND_X() + 12.0, ry2, 16.0, 16.0)
+        vg.fill(chip2, "#bbbbbb"); vg.stroke(chip2, "#888888", 1.0)
+        lb2 = vg.text_sized(root, gp_model.LEGEND_X() + 38.0, ry2 + 31.0, 14.0, "other")
+        vg.fill(lb2, "#000000")
+        sz2 = vg.text_sized(root, gp_model.LEGEND_X() + 150.0, ry2 + 31.0, 14.0, fmt_size(other_bytes))
+        vg.fill(sz2, "#000000")
+        fc2 = vg.text_sized(root, gp_model.LEGEND_X() + 232.0, ry2 + 31.0, 12.0, "${other_files} files")
+        vg.fill(fc2, "#666666")
+    }
+}

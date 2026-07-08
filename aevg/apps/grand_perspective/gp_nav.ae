@@ -1,0 +1,314 @@
+// gp_nav.ae — GrandPerspective: navigation, selection, and pane clicks.
+//
+// Part of the grand_perspective app (see grand_perspective.ae for the full
+// provenance note; GPL-2.0 lineage applies).
+//
+// Everything that moves the view or the selection: drill down/up/jump,
+// breadcrumb sync, relayout, list/legend click routing, keyboard nav, and
+// the colour-scheme radio state. The scan and file-op flows call INTO this
+// module (relayout / clear_selection / retarget_watch); it never calls them.
+
+exports (
+    relayout, clear_selection, select_entry, retarget_watch,
+    crumb_base, update_crumbs, jump_to, drill_up, drill_deep,
+    list_click, legend_click, handle_nav_key, nav_drill, nav_move,
+    set_scheme, scheme_buttons
+)
+
+import std.list
+import std.string
+import std.math
+import std.fs
+import aether_ui (set_button_label, set_hidden, set_toggle)
+import gp_model
+import gp_model (FileEntry, TypeStat, to_float, clip_name, ext_label, fmt_size,
+    pct_of_parent, dbg_on)
+import gp_layout
+import gp_layout (LayoutCtx, layout_treemap, RECT_BUDGET)
+import gp_state
+import gp_state (AppState, crumb_handle)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+extern string_retain(s: string)
+extern aether_ui_text_set_string(handle: int, text: string)
+
+relayout(s: *AppState) {
+    s.rects = list.new()
+    ctx = malloc(16) as *LayoutCtx
+    ctx.remaining = RECT_BUDGET()
+    layout_treemap(ctx, s.rects, gp_model.MAP_X(), 0.0, gp_model.CANVAS_W(), gp_model.CANVAS_H(), s.current.children, 0)
+    // List pane rows: the current dir's children, largest first (a fresh
+    // sorted copy — the children list itself keeps scan order).
+    s.lrows = list.new()
+    nc = list.size(s.current.children)
+    ci = 0
+    while ci < nc {
+        it, _ = list.get(s.current.children, ci)
+        _ = list.add(s.lrows, it)
+        ci = ci + 1
+    }
+    gp_model.sort_desc_by_size(s.lrows)
+    s.dirty = 1
+}
+
+// Drop the selection (outline + stale "Selected:" status text). Every
+// navigation/rescan goes through this — the selected entry belongs to the
+// view being left.
+clear_selection(s: *AppState) {
+    s.selected = null as *FileEntry
+    s.dirty = 1
+    if s.status != 0 { aether_ui_text_set_string(s.status, "—") }
+}
+
+// Select an entry: outline in the treemap + a WinDirStat-style status line
+// ("Folder: name — size (P% of parent)").
+select_entry(s: *AppState, e: *FileEntry) {
+    s.selected = e
+    s.dirty = 1
+    kindw = "File"
+    if e.is_dir == 1 { kindw = "Folder" }
+    pct = pct_of_parent(e)
+    msg = string.concat(kindw, string.concat(": ", e.path))
+    msg = string.concat(msg, string.concat("   ", fmt_size(e.total_size)))
+    msg = string.concat(msg, "   (${pct}% of parent)")
+    if s.status != 0 { aether_ui_text_set_string(s.status, msg) }
+}
+
+// Point the fs.watch at the CURRENT directory (close any previous handle).
+// The watch is non-recursive and coarse — "something changed here" — which is
+// exactly the granularity of the tiled view: a change in the current dir
+// triggers a rescan of the current subtree next frame.
+retarget_watch(s: *AppState) {
+    if s.watch != null { fs.watch_close(s.watch) }
+    s.watch = null
+    w, werr = fs.watch_open(s.current.path)
+    if string.length(werr) == 0 { s.watch = w }
+}
+
+// Breadcrumb NAV: map the drill stack onto the button pool — segment i shows
+// stack[base+i] (base window slides when the path is deeper than the pool;
+// the first visible segment then reads "…"). Unused buttons hide.
+crumb_base(s: *AppState) -> int {
+    n = list.size(s.stack)
+    if n > gp_model.CRUMBS() { return n - gp_model.CRUMBS() }
+    return 0
+}
+
+update_crumbs(s: *AppState) {
+    if s.crumb0 == 0 { return }          // window not built yet
+    n = list.size(s.stack)
+    base = crumb_base(s)
+    i = 0
+    while i < gp_model.CRUMBS() {
+        h = crumb_handle(s, i)
+        idx = base + i
+        if idx < n {
+            it, _ = list.get(s.stack, idx); e = it as *FileEntry
+            nm = clip_name(e.name)
+            if i == 0 { if base > 0 { nm = "…" } }
+            _ = set_button_label(h, nm)
+            _ = set_hidden(h, 0)
+        } else {
+            _ = set_hidden(h, 1)
+        }
+        i = i + 1
+    }
+}
+
+// Click a breadcrumb segment: jump straight to that ancestor (truncate the
+// drill stack). Clicking the current (rightmost) segment is a no-op.
+jump_to(s: *AppState, i: int) {
+    n = list.size(s.stack)
+    idx = crumb_base(s) + i
+    if idx >= n - 1 { return }
+    while list.size(s.stack) > idx + 1 {
+        list.remove(s.stack, list.size(s.stack) - 1)
+    }
+    top, _ = list.get(s.stack, idx)
+    s.current = top as *FileEntry
+    clear_selection(s)
+    relayout(s)
+    update_crumbs(s)
+    retarget_watch(s)
+}
+
+drill_up(s: *AppState) {
+    n = list.size(s.stack)
+    if n > 1 {
+        list.remove(s.stack, n - 1)
+        top, _ = list.get(s.stack, list.size(s.stack) - 1)
+        s.current = top as *FileEntry
+        clear_selection(s)
+        relayout(s)
+        update_crumbs(s)
+        retarget_watch(s)
+    }
+}
+
+// Drill to a possibly-DEEP descendant (nested treemap tiles can be many
+// levels below `current`): push the whole ancestor chain onto the drill
+// stack so breadcrumbs and Parent/Zoom-Out walk every intermediate level.
+// A file target drills to its containing directory.
+drill_deep(s: *AppState, e: *FileEntry) {
+    target = e
+    if target.is_dir == 0 { target = target.parent }
+    if target == null {
+        if dbg_on() == 1 { println("gp-drill: ${e.path} has no parent dir — no-op") }
+        return
+    }
+    if target == s.current {
+        if dbg_on() == 1 { println("gp-drill: ${target.path} is already the current dir — no-op") }
+        return
+    }
+    // Collect target→…→(child of current), aborting if target isn't a
+    // descendant of current at all.
+    chain = list.new()
+    found = 0
+    p = target
+    while p != null {
+        if p == s.current { found = 1; p = null }
+        else {
+            _ = list.add(chain, p)
+            p = p.parent
+        }
+    }
+    if found == 0 {
+        if dbg_on() == 1 { println("gp-drill: ${target.path} is not under ${s.current.path} — no-op") }
+        return
+    }
+    if dbg_on() == 1 { println("gp-drill: -> ${target.path}") }
+    n = list.size(chain)
+    i = n - 1
+    while i >= 0 {
+        it, _ = list.get(chain, i)
+        _ = list.add(s.stack, it)
+        i = i - 1
+    }
+    s.current = target
+    clear_selection(s)
+    relayout(s)
+    update_crumbs(s)
+    retarget_watch(s)
+}
+
+// Click in the list pane. `dbl` = the shared double-click detection from the
+// canvas handler. Single click selects (syncs the treemap outline);
+// double-click drills into a directory row; ".." always drills up.
+list_click(s: *AppState, cx: float, cy: float, dbl: int) {
+    if list.size(s.stack) > 1 {
+        if cy >= gp_model.LIST_TOP() - 20.0 {
+            if cy < gp_model.LIST_TOP() - 2.0 { drill_up(s); return }
+        }
+    }
+    n = list.size(s.lrows)
+    shown = n
+    if shown > gp_model.LIST_MAX() { shown = gp_model.LIST_MAX() }
+    row = lrint(math.floor((cy - gp_model.LIST_TOP()) / gp_model.LIST_ROW_H()))
+    if row < 0 { return }
+    if row >= shown { return }
+    it, _ = list.get(s.lrows, row)
+    e = it as *FileEntry
+    if dbl == 1 {
+        if e.is_dir == 1 { drill_deep(s, e); return }
+    }
+    select_entry(s, e)
+}
+
+// Click in the legend: toggle the highlight for the clicked type row.
+// Clicking the active row (or "other") clears the highlight.
+legend_click(s: *AppState, cx: float, cy: float) {
+    n = list.size(s.tstats)
+    shown = n
+    if shown > gp_model.TOP_TYPES() { shown = gp_model.TOP_TYPES() }
+    row = lrint(math.floor((cy - gp_model.LEG_TOP()) / gp_model.LEG_ROW_H()))
+    if row < 0 { return }
+    if row >= shown {
+        s.hl_on = 0
+        s.hl_ext = ""
+        s.dirty = 1
+        if s.status != 0 { aether_ui_text_set_string(s.status, "Highlight off") }
+        return
+    }
+    it, _ = list.get(s.tstats, row)
+    t = it as *TypeStat
+    if s.hl_on == 1 {
+        if string.equals(s.hl_ext, t.ext) == 1 {
+            s.hl_on = 0
+            s.hl_ext = ""
+            s.dirty = 1
+            if s.status != 0 { aether_ui_text_set_string(s.status, "Highlight off") }
+            return
+        }
+    }
+    cp = string.copy(t.ext)
+    string_retain(cp)
+    s.hl_ext = cp
+    s.hl_on = 1
+    s.dirty = 1
+    if s.status != 0 {
+        el = ext_label(t.ext)
+        msg = "Highlighting ${el}   ${t.files} files   "
+        aether_ui_text_set_string(s.status, string.concat(msg, fmt_size(t.bytes)))
+    }
+}
+
+// Keyboard navigation (canvas_on_key): Up/Down move the selection through
+// the list rows, Right/Enter drill into a selected directory, Left goes up,
+// Escape clears selection + type highlight.
+handle_nav_key(s: *AppState, key: string) {
+    if string.equals(key, "Left") == 1 { drill_up(s); return }
+    if string.equals(key, "Right") == 1 { nav_drill(s); return }
+    if string.equals(key, "Return") == 1 { nav_drill(s); return }
+    if string.equals(key, "Escape") == 1 {
+        clear_selection(s)
+        s.hl_on = 0
+        s.hl_ext = ""
+        s.dirty = 1
+        return
+    }
+    if string.equals(key, "Up") == 1 { nav_move(s, 0 - 1); return }
+    if string.equals(key, "Down") == 1 { nav_move(s, 1); return }
+}
+
+nav_drill(s: *AppState) {
+    if s.selected == null { return }
+    if s.selected.is_dir == 1 { drill_deep(s, s.selected) }
+}
+
+nav_move(s: *AppState, delta: int) {
+    n = list.size(s.lrows)
+    if n == 0 { return }
+    shown = n
+    if shown > gp_model.LIST_MAX() { shown = gp_model.LIST_MAX() }
+    // Find the selected entry among the rows; -1 when none/elsewhere.
+    idx = 0 - 1
+    i = 0
+    while i < shown {
+        it, _ = list.get(s.lrows, i)
+        if it as *FileEntry == s.selected { idx = i; i = shown }
+        i = i + 1
+    }
+    nidx = idx + delta
+    if nidx < 0 { nidx = 0 }
+    if nidx >= shown { nidx = shown - 1 }
+    it2, _ = list.get(s.lrows, nidx)
+    select_entry(s, it2 as *FileEntry)
+}
+
+set_scheme(s: *AppState, scheme: int) {
+    s.scheme = scheme
+    s.dirty = 1
+    scheme_buttons(s)
+}
+
+// Tick the active scheme's radio; the group unchecks the others itself.
+// Needed at build time (the radios start unchecked) and harmless later —
+// setting an already-active radio emits no change notification.
+scheme_buttons(s: *AppState) {
+    if s.scheme_btn0 == 0 { return }
+    h = s.scheme_btn0
+    if s.scheme == 1 { h = s.scheme_btn1 }
+    if s.scheme == 2 { h = s.scheme_btn2 }
+    _ = set_toggle(h, 1)
+}

@@ -1,0 +1,328 @@
+// gp_model.ae — GrandPerspective: data model, pane geometry, formatting.
+//
+// Part of the grand_perspective app (see grand_perspective.ae for the full
+// provenance note). GPL-2.0 lineage applies to this file: it is a component
+// of a derivative work of GrandPerspective © Erwin Bonsma (GPL-2.0).
+//
+// What lives here: the FileEntry tree + TypeStat (legend) records, the pane
+// geometry constants every other component measures against, and the small
+// pure helpers (size formatting, extension parsing, sorts, path utils).
+// Nothing here touches widgets, the scan, or the canvas.
+
+exports (
+    // structs
+    FileEntry, TypeStat,
+    // entry tree
+    mk_entry, bump_ancestors, pct_of_parent, join_path, root_label,
+    // per-type stats
+    mk_tstat, ext_of, palette_hue, find_tstat, walk_stats, sort_tstats,
+    // sorting + formatting + misc
+    sort_desc_by_size, to_float, low_int, fmt_size, one_dp, round_i,
+    clip_name, clip_list_name, ext_label, dbg_on,
+    // pane geometry (viewBox units)
+    LIST_W, MAP_X, CANVAS_W, CANVAS_H, LEGEND_X, LEGEND_W, TOTAL_W,
+    TOP_TYPES, LIST_TOP, LIST_ROW_H, LIST_MAX, LEG_TOP, LEG_ROW_H, CRUMBS
+)
+
+import std.string
+import std.list
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long           // round-to-nearest; narrows at an int return
+extern string_retain(s: string)          // keep a heap string alive in a struct field
+
+// ─── Pane geometry (viewBox units; the canvas viewBox is TOTAL_W x CANVAS_H) ──
+LIST_W() -> float   { return 280.0 }     // directory list pane (left)
+MAP_X() -> float    { return 288.0 }     // treemap area origin
+CANVAS_W() -> float { return 760.0 }     // treemap area width (canvas px)
+CANVAS_H() -> float { return 600.0 }
+LEGEND_X() -> float { return 1056.0 }    // type-legend pane (right of the map)
+LEGEND_W() -> float { return 300.0 }
+TOTAL_W() -> float  { return 1356.0 }    // full canvas: list + treemap + legend
+TOP_TYPES() -> int  { return 12 }        // legend rows with their own colour
+LIST_TOP() -> float   { return 82.0 }    // list rows start here; ".." sits above
+LIST_ROW_H() -> float { return 25.0 }
+LIST_MAX() -> int     { return 20 }      // rows shown before "+N more…"
+LEG_TOP() -> float   { return 52.0 }
+LEG_ROW_H() -> float { return 27.0 }
+CRUMBS() -> int { return 8 }             // breadcrumb button pool size
+
+// AETHER_UI_DEBUG=1 (the backend's own debug gate) also traces this app's
+// click routing: raw px → viewBox coords, double-click verdict, pane, hit
+// target, and why a drill did or didn't happen. The C backend adds a
+// per-press line (n_press + raw coords) on stderr under the same variable.
+dbg_on() -> int {
+    v = os_getenv("AETHER_UI_DEBUG")
+    if v == null { return 0 }
+    if string.length(v) == 0 { return 0 }
+    if string.equals(v, "0") == 1 { return 0 }
+    return 1
+}
+
+// Human label for the scan root: "~/scm" beats "root" (which told the user
+// nothing) in the breadcrumbs and the list-pane header. $HOME-relative paths
+// abbreviate to ~; anything else keeps its full path.
+root_label(path: string) -> string {
+    home = os_getenv("HOME")
+    if home != null {
+        if string.length(home) > 0 {
+            if string.equals(path, home) == 1 { return "~" }
+            if string.starts_with(path, string.concat(home, "/")) == 1 {
+                rest = string.substring(path, string.length(home) + 1, string.length(path))
+                return string.concat("~/", rest)
+            }
+        }
+    }
+    return path
+}
+
+// ─── Data model ──────────────────────────────────────────────────
+//
+// FileEntry / Rect are heap nodes (Aether structs cross fn boundaries as
+// pointers). children is a std.list of *FileEntry; total_size is bytes.
+// parent links let a file's size stream UP the tree as the async scan runs.
+// total_size is a LONG: per-file sizes are capped at 32 bits (stat, Aether
+// #1021) but directory SUMS routinely pass 2 GiB and must not wrap.
+struct FileEntry {
+    name: string
+    path: string
+    total_size: long
+    is_dir: int
+    file_count: int      // files in this subtree (propagated like bytes)
+    children: ptr        // list of *FileEntry
+    parent: *FileEntry   // null at the root
+}
+
+mk_entry(name: string, path: string, size: long, is_dir: int, parent: *FileEntry) -> *FileEntry {
+    e = malloc(64) as *FileEntry
+    e.name = name; string_retain(name)      // retain: the field outlives the arg's scope
+    e.path = path; string_retain(path)
+    e.total_size = size
+    e.is_dir = is_dir
+    e.file_count = 0
+    e.children = list.new()
+    e.parent = parent
+    return e
+}
+
+// long → float. The `x / 1.0` idiom used for ints does NOT work on a long:
+// an expression containing a long infers long, so `480000.0 / (t / 1.0)`
+// binds as int64 and truncates to 0 (!). A float-returning helper coerces at
+// the return instead. Use this for ALL float math over byte totals.
+to_float(v: long) -> float { return v / 1.0 }
+
+// Add `delta` bytes + `dfiles` file-count to every ANCESTOR of e (not e
+// itself) — how sizes stream up while the scan runs, and how a rescan
+// retracts a subtree.
+bump_ancestors(e: *FileEntry, delta: long, dfiles: int) {
+    p = e.parent
+    while p != null {
+        p.total_size = p.total_size + delta
+        p.file_count = p.file_count + dfiles
+        p = p.parent
+    }
+}
+
+// Percentage of the parent's bytes this entry accounts for (0–100).
+pct_of_parent(e: *FileEntry) -> int {
+    if e.parent == null { return 100 }
+    if e.parent.total_size <= 0 { return 0 }
+    return lrint(to_float(e.total_size) * 100.0 / to_float(e.parent.total_size))
+}
+
+join_path(dir: string, name: string) -> string {
+    s = dir
+    if string.ends_with(dir, "/") == 0 { s = string.concat(s, "/") }
+    return string.concat(s, name)
+}
+
+// ─── Per-type (extension) statistics — the legend's data ─────────
+//
+// One row per extension: total bytes + file count. Rebuilt by walking the
+// tree at scan finish (subtree rescans would otherwise need retraction
+// bookkeeping); ranked desc by bytes; the top TOP_TYPES get a stable
+// palette colour, everything else renders gray and aggregates into the
+// legend's "other" row — the WinDirStat model.
+struct TypeStat {
+    ext: string
+    bytes: long
+    files: int
+    hue: float
+    ranked: int      // 1 = has a palette colour (top-N by bytes)
+}
+
+mk_tstat(ext: string) -> *TypeStat {
+    t = malloc(48) as *TypeStat
+    t.ext = ext; string_retain(ext)
+    t.bytes = 0
+    t.files = 0
+    t.hue = 0.0
+    t.ranked = 0
+    return t
+}
+
+// Extension of a filename, lowercased, "" when none ("Makefile", ".bashrc"
+// counts its tail). Scans backwards for '.' (46), stopping at '/' (47).
+ext_of(name: string) -> string {
+    n = string.length(name)
+    i = n - 1
+    while i > 0 {
+        c = string.char_at(name, i)
+        if c == 47 { return "" }
+        if c == 46 { return string.to_lower(string.substring(name, i + 1, n)) }
+        i = i - 1
+    }
+    return ""
+}
+
+// The legend palette — spaced hues so adjacent ranks contrast (WinDirStat-ish).
+palette_hue(i: int) -> float {
+    h = 0.0
+    if i == 0  { h = 210.0 }
+    if i == 1  { h = 30.0 }
+    if i == 2  { h = 120.0 }
+    if i == 3  { h = 270.0 }
+    if i == 4  { h = 0.0 }
+    if i == 5  { h = 60.0 }
+    if i == 6  { h = 180.0 }
+    if i == 7  { h = 330.0 }
+    if i == 8  { h = 90.0 }
+    if i == 9  { h = 240.0 }
+    if i == 10 { h = 150.0 }
+    if i == 11 { h = 300.0 }
+    return h
+}
+
+// Find a TypeStat by extension (linear — extension counts are small).
+find_tstat(stats: ptr, ext: string) -> *TypeStat {
+    n = list.size(stats)
+    i = 0
+    while i < n {
+        it, _ = list.get(stats, i)
+        t = it as *TypeStat
+        if string.equals(t.ext, ext) == 1 { return t }
+        i = i + 1
+    }
+    return null as *TypeStat
+}
+
+walk_stats(stats: ptr, e: *FileEntry) {
+    if e.is_dir == 0 {
+        x = ext_of(e.name)
+        t = find_tstat(stats, x)
+        if t == null {
+            t = mk_tstat(x)
+            _ = list.add(stats, t)
+        }
+        t.bytes = t.bytes + e.total_size
+        t.files = t.files + 1
+        return
+    }
+    n = list.size(e.children)
+    i = 0
+    while i < n {
+        it, _ = list.get(e.children, i)
+        walk_stats(stats, it as *FileEntry)
+        i = i + 1
+    }
+}
+
+// In-place descending sort of a *TypeStat list by bytes (same selection-sort
+// idiom as sort_desc_by_size; type counts are tiny).
+sort_tstats(lst: ptr) {
+    n = list.size(lst)
+    i = 0
+    while i < n {
+        best = i
+        bt, _ = list.get(lst, i); be = bt as *TypeStat
+        best_b = be.bytes
+        j = i + 1
+        while j < n {
+            jt, _ = list.get(lst, j); ej = jt as *TypeStat
+            if ej.bytes > best_b { best = j; best_b = ej.bytes }
+            j = j + 1
+        }
+        if best != i {
+            ai, _ = list.get(lst, i)
+            ab, _ = list.get(lst, best)
+            list.set(lst, i, ab)
+            list.set(lst, best, ai)
+        }
+        i = i + 1
+    }
+}
+
+// In-place descending sort of a *FileEntry list by total_size (selection sort
+// via get/set swaps; std.list has no insert, child counts are modest).
+sort_desc_by_size(lst: ptr) {
+    n = list.size(lst)
+    i = 0
+    while i < n {
+        best = i
+        bt, _ = list.get(lst, i); be = bt as *FileEntry
+        best_size = be.total_size
+        j = i + 1
+        while j < n {
+            jt, _ = list.get(lst, j); ej = jt as *FileEntry
+            if ej.total_size > best_size {
+                best = j
+                best_size = ej.total_size
+            }
+            j = j + 1
+        }
+        if best != i {
+            ai, _ = list.get(lst, i)
+            ab, _ = list.get(lst, best)
+            list.set(lst, i, ab)
+            list.set(lst, best, ai)
+        }
+        i = i + 1
+    }
+}
+
+// ─── Name clipping + labels (shared by panes and breadcrumbs) ─────
+clip_name(name: string) -> string {
+    if string.length(name) > 20 {
+        return string.concat(string.substring(name, 0, 17), "...")
+    }
+    return name
+}
+
+clip_list_name(name: string) -> string {
+    if string.length(name) > 15 {
+        return string.concat(string.substring(name, 0, 13), "…")
+    }
+    return name
+}
+
+// Display name of an extension row: ".c", ".png", "(no ext)".
+ext_label(ext: string) -> string {
+    if string.length(ext) == 0 { return "(no ext)" }
+    return string.concat(".", ext)
+}
+
+// ─── Byte formatting ──────────────────────────────────────────────
+// Human-readable byte size: "B / KB / MB / GB" (one decimal for KB+).
+// bytes is long (directory sums pass 2 GiB); the <1024 branch narrows via
+// low_int, where the value provably fits.
+low_int(v: long) -> int { return v }     // long→int narrows implicitly at an int return
+fmt_size(bytes: long) -> string {
+    b = to_float(bytes)
+    if b < 1024.0 { return string.concat(string.from_int(low_int(bytes)), " B") }
+    kb = b / 1024.0
+    if kb < 1024.0 { return string.concat(one_dp(kb), " KB") }
+    mb = kb / 1024.0
+    if mb < 1024.0 { return string.concat(one_dp(mb), " MB") }
+    gb = mb / 1024.0
+    return string.concat(one_dp(gb), " GB")
+}
+one_dp(v: float) -> string {
+    scaled = round_i(v * 10.0)        // tenths, rounded
+    whole = scaled / 10
+    fr = scaled - whole * 10
+    if fr < 0 { fr = 0 - fr }
+    return string.concat(string.from_int(whole),
+             string.concat(".", string.from_int(fr)))
+}
+round_i(x: float) -> int { return lrint(x) }

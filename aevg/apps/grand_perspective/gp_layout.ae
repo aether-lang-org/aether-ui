@@ -1,0 +1,200 @@
+// gp_layout.ae — GrandPerspective: recursive squarified treemap layout.
+//
+// Part of the grand_perspective app (see grand_perspective.ae for the full
+// provenance note). GPL-2.0 lineage applies to this file: the squarified
+// layout design is carried over from GrandPerspective © Erwin Bonsma.
+//
+// Lay children of one entry into (x,y,w,h). Canonical area-preserving squarified
+// layout: grow a row while it improves the worst aspect ratio, lay it as a band,
+// recurse on the leftover rect. Results accumulate into `out` (a list of *Rect).
+// Directory tiles then NEST: their own children are laid into the tile's inner
+// area (inset by NEST_INSET so the parent shows as a ring), recursively, down
+// to MIN_NEST_AREA — every leaf file becomes visible at once, the WinDirStat /
+// Disk Inventory X / GrandPerspective look. Parents are appended BEFORE their
+// children, so hit()'s last-match rule finds the DEEPEST tile at a point.
+// Items projecting smaller than MIN_TILE_AREA px² are dropped (their bytes are
+// absorbed by the kept siblings); ctx.remaining caps total rects per view.
+
+exports (
+    LayoutCtx, Rect, mk_rect, layout_treemap,
+    MIN_TILE_AREA, MIN_NEST_AREA, NEST_INSET, RECT_BUDGET
+)
+
+import std.list
+import std.math
+import gp_model
+import gp_model (FileEntry, to_float, sort_desc_by_size)
+
+extern malloc(size: int) -> ptr
+
+MIN_TILE_AREA() -> float { return 2.0 }  // px²: tiles projecting smaller are dropped
+MIN_NEST_AREA() -> float { return 120.0 } // px²: dir tiles smaller don't nest deeper
+NEST_INSET() -> float { return 2.0 }     // px ring of parent visible around children
+RECT_BUDGET() -> int { return 4000 }     // global cap on laid rects per view
+
+// Layout context threaded through the recursive treemap: a global rect
+// budget so a huge tree can't lay an unbounded node count per view.
+struct LayoutCtx {
+    remaining: int
+}
+
+// A laid-out rectangle: geometry + the entry it represents + tree depth.
+// `nested` is set when children were laid inside this (dir) rect — the
+// renderer then draws only its RING, not the full area, killing the
+// per-nesting-level overdraw that would otherwise repaint the canvas 5-10×.
+struct Rect {
+    x: float
+    y: float
+    w: float
+    h: float
+    size: long
+    depth: int
+    nested: int
+    entry: *FileEntry
+}
+
+mk_rect(x: float, y: float, w: float, h: float, size: long, depth: int, entry: *FileEntry) -> *Rect {
+    r = malloc(64) as *Rect
+    r.x = x; r.y = y; r.w = w; r.h = h
+    r.size = size; r.depth = depth; r.entry = entry
+    r.nested = 0
+    return r
+}
+
+layout_treemap(ctx: *LayoutCtx, out: ptr, x: float, y: float, w: float, h: float, items: ptr, depth: int) {
+    if ctx.remaining <= 0 { return }
+    // Pass 1: total over ALL children (for the projected-area filter).
+    long full_total = 0
+    ni = list.size(items)
+    i = 0
+    while i < ni {
+        it, _ = list.get(items, i)
+        e = it as *FileEntry
+        full_total = full_total + e.total_size
+        i = i + 1
+    }
+    if full_total == 0 { return }
+    unit0 = (w * h) / to_float(full_total)
+
+    // Pass 2: keep items big enough to see; re-total over the kept.
+    work = list.new()
+    long total = 0
+    i = 0
+    while i < ni {
+        it, _ = list.get(items, i)
+        e = it as *FileEntry
+        if to_float(e.total_size) * unit0 >= MIN_TILE_AREA() {
+            _ = list.add(work, e)
+            total = total + e.total_size
+        }
+        i = i + 1
+    }
+    nw = list.size(work)
+    if nw == 0 { return }
+    if total == 0 { return }
+    sort_desc_by_size(work)
+
+    area_unit = (w * h) / to_float(total)   // per-byte target area in px²
+
+    rx = x; ry = y; rw = w; rh = h
+    start = 0
+    while start < nw {
+        side = math.min_float(rw, rh)
+        if side <= 0.0 { start = nw }    // no room left; stop
+        else {
+            if ctx.remaining <= 0 { start = nw }
+            else {
+                row_area = 0.0
+                count = 0
+                best_worst = 1000000000.0
+                grow = 1
+                while grow == 1 {
+                    idx = start + count
+                    if idx >= nw { grow = 0 }
+                    else {
+                        it, _ = list.get(work, idx); e = it as *FileEntry
+                        a = to_float(e.total_size) * area_unit
+                        cand_worst = row_worst(work, start, count + 1, row_area + a, side)
+                        if count == 0 { row_area = row_area + a; count = count + 1; best_worst = cand_worst }
+                        else {
+                            if cand_worst <= best_worst {
+                                row_area = row_area + a; count = count + 1; best_worst = cand_worst
+                            } else { grow = 0 }
+                        }
+                    }
+                }
+                band = row_area / side                 // band thickness
+                if rw >= rh {
+                    lay_band(ctx, out, work, start, count, area_unit, rx, ry, band, rh, 1, depth)
+                    rx = rx + band; rw = rw - band
+                } else {
+                    lay_band(ctx, out, work, start, count, area_unit, rx, ry, rw, band, 0, depth)
+                    ry = ry + band; rh = rh - band
+                }
+                start = start + count
+            }
+        }
+    }
+}
+
+// Worst aspect ratio if items [s, s+cnt) form a band of total `area` along a
+// strip of length `side`.
+row_worst(work: ptr, s: int, cnt: int, area: float, side: float) -> float {
+    if area <= 0.0 { return 1000000000.0 }
+    band = area / side
+    worst = 0.0
+    j = 0
+    while j < cnt {
+        it, _ = list.get(work, s + j); e = it as *FileEntry
+        along = to_float(e.total_size) / sum_sizes(work, s, cnt) * side
+        ar = band / along
+        if along / band > ar { ar = along / band }
+        if ar > worst { worst = ar }
+        j = j + 1
+    }
+    return worst
+}
+
+sum_sizes(work: ptr, s: int, cnt: int) -> float {
+    t = 0.0
+    j = 0
+    while j < cnt {
+        it, _ = list.get(work, s + j); e = it as *FileEntry
+        t = t + to_float(e.total_size)
+        j = j + 1
+    }
+    if t == 0.0 { return 1.0 }
+    return t
+}
+
+// Lay `cnt` items as a band at (bx,by). vertical=1 → a column of width bw, items
+// stacked down it; else a row of height bh, items across it. A directory tile
+// immediately NESTS: its children are laid into the inset inner area, so its
+// child rects follow it in `out` (parent-before-children ordering).
+lay_band(ctx: *LayoutCtx, out: ptr, work: ptr, s: int, cnt: int, area_unit: float, bx: float, by: float, bw: float, bh: float, vertical: int, depth: int) {
+    rowsum = sum_sizes(work, s, cnt)
+    cx = bx; cy = by
+    j = 0
+    while j < cnt {
+        it, _ = list.get(work, s + j); e = it as *FileEntry
+        frac_j = to_float(e.total_size) / rowsum
+        tw = bw; th = bh
+        if vertical == 1 { th = bh * frac_j } else { tw = bw * frac_j }
+        if ctx.remaining > 0 {
+            nr = mk_rect(cx, cy, tw, th, e.total_size, depth, e)
+            _ = list.add(out, nr)
+            ctx.remaining = ctx.remaining - 1
+            if e.is_dir == 1 {
+                ins = NEST_INSET()
+                iw = tw - 2.0 * ins
+                ih = th - 2.0 * ins
+                if iw * ih >= MIN_NEST_AREA() {
+                    if list.size(e.children) > 0 { nr.nested = 1 }
+                    layout_treemap(ctx, out, cx + ins, cy + ins, iw, ih, e.children, depth + 1)
+                }
+            }
+        }
+        if vertical == 1 { cy = cy + th } else { cx = cx + tw }
+        j = j + 1
+    }
+}

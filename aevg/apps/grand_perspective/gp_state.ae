@@ -1,0 +1,193 @@
+// gp_state.ae — GrandPerspective: the shared AppState + pure state reads.
+//
+// Part of the grand_perspective app (see grand_perspective.ae for the full
+// provenance note; GPL-2.0 lineage applies).
+//
+// AppState is the hub every component mutates. This module owns the struct,
+// its constructor, and the pure reads (hit-testing, op target, crumb pool
+// indexing). Mutations that ripple across panes (navigation, scan, file ops)
+// live in gp_nav / gp_scan / gp_fileops.
+
+exports ( AppState, mk_state, crumb_handle, op_target, hit )
+
+import std.list
+import std.os
+import gp_model
+import gp_model (FileEntry, to_float)
+import gp_layout
+import gp_layout (Rect)
+
+extern malloc(size: int) -> ptr
+
+// `current` is the entry whose children are tiled now; `stack` is the drill
+// path (root first) so Parent can pop. `rects` is the current layout, used to
+// draw AND to hit-test clicks. scheme 0/1/2. total = root size (bySize ratio).
+// `selected` is the clicked file tile (red outline); `watch` is the fs.watch
+// handle on the current directory (live refresh, ae 0.346 #977).
+// `pending`/`scanning`/`dirs_done`/`files_seen` are the incremental scan: a
+// queue of unexpanded dir nodes drained a batch per frame (scan_step).
+struct AppState {
+    root: *FileEntry
+    current: *FileEntry
+    stack: ptr       // list of *FileEntry (drill path, includes root)
+    rects: ptr       // list of *Rect for the current view
+    scheme: int
+    total: long
+    status: int      // handle of the hover status-line label (bottom)
+    // Breadcrumb NAV: a fixed pool of segment buttons, relabelled/hidden as
+    // the drill stack changes (CRUMBS() of them; widgets can't be created
+    // dynamically post-build, so the pool is unrolled at window build).
+    crumb0: int
+    crumb1: int
+    crumb2: int
+    crumb3: int
+    crumb4: int
+    crumb5: int
+    crumb6: int
+    crumb7: int
+    selected: *FileEntry   // clicked tile (file OR dir, any depth), or null
+    watch: ptr       // fs.watch handle on current.path, or null
+    pending: ptr     // list of *FileEntry dirs awaiting expansion
+    scanning: int    // 1 while the incremental scan is draining `pending`
+    dirs_done: int   // progress counters for the status line
+    files_seen: int
+    // Interaction clock — monotonic seconds, updated by the app timer. Used
+    // for double-click detection (click = select; double-click = drill) and
+    // for throttling relayout while the scan streams.
+    frame_t: float
+    last_click_t: float
+    last_click_x: float
+    last_click_y: float
+    last_layout_t: float
+    hovered: *FileEntry    // entry under the pointer (for status + ctx menu)
+    // EVENT-DRIVEN redraw: the treemap repaints only when `dirty` is set
+    // (navigation, selection, scan progress) — never on a fixed 60fps clock.
+    // A static treemap costs zero CPU idle, and the driver's idle-based
+    // routes (screenshot, canvas click) stay responsive.
+    dirty: int
+    cid: int         // the vg canvas handle (for clear/flush/redraw)
+    scene: ptr       // the vg scene (for vg_flush_live)
+    // Per-type legend state: ranked TypeStats (rebuilt at scan finish) and
+    // the currently highlighted extension ("" = none) — clicking a legend
+    // row dims every tile that is not of that type (WinDirStat's killer
+    // legend feature).
+    tstats: ptr      // list of *TypeStat, sorted desc by bytes
+    hl_ext: string   // highlighted extension, "" = no highlight
+    hl_on: int       // 1 = highlight active ("" ext is a valid type)
+    lrows: ptr       // list pane rows: current dir's children, sorted desc
+    // Delete-to-trash: a two-click confirm on the toolbar button (no modal
+    // needed). freed accumulates trashed bytes — GrandPerspective's
+    // "Freed space" stat.
+    freed: long
+    del_armed_t: float   // when the confirm was armed; <=0 = disarmed
+    del_btn: int         // Delete button handle (label swaps while armed)
+    scan_start_t: float  // when the current scan started (frame clock)
+    scan_secs: float     // duration of the last completed scan
+    // Scan-lifecycle buttons ghost when inapplicable: Stop is live only
+    // while a scan drains; Rescan only when idle.
+    stop_btn: int
+    rescan_btn: int
+    // Last pointer-move position (canvas px). GTK re-synthesizes a motion
+    // event at the parked pointer after every relayout; identical coords =
+    // synthetic, and acting on them lets a repaint clobber status text.
+    hov_px_x: float
+    hov_px_y: float
+    // Colour-scheme radio group (grouped toggles; GTK renders them with
+    // round radio indicators). A dropdown is out — its popover never
+    // displays under sommelier (ChromeOS).
+    scheme_btn0: int
+    scheme_btn1: int
+    scheme_btn2: int
+}
+
+crumb_handle(s: *AppState, i: int) -> int {
+    if i == 0 { return s.crumb0 }
+    if i == 1 { return s.crumb1 }
+    if i == 2 { return s.crumb2 }
+    if i == 3 { return s.crumb3 }
+    if i == 4 { return s.crumb4 }
+    if i == 5 { return s.crumb5 }
+    if i == 6 { return s.crumb6 }
+    if i == 7 { return s.crumb7 }
+    return 0
+}
+
+// Fresh state over a root node. NOTE: no layout and no fs.watch here — the
+// caller (main) runs gp_nav.relayout + gp_nav.retarget_watch right after,
+// keeping this module free of upward dependencies.
+mk_state(root: *FileEntry) -> *AppState {
+    s = malloc(320) as *AppState
+    s.root = root
+    s.current = root
+    s.stack = list.new()
+    _ = list.add(s.stack, root)
+    s.rects = list.new()
+    s.scheme = 2
+    s.total = root.total_size
+    s.status = 0
+    s.crumb0 = 0; s.crumb1 = 0; s.crumb2 = 0; s.crumb3 = 0
+    s.crumb4 = 0; s.crumb5 = 0; s.crumb6 = 0; s.crumb7 = 0
+    s.selected = null as *FileEntry
+    s.watch = null
+    s.pending = list.new()
+    s.scanning = 0
+    s.dirs_done = 0
+    s.files_seen = 0
+    // Real clock from birth: the initial scan starts BEFORE the first timer
+    // tick, so a zero frame_t would make the first "scanned in Ns" read as
+    // system uptime.
+    ns0 = os.now_monotonic_ns()
+    s.frame_t = to_float(ns0) / 1000000000.0
+    s.last_click_t = 0.0 - 10.0
+    s.last_click_x = 0.0 - 100.0
+    s.last_click_y = 0.0 - 100.0
+    s.last_layout_t = 0.0
+    s.hovered = null as *FileEntry
+    s.dirty = 1
+    s.cid = 0
+    s.scene = null
+    s.tstats = list.new()
+    s.hl_ext = ""
+    s.hl_on = 0
+    s.lrows = list.new()
+    s.freed = 0
+    s.del_armed_t = 0.0 - 1.0
+    s.del_btn = 0
+    s.scan_start_t = 0.0
+    s.scan_secs = 0.0
+    s.stop_btn = 0
+    s.rescan_btn = 0
+    s.hov_px_x = 0.0 - 1.0
+    s.hov_px_y = 0.0 - 1.0
+    s.scheme_btn0 = 0
+    s.scheme_btn1 = 0
+    s.scheme_btn2 = 0
+    return s
+}
+
+// The entry file operations act on: the SELECTION, else the tile under the
+// pointer (so the canvas right-click menu works on whatever was clicked).
+op_target(s: *AppState) -> *FileEntry {
+    if s.selected != null { return s.selected }
+    return s.hovered
+}
+
+// Hit-test (cx,cy) in viewBox units against the current rects; return the
+// entry of the topmost (last-drawn) rect containing the point, or null.
+hit(s: *AppState, cx: float, cy: float) -> *FileEntry {
+    n = list.size(s.rects)
+    found = null as *FileEntry
+    i = 0
+    while i < n {
+        rp, _ = list.get(s.rects, i); r = rp as *Rect
+        if cx >= r.x {
+            if cx <= r.x + r.w {
+                if cy >= r.y {
+                    if cy <= r.y + r.h { found = r.entry }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return found
+}

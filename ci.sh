@@ -245,22 +245,28 @@ run_server_test "$(EX_BIN context_menu)" \
 
 echo
 echo "=== Phase 6: AetherUIDriver grand_perspective tests ==="
-# The app scans $AEVG_DIR on launch; the test script asserts against the
-# same fixture via $GP_FIXTURE (incl. that Delete really trashes a file).
-# Fixture under $HOME: gio trash refuses /tmp on some OSes
-# (FreeBSD: "Trashing on system internal mounts is not supported").
-GP_FIX=$(mktemp -d "$HOME/.gp-ci-XXXXXX")
-mkdir -p "$GP_FIX/sub"
-head -c 400000 /dev/urandom > "$GP_FIX/big.bin"
-head -c 250000 /dev/urandom > "$GP_FIX/mid.bin"
-head -c 200000 /dev/urandom > "$GP_FIX/sub/inner.bin"
-export AEVG_DIR="$GP_FIX" GP_FIXTURE="$GP_FIX"
+# One suite per app component (tests/grand_perspective/), each against a
+# FRESH app instance scanning a FRESH fixture — the fileops suite really
+# trashes a fixture file, so isolation is what makes the suites
+# order-independent. The app scans $AEVG_DIR on launch; scripts assert
+# against the same tree via $GP_FIXTURE. Fixture under $HOME: gio trash
+# refuses /tmp on some OSes (FreeBSD: "Trashing on system internal mounts
+# is not supported").
 # Xvfb runs need the cairo renderer (GTK's NGL on llvmpipe churns memory).
 case "$LAUNCH_PREFIX" in *xvfb*) export GSK_RENDERER=cairo ;; esac
-run_server_test "$ROOT/target/build/aevg/apps/grand_perspective/bin/grand_perspective" \
-                "$SCRIPT_DIR/test_grand_perspective.sh" grand_perspective || FAIL=$((FAIL + 1))
-unset AEVG_DIR GP_FIXTURE GSK_RENDERER
-rm -rf "$GP_FIX"
+for gp_test in test_scan_and_list test_map_nav test_legend test_fileops test_hover_and_resize; do
+    GP_FIX=$(mktemp -d "$HOME/.gp-ci-XXXXXX")
+    mkdir -p "$GP_FIX/sub"
+    head -c 400000 /dev/urandom > "$GP_FIX/big.bin"
+    head -c 250000 /dev/urandom > "$GP_FIX/mid.bin"
+    head -c 200000 /dev/urandom > "$GP_FIX/sub/inner.bin"
+    export AEVG_DIR="$GP_FIX" GP_FIXTURE="$GP_FIX"
+    run_server_test "$ROOT/target/build/aevg/apps/grand_perspective/bin/grand_perspective" \
+                    "$SCRIPT_DIR/tests/grand_perspective/${gp_test}.sh" "gp_${gp_test}" || FAIL=$((FAIL + 1))
+    unset AEVG_DIR GP_FIXTURE
+    rm -rf "$GP_FIX"
+done
+unset GSK_RENDERER
 
 echo
 if [ "$FAIL" -eq 0 ]; then
