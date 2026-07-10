@@ -4,6 +4,7 @@
 //   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_scan_and_list.ae
 import aeocha
 import gp_driver
+import uidriver
 import std.string
 
 main() {
@@ -17,20 +18,20 @@ main() {
             aeocha.assert_contains(s, "3 files", "sees 3 files")
         }
         aeocha.it("selects a list row, with %-of-parent in the status") callback {
-            gp_driver.click(100.0, 90.0)
+            uidriver.click(100.0, 90.0)
             ok = gp_driver.wait_status_contains("big.bin", 20)
             aeocha.assert_true(ok, "row 0 selected (big.bin)")
             aeocha.assert_contains(gp_driver.status_line(), "% of parent", "shows % of parent")
         }
         aeocha.it("Zoom In drills the selected dir; '..' returns") callback {
             // select the sub dir row (row 2: 400k, 250k, 200k-dir sorted desc)
-            gp_driver.click(100.0, 140.0)
+            uidriver.click(100.0, 140.0)
             _ = gp_driver.wait_status_contains("sub", 20)
-            zi = gp_driver.widget_id_by_text("Zoom In")
-            gp_driver.click_widget(zi)
+            zi = uidriver.widget_id_by_text("Zoom In")
+            uidriver.click_widget(zi)
             ok = gp_driver.wait_crumbs_contains("sub", 20)
             aeocha.assert_true(ok, "crumbs show root / sub")
-            gp_driver.click(100.0, 68.0)      // ".." row
+            uidriver.click(100.0, 68.0)      // ".." row
             ok2 = gp_driver.wait_crumbs_gone("sub", 20)
             aeocha.assert_true(ok2, "'..' returned to root")
         }

@@ -1,0 +1,49 @@
+// spec_context_menu.ae — drives the context_menu example over the
+// AetherUIDriver: the right-click menu maps a real surface, and activating
+// items fires their closures (clipboard/status/label mutations). The driver
+// routes exercise the SAME backend path a real right-click uses
+// (ctx_menu_open + item closure), so a green run means the menu works on
+// this platform's window system. Run via ci.sh Phase 5, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/context_menu/bin/context_menu &
+//   UI_SPEC=context_menu/spec_context_menu tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+import std.os
+
+QUOTE() -> string { return "The quick brown fox jumps over the lazy dog" }
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "context_menu example over AetherUIDriver") {
+        aeocha.it("opens the quote label's menu (maps a surface)") callback {
+            q = uidriver.widget_id_by_text(QUOTE())
+            aeocha.assert_gt(q, 0, "quote label found")
+            r = uidriver.post_body("/widget/${q}/context_menu")
+            aeocha.assert_contains(r, "\"mapped\":1", "menu surface mapped")
+        }
+        aeocha.it("activates 'Copy text' (item 0) — status shows Copied") callback {
+            q = uidriver.widget_id_by_text(QUOTE())
+            r = uidriver.post_body("/widget/${q}/context_menu/0")
+            aeocha.assert_contains(r, "\"activated\":0", "item 0 activated")
+            ok = uidriver.wait_body_contains("/widgets", "Copied", 20)
+            aeocha.assert_true(ok, "status shows Copied")
+        }
+        aeocha.it("activates 'Shout' (item 1) — quote goes uppercase") callback {
+            q = uidriver.widget_id_by_text(QUOTE())
+            uidriver.post_ok("/widget/${q}/context_menu/1", "POST menu item 1")
+            ok = uidriver.wait_body_contains("/widgets", "THE QUICK BROWN FOX", 20)
+            aeocha.assert_true(ok, "quote is shouted (uppercase)")
+        }
+        aeocha.it("the button's own menu renames it") callback {
+            b = uidriver.widget_id_by_text("A button with its own menu")
+            aeocha.assert_gt(b, 0, "button found")
+            uidriver.post_ok("/widget/${b}/context_menu/0", "POST button menu item 0")
+            ok = uidriver.wait_body_contains("/widgets", "Renamed", 20)
+            aeocha.assert_true(ok, "button renamed via its menu")
+        }
+    }
+    aeocha.run_summary(fw)
+}

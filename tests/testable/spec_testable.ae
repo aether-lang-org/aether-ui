@@ -1,0 +1,63 @@
+// spec_testable.ae — drives the testable example over the AetherUIDriver:
+// widget listing, reactive state (read / click-increment / direct set),
+// the SEALED-widget and banner protections (403s), toggling, and textfield
+// set_text. Run via ci.sh Phase 4, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/testable/bin/testable &
+//   UI_SPEC=testable/spec_testable tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+import std.os
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "testable example over AetherUIDriver") {
+        aeocha.it("lists the widget tree with the banner") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "\"type\"", "widgets list is JSON")
+            aeocha.assert_contains(body, "\"button\"", "has a button widget")
+            aeocha.assert_contains(body, "\"banner\":true", "banner present")
+        }
+        aeocha.it("reads, increments, and sets the counter state") callback {
+            aeocha.assert_eq(uidriver.state_value_int(1), 0, "counter starts at 0")
+            plus = uidriver.widget_id_of("button", "+1")
+            aeocha.assert_gt(plus, 0, "+1 button found")
+            uidriver.click_widget(plus)
+            ok = uidriver.wait_body_contains("/state/1", "1.000000", 20)
+            aeocha.assert_true(ok, "counter is 1 after a click")
+            uidriver.click_widget(plus)
+            ok2 = uidriver.wait_body_contains("/state/1", "2.000000", 20)
+            aeocha.assert_true(ok2, "counter is 2 after another")
+            uidriver.set_state(1, 42)
+            ok3 = uidriver.wait_body_contains("/state/1", "42.000000", 20)
+            aeocha.assert_true(ok3, "counter is 42 after a direct set")
+        }
+        aeocha.it("refuses to click a SEALED widget (403)") callback {
+            danger = uidriver.widget_id_of("button", "Delete Everything")
+            aeocha.assert_gt(danger, 0, "danger button found")
+            st = uidriver.post_status("/widget/${danger}/click")
+            aeocha.assert_eq(st, 403, "sealed widget returns 403")
+            aeocha.assert_contains(uidriver.post_body("/widget/${danger}/click"),
+                "widget is sealed", "error says sealed")
+        }
+        aeocha.it("refuses to rewrite the banner (403)") callback {
+            bid = uidriver.widget_id_of("", "Under Remote Control")
+            aeocha.assert_gt(bid, 0, "banner widget found")
+            st = uidriver.post_status("/widget/${bid}/set_text?v=hacked")
+            aeocha.assert_eq(st, 403, "banner manipulation returns 403")
+        }
+        aeocha.it("toggles the toggle and types into the textfield") callback {
+            tg = uidriver.widget_id_of("toggle", "")
+            aeocha.assert_gt(tg, 0, "toggle found")
+            uidriver.toggle_widget(tg)
+            tf = uidriver.widget_id_of("textfield", "")
+            aeocha.assert_gt(tf, 0, "textfield found")
+            uidriver.post_ok("/widget/${tf}/set_text?v=automated", "POST set_text")
+            ok = uidriver.wait_body_contains("/widget/${tf}", "automated", 20)
+            aeocha.assert_true(ok, "textfield carries the new text")
+        }
+    }
+    aeocha.run_summary(fw)
+}

@@ -3,6 +3,7 @@
 //   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_map_nav.ae
 import aeocha
 import gp_driver
+import uidriver
 import std.string
 import std.os
 
@@ -14,32 +15,32 @@ main() {
         aeocha.it("double-click drills into a dir tile; root crumb returns") callback {
             // sub's tile sits in the lower-right of the map at the default
             // 1356x600 canvas (big.bin left half, mid.bin top right).
-            gp_driver.click(860.0, 450.0)
+            uidriver.click(860.0, 450.0)
             sleep(120)
-            gp_driver.click(860.0, 450.0)
+            uidriver.click(860.0, 450.0)
             ok = gp_driver.wait_crumbs_contains("sub", 20)
             aeocha.assert_true(ok, "double-click drilled into sub")
-            rb = gp_driver.widget_id_by_text(gp_driver.root_crumb_label())
+            rb = uidriver.widget_id_by_text(gp_driver.root_crumb_label())
             aeocha.assert_gt(rb, 0, "root crumb button found by ~label")
-            gp_driver.click_widget(rb)
+            uidriver.click_widget(rb)
             ok2 = gp_driver.wait_crumbs_gone("sub", 20)
             aeocha.assert_true(ok2, "root crumb returned to root")
         }
         aeocha.it("keyboard: Down selects, Right drills, Left returns") callback {
-            gp_driver.key("Escape")
+            uidriver.key("Escape")
             sleep(150)
-            gp_driver.key("Down")
+            uidriver.key("Down")
             ok = gp_driver.wait_status_contains("big.bin", 20)
             aeocha.assert_true(ok, "Down selects row 0 (big.bin)")
-            gp_driver.key("Down")
+            uidriver.key("Down")
             sleep(120)
-            gp_driver.key("Down")
+            uidriver.key("Down")
             ok2 = gp_driver.wait_status_contains("sub", 20)
             aeocha.assert_true(ok2, "Down x3 reaches the dir row")
-            gp_driver.key("Right")
+            uidriver.key("Right")
             ok3 = gp_driver.wait_crumbs_contains("sub", 20)
             aeocha.assert_true(ok3, "Right drills the selected dir")
-            gp_driver.key("Left")
+            uidriver.key("Left")
             ok4 = gp_driver.wait_crumbs_gone("sub", 20)
             aeocha.assert_true(ok4, "Left went back up")
         }

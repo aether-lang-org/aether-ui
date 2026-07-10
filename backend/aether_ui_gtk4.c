@@ -2413,6 +2413,11 @@ void aether_ui_clear_children_impl(int handle) {
 //   POST /canvas/{id}/move?x=&y=    — pointer-move (hover) at (x,y)
 //   POST /canvas/{id}/key?name=X    — key press by GDK name ("Down", "Return", …)
 //   POST /window/resize?w=&h=       — resize the app's top-level window
+//   POST /shutdown                  — close the app window; the process exits
+//                                     cleanly (same path as the user closing
+//                                     it). Harnesses use this instead of
+//                                     signal-killing xvfb-run wrappers, which
+//                                     leaves the app alive holding the port.
 // ---------------------------------------------------------------------------
 
 #include <sys/socket.h>
@@ -2729,6 +2734,24 @@ static gboolean canvas_key_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+// Shutdown — destroy the top-level window on the GTK thread. GtkApplication
+// ends its run loop when the last window goes, so the process exits by the
+// SAME teardown path as a user closing the window. This is how test
+// harnesses should end a driver session: signal-killing an xvfb-run wrapper
+// leaves the app child alive and holding the driver port, and the next
+// test then interrogates the wrong app.
+static gboolean shutdown_idle(gpointer data) {
+    (void)data;
+    GtkWidget* root = aether_ui_get_widget(1);
+    if (root) {
+        GtkWidget* toplevel = root;
+        while (gtk_widget_get_parent(toplevel))
+            toplevel = gtk_widget_get_parent(toplevel);
+        if (GTK_IS_WINDOW(toplevel)) gtk_window_destroy(GTK_WINDOW(toplevel));
+    }
+    return G_SOURCE_REMOVE;
+}
+
 // Window resize — set_default_size on the top-level acts as a resize request
 // on a mapped GTK4 window. Lets tests exercise the resize → viewBox-remap →
 // coordinate-unmapping path (a maximize/unmaximize regression hid here).
@@ -3016,6 +3039,15 @@ static void handle_test_request(int client_fd) {
             close(client_fd);
             return;
         }
+    }
+
+    // POST /shutdown — close the window; the app exits cleanly. Respond
+    // first (the main loop is about to end), then schedule the destroy.
+    if (method == 1 && strncmp(path, "/shutdown", 9) == 0) {
+        send_response(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+        close(client_fd);
+        g_idle_add(shutdown_idle, NULL);
+        return;
     }
 
     // POST /window/resize?w=..&h=.. — resize the app's top-level window.

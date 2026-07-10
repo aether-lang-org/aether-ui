@@ -107,7 +107,25 @@ run_server_test() {
 
     "$script" "$PORT"
     local rc=$?
+    # Close the app PROPERLY: ask the driver to shut down (the app exits by
+    # the same path as the user closing the window). Signal-killing the
+    # xvfb-run wrapper is only a fallback — it can leave the app child alive
+    # and HOLDING THE PORT, and the next phase then interrogates the wrong
+    # app (a whole family of "impossible" test failures traced back to this).
+    curl -sf -m 2 -X POST "http://127.0.0.1:$PORT/shutdown" > /dev/null 2>&1
+    local freed=0
+    for _ in $(seq 1 25); do
+        if ! curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets"; then freed=1; break; fi
+        sleep 0.2
+    done
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    if [ "$freed" -ne 1 ]; then
+        pkill -f "$bin" 2>/dev/null
+        for _ in $(seq 1 25); do
+            curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets" || break
+            sleep 0.2
+        done
+    fi
     return $rc
 }
 
@@ -228,20 +246,42 @@ for ex in "${SMOKE_EXAMPLES[@]}"; do
     run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))
 done
 
-echo
-echo "=== Phase 3: AetherUIDriver calculator tests ==="
-run_server_test "$(EX_BIN calculator)" \
-                "$SCRIPT_DIR/test_calculator.sh" calculator || FAIL=$((FAIL + 1))
+# Phases 3-6 are Aeocha specs (tests/<app>/spec_*.ae — Aether programs on
+# the shared tests/lib/uidriver.ae client; tests/run_spec.sh is launcher
+# glue). They need the aeocha clone.
+AEOCHA_DIR="${AEOCHA_DIR:-$HOME/scm/aeocha}"
+if [ ! -f "$AEOCHA_DIR/aeocha.ae" ]; then
+    echo "NOTICE: aeocha not found at $AEOCHA_DIR — driver spec phases (3-6) FAIL."
+    echo "        (clone github.com/aether-lang-org/aeocha or set AEOCHA_DIR)"
+    FAIL=$((FAIL + 1))
+    AEOCHA_OK=0
+else
+    AEOCHA_OK=1
+fi
 
 echo
-echo "=== Phase 4: AetherUIDriver testable tests ==="
-run_server_test "$(EX_BIN testable)" \
-                "$SCRIPT_DIR/test_automation.sh" testable || FAIL=$((FAIL + 1))
+echo "=== Phase 3: AetherUIDriver calculator spec ==="
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=calculator/spec_calculator \
+    run_server_test "$(EX_BIN calculator)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" calculator || FAIL=$((FAIL + 1))
+fi
 
 echo
-echo "=== Phase 5: AetherUIDriver context-menu tests ==="
-run_server_test "$(EX_BIN context_menu)" \
-                "$SCRIPT_DIR/test_context_menu.sh" context_menu || FAIL=$((FAIL + 1))
+echo "=== Phase 4: AetherUIDriver testable spec ==="
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=testable/spec_testable \
+    run_server_test "$(EX_BIN testable)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" testable || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5: AetherUIDriver context-menu spec ==="
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=context_menu/spec_context_menu \
+    run_server_test "$(EX_BIN context_menu)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" context_menu || FAIL=$((FAIL + 1))
+fi
 
 echo
 echo "=== Phase 6: AetherUIDriver grand_perspective tests (Aeocha specs) ==="
@@ -254,12 +294,7 @@ echo "=== Phase 6: AetherUIDriver grand_perspective tests (Aeocha specs) ==="
 # $GP_FIXTURE. Fixture under $HOME: gio trash refuses /tmp on some OSes
 # (FreeBSD: "Trashing on system internal mounts is not supported").
 # Xvfb runs need the cairo renderer (GTK's NGL on llvmpipe churns memory).
-AEOCHA_DIR="${AEOCHA_DIR:-$HOME/scm/aeocha}"
-if [ ! -f "$AEOCHA_DIR/aeocha.ae" ]; then
-    echo "NOTICE: aeocha not found at $AEOCHA_DIR — skipping the grand_perspective specs."
-    echo "        (clone github.com/aether-lang-org/aeocha or set AEOCHA_DIR)"
-    FAIL=$((FAIL + 1))
-else
+if [ "$AEOCHA_OK" -eq 1 ]; then
     case "$LAUNCH_PREFIX" in *xvfb*) export GSK_RENDERER=cairo ;; esac
     for gp_spec in scan_and_list map_nav legend fileops hover_and_resize; do
         GP_FIX=$(mktemp -d "$HOME/.gp-ci-XXXXXX")
@@ -267,10 +302,10 @@ else
         head -c 400000 /dev/urandom > "$GP_FIX/big.bin"
         head -c 250000 /dev/urandom > "$GP_FIX/mid.bin"
         head -c 200000 /dev/urandom > "$GP_FIX/sub/inner.bin"
-        export AEVG_DIR="$GP_FIX" GP_FIXTURE="$GP_FIX" GP_SPEC="$gp_spec"
+        export AEVG_DIR="$GP_FIX" GP_FIXTURE="$GP_FIX" UI_SPEC="grand_perspective/spec_${gp_spec}"
         run_server_test "$ROOT/target/build/aevg/apps/grand_perspective/bin/grand_perspective" \
-                        "$SCRIPT_DIR/tests/grand_perspective/run_spec.sh" "gp_${gp_spec}" || FAIL=$((FAIL + 1))
-        unset AEVG_DIR GP_FIXTURE GP_SPEC
+                        "$SCRIPT_DIR/tests/run_spec.sh" "gp_${gp_spec}" || FAIL=$((FAIL + 1))
+        unset AEVG_DIR GP_FIXTURE UI_SPEC
         rm -rf "$GP_FIX"
     done
     unset GSK_RENDERER

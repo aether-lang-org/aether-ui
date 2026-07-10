@@ -1,0 +1,266 @@
+// uidriver.ae — generic AetherUIDriver client for Aeocha specs.
+//
+// Everything app-agnostic about driving an aether-ui app over the driver's
+// HTTP API: asserting actions (clicks/keys/moves/toggles/resize fail the
+// surrounding `it` on any non-2xx, via aeocha's POST matchers), raw
+// GET/POST primitives for the odd shapes (403-expected posts, response
+// bodies), /widgets JSON queries, /state access, and polling waits.
+//
+// App-specific vocabulary (status-line keywords, breadcrumb filters,
+// fixtures) belongs in a per-app module built on this one — see
+// tests/grand_perspective/gp_driver.ae.
+//
+// Resolution: specs reach this module via AETHER_LIB_DIR (multi-entry,
+// platform path separator) — tests/run_spec.sh wires it.
+
+exports (
+    url_of, get_body, post_ok, post_status, post_body,
+    click, click_widget, toggle_widget, key, move_to, resize_window,
+    set_state, state_value_int,
+    widget_id_by_text, widget_id_of, widget_text_by_id, widget_bool_by_text,
+    canvas_w, canvas_h, canvas_widget_id,
+    wait_server, wait_body_contains
+)
+
+import std.string
+import std.list
+import std.os
+import std.json
+import std.http.client
+import aeocha
+
+BASE() -> string { return "http://127.0.0.1:9222" }
+
+url_of(path: string) -> string { return string.concat(BASE(), path) }
+
+// ─── HTTP primitives ─────────────────────────────────────────────
+
+get_body(path: string) -> string {
+    req = client.request("GET", url_of(path))
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.length(cerr) > 0 { return "" }
+    body = string.concat(client.response_body(resp), "")   // own a copy
+    client.response_free(resp)
+    return body
+}
+
+// Asserting POST: any transport error or non-2xx fails the current `it`.
+post_ok(path: string, msg: string) {
+    aeocha.expect_http_post_ok(url_of(path), msg)
+}
+
+// Non-asserting POST returning the HTTP status (0 = transport error) — for
+// routes that are SUPPOSED to refuse (sealed widgets → 403).
+post_status(path: string) -> int {
+    req = client.request("POST", url_of(path))
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.length(cerr) > 0 { return 0 }
+    st = client.response_status(resp)
+    client.response_free(resp)
+    return st
+}
+
+// Non-asserting POST returning the response body — for routes whose JSON
+// the spec inspects ("mapped":1, "activated":0).
+post_body(path: string) -> string {
+    req = client.request("POST", url_of(path))
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.length(cerr) > 0 { return "" }
+    body = string.concat(client.response_body(resp), "")
+    client.response_free(resp)
+    return body
+}
+
+// ─── Driver actions (all assert via aeocha) ──────────────────────
+
+extern lrint(x: float) -> long
+f_to_i(x: float) -> int { return lrint(x) }
+
+click(x: float, y: float) {
+    xi = f_to_i(x)
+    yi = f_to_i(y)
+    post_ok("/canvas/1/click?x=${xi}&y=${yi}", "POST canvas click")
+}
+
+click_widget(id: int) { post_ok("/widget/${id}/click", "POST widget click") }
+toggle_widget(id: int) { post_ok("/widget/${id}/toggle", "POST widget toggle") }
+key(name: string) { post_ok(string.concat("/canvas/1/key?name=", name), "POST canvas key") }
+
+move_to(x: float, y: float) {
+    xi = f_to_i(x)
+    yi = f_to_i(y)
+    post_ok("/canvas/1/move?x=${xi}&y=${yi}", "POST canvas move")
+}
+
+resize_window(w: int, h: int) { post_ok("/window/resize?w=${w}&h=${h}", "POST window resize") }
+
+// ─── Reactive state ──────────────────────────────────────────────
+
+set_state(id: int, v: int) { post_ok("/state/${id}/set?v=${v}", "POST state set") }
+
+// GET /state/{id} → the value as an int (the driver reports a double).
+state_value_int(id: int) -> int {
+    body = get_body("/state/${id}")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 - 999999 }
+    f = json.json_object_get_raw(v, "value")
+    r = 0 - 999999
+    if f != null { r = f_to_i(json.json_get_number(f)) }
+    json.json_free(v)
+    return r
+}
+
+// ─── /widgets JSON queries ───────────────────────────────────────
+
+field_str(w: ptr, name: string) -> string {
+    f = json.json_object_get_raw(w, name)
+    if f == null { return "" }
+    s, serr = json.get_string(f)
+    if string.length(serr) > 0 { return "" }
+    return s
+}
+
+field_int(w: ptr, name: string) -> int {
+    f = json.json_object_get_raw(w, name)
+    if f == null { return 0 }
+    return json.json_get_int(f)
+}
+
+field_bool(w: ptr, name: string) -> int {
+    f = json.json_object_get_raw(w, name)
+    if f == null { return 0 }
+    return json.json_get_bool(f)
+}
+
+// Widget id whose text equals `text` (any type), or 0.
+widget_id_by_text(text: string) -> int {
+    return widget_id_of("", text)
+}
+
+// Widget id by (type, text). Empty type = any type; empty text = first
+// widget of the type (e.g. the app's only toggle or textfield).
+widget_id_of(wtype: string, text: string) -> int {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    found = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        tok = 1
+        if string.length(wtype) > 0 {
+            if string.equals(field_str(w, "type"), wtype) == 0 { tok = 0 }
+        }
+        if tok == 1 {
+            if string.length(text) > 0 {
+                if string.equals(field_str(w, "text"), text) == 0 { tok = 0 }
+            }
+        }
+        if tok == 1 { if found == 0 { found = field_int(w, "id") } }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
+}
+
+// The text of widget `id` ("" when absent).
+widget_text_by_id(id: int) -> string {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = ""
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if field_int(w, "id") == id { r = field_str(w, "text") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+// A boolean field ("enabled", "active", "visible") of the first widget
+// whose text equals `text`; -1 when no such widget.
+widget_bool_by_text(text: string, fieldname: string) -> int {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 - 1 }
+    r = 0 - 1
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(field_str(w, "text"), text) == 1 {
+            if r < 0 { r = field_bool(w, fieldname) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+canvas_w() -> int { return canvas_field("w") }
+canvas_h() -> int { return canvas_field("h") }
+canvas_widget_id() -> int { return canvas_field("id") }
+
+canvas_field(f: string) -> int {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(field_str(w, "type"), "canvas") == 1 {
+            if r == 0 { r = field_int(w, f) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+// ─── Waits (poll every 150ms up to `tries`) ──────────────────────
+
+// Wait until GET <path>'s body contains `needle`. The universal wait: a
+// widget label change, a state value ("42.000000"), a status line — all
+// are substrings of some GET body.
+wait_body_contains(path: string, needle: string, tries: int) -> int {
+    i = 0
+    while i < tries {
+        if string.contains(get_body(path), needle) == 1 { return 1 }
+        sleep(150)
+        i = i + 1
+    }
+    return 0
+}
+
+// Wait for the driver's HTTP server AND a settled widget tree: the widget
+// list must carry the injected banner and read identically twice in a row.
+// A bare "server responds" wait races the app's widget build-out — the
+// first lookups then miss widgets that exist a beat later.
+wait_server() {
+    prev = ""
+    i = 0
+    while i < 60 {
+        body = get_body("/widgets")
+        ok = 0
+        if string.contains(body, "banner") == 1 {
+            if string.length(prev) > 0 {
+                if string.equals(body, prev) == 1 { ok = 1 }
+            }
+        }
+        if ok == 1 { i = 60 }
+        else {
+            prev = body
+            sleep(200)
+        }
+        i = i + 1
+    }
+}
