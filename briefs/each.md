@@ -33,6 +33,18 @@ pre-allocating widget pools. Concretely:
   ones that fell off. That reconciler is why SwiftUI has ForEach and
   React has keys despite both host languages having loops. `each` is
   only that half.
+- **Nearest ancestor: AngularJS `ng-repeat`, not ForEach/keys.** Like
+  ng-repeat we mutate a RETAINED widget tree in place (not diff a
+  virtual description): a directive owning its container's repeated
+  children, a per-item template scope (`item` + `$index` ≡ our
+  `|item, i|`), destroy-and-recreate on identity change (our v1
+  clear+rebuild ≡ Angular without `track by`), and `track by` itself —
+  whose name this codebase already inherited via `vg/grammar/bind.ae`'s
+  `bind_trackby`. Use Angular's vocabulary for the stretch goal. The
+  one deliberate difference: ng-repeat re-ran on every `$digest`; our
+  v1 is explicit `each_update` (digest-less) — the automatic-trigger
+  half belongs to roadmap item 8 (bindings), whose vg precedent is
+  `scene_set_refreshing`.
 - **Runtime creation + attach is SHIPPED CODE, not just a probe.**
   `examples/overlay_demo/overlay_demo.ae` builds its modal card
   imperatively INSIDE a button callback: `card = root_vstack(10)` then
