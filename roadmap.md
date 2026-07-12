@@ -1,8 +1,10 @@
 # Roadmap: what to engineer next
 
-**Status: PROPOSAL.** 2026-07-12. Companion to `re-namespace.md` (done):
-that settled where things live; this is what to build there next, pulling
-from SwiftUI, Flutter, QML, and Swing.
+**Status: PROPOSAL.** 2026-07-12. Successor to the re-namespace plan
+(executed and deleted; see commits 3c4583a..a36647d for the plan and the
+Swing/Flutter/SwiftUI namespace comparisons): that settled where things
+live; this is what to build there next, pulling from SwiftUI, Flutter,
+QML, and Swing.
 
 ## Method: the stress test already ran
 
@@ -249,7 +251,8 @@ what natives do worst across our platforms (menus, dropdowns, overlays,
 maybe tables), keep native what they do best (entries, IME, a11y).
 Items 1, 2, and 5 are deliberately the foundations of that hybrid, so
 this fork stays open without being committed to. If/when it's serious,
-it gets its own re-namespace.md-style comparison doc first.
+it gets its own comparison-doc treatment first (the re-namespace plan's
+format: comparisons, verdict, phased ci-gated migration).
 
 ## House rules (carry-overs from this month, now policy)
 
