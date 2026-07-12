@@ -1,7 +1,13 @@
 # Brief: the in-window overlay layer (roadmap item 1)
 
-**Status: READY FOR EXECUTION.** 2026-07-12. Self-contained hand-off —
-everything needed is in this file or at the cited file:line anchors.
+**Status: PARTIALLY EXECUTED.** 2026-07-12. Phases A, B, and the toast +
+modal-scrim half of Phase C are DONE (commit 526bd6a): the overlay host,
+`overlay`/`overlay_modal`/`dismiss_overlay`/`toast` DSL, the modal glass
+pane, `GET /overlays` + `GET /window/pick`, examples/overlay_demo + a
+6/6 spec (ci.sh Phase 5b), win32/macOS stubs — full ci.sh green.
+REMAINING: the drawn tooltip and the drawn dropdown (Phase C tail).
+The rest of this brief is the original plan; the anchors still hold.
+
 Written for an autonomous session; escalation triggers are explicit.
 
 ## Mission

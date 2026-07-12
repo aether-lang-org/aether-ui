@@ -31,7 +31,25 @@ The ranking below is by (foundation-ness × evidence), not by shininess.
 
 ### 1. In-window overlay layer — the Swing z-layer, aimed at our sorest wound
 
-**Hand-off brief: `briefs/overlay.md`** (2026-07-12, ready for execution).
+**Hand-off brief: `briefs/overlay.md`** (2026-07-12).
+
+**Partially SHIPPED (2026-07-12, commit 526bd6a):** the overlay HOST +
+two consumers. A GtkOverlay is interposed lazily between window and root
+(zero change when no overlay is open); `ui.overlay`/`overlay_modal`/
+`dismiss_overlay`/`toast` DSL; a full-window modal scrim (glass pane)
+that eats clicks; `GET /overlays` + a real-hit-test `GET /window/pick`
+driver route; examples/overlay_demo + a 6/6 spec (Phase 5b) proving the
+scrim resolves ahead of the button beneath it; win32/macOS stubs. Full
+ci.sh green. Because it draws in-window (no xdg_popup), it works on
+sommelier by construction (not machine-verifiable on this box).
+
+**Remaining (D3 tail, own commits when picked up):** the drawn tooltip
+for vg scenes (reuse `tooltip_at`; intercept canvas hover-dwell → open a
+label overlay) and the drawn dropdown replacing GtkDropDown-based
+`picker` under `$SOMMELIER_VERSION` (second surface behind the same
+picker ABI, `$AETHER_UI_PICKER=drawn|native`). Both non-trivial; the
+dropdown is the highest-risk (ABI parity for set/get_selected + change
+callbacks). See briefs/overlay.md §D3 for the shape.
 
 **Borrowed from:** Swing `JLayeredPane` (POPUP_LAYER / MODAL_LAYER / glass
 pane) — its menus worked everywhere *because they were drawn in-window*,
