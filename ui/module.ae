@@ -37,6 +37,7 @@ exports (
     timer, timer_cancel,
     window_create, window_set_body, window_show, window_close,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast,
+    vg_tooltip_show, vg_tooltip_hide, vg_tooltip_drawn,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_size,
     canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -204,6 +205,11 @@ extern aether_ui_overlay_is_live_impl(overlay_handle: int) -> int
 extern aether_ui_overlay_count_impl() -> int
 extern aether_ui_overlay_is_modal_impl(overlay_handle: int) -> int
 extern aether_ui_toast_impl(win_handle: int, text: string, ms: int) -> int
+// Drawn tooltip for vg scenes (a styled overlay near the pointer, replacing
+// the native GtkTooltip that sommelier can't display).
+extern aether_ui_vg_tooltip_show_impl(canvas_id: int, text: string, cx: float, cy: float) -> int
+extern aether_ui_vg_tooltip_hide_impl()
+extern aether_ui_vg_tooltip_drawn_impl() -> int
 
 extern aether_ui_sheet_create_impl(title: string, width: int, height: int) -> int
 extern aether_ui_sheet_set_body_impl(handle: int, root_handle: int)
@@ -975,6 +981,19 @@ overlay_is_live(overlay_handle: int) -> int {
 // after ms. win 0 = main window. Returns the overlay handle.
 toast(win_handle: int, text: string, ms: int) -> int {
     return aether_ui_toast_impl(win_handle, text, ms)
+}
+
+// vg drawn tooltip — the vg live loop calls these on hover. show near the
+// pointer (canvas-local cx,cy); hide when the pointer leaves a tooltipped
+// element. vg_tooltip_drawn() gates the whole path (native elsewhere).
+vg_tooltip_show(canvas_id: int, text: string, cx: float, cy: float) -> int {
+    return aether_ui_vg_tooltip_show_impl(canvas_id, text, cx, cy)
+}
+vg_tooltip_hide() {
+    aether_ui_vg_tooltip_hide_impl()
+}
+vg_tooltip_drawn() -> int {
+    return aether_ui_vg_tooltip_drawn_impl()
 }
 
 // Modal sheet

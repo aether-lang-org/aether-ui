@@ -1956,6 +1956,12 @@ int aether_ui_overlay_is_modal_impl(int overlay_handle) { (void)overlay_handle; 
 int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
     (void)win_handle; (void)text; (void)ms; return 0;
 }
+int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text,
+                                   double cx, double cy) {
+    (void)canvas_id; (void)text; (void)cx; (void)cy; return 0;
+}
+void aether_ui_vg_tooltip_hide_impl(void) { }
+int aether_ui_vg_tooltip_drawn_impl(void) { return 0; }
 
 void aether_ui_window_show_impl(int win_handle) {
     Widget* w = widget_at(win_handle);

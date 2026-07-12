@@ -1717,6 +1717,69 @@ int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
     return h;
 }
 
+// Drawn tooltip for vg scenes — a styled label overlay near the pointer,
+// replacing the native GtkTooltip (a compositor surface, invisible under
+// sommelier). One reused overlay per process: show updates the text+position,
+// hide closes it. Coords are CANVAS-LOCAL px; we translate to window-local via
+// the canvas widget's bounds so the label sits at the pointer.
+static int drawn_tooltip_overlay = 0;   // live overlay handle, or 0
+static GtkWidget* drawn_tooltip_label = NULL;
+void aether_ui_vg_tooltip_hide_impl(void);   // fwd
+
+int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text,
+                                   double cx, double cy) {
+    if (!text || !text[0]) { aether_ui_vg_tooltip_hide_impl(); return 0; }
+    GtkWidget* canvas = aether_ui_get_widget(
+        aether_ui_canvas_get_widget(canvas_id));
+    if (!canvas) return 0;
+    // Canvas-local → window-local px.
+    GtkRoot* root = gtk_widget_get_root(canvas);
+    if (!root || !GTK_IS_WINDOW(root)) return 0;
+    graphene_rect_t r;
+    double wx = cx, wy = cy;
+    if (gtk_widget_compute_bounds(canvas, GTK_WIDGET(root), &r)) {
+        wx = r.origin.x + cx;
+        wy = r.origin.y + cy;
+    }
+    // Offset a touch below-right of the pointer, like a native tooltip.
+    int mx = (int)wx + 12;
+    int my = (int)wy + 18;
+
+    if (drawn_tooltip_overlay && aether_ui_overlay_is_live_impl(drawn_tooltip_overlay)
+        && drawn_tooltip_label) {
+        // Reuse: just update text + margins (top-start anchor).
+        gtk_label_set_text(GTK_LABEL(drawn_tooltip_label), text);
+        gtk_widget_set_margin_start(drawn_tooltip_label, mx);
+        gtk_widget_set_margin_top(drawn_tooltip_label, my);
+        return drawn_tooltip_overlay;
+    }
+    // Fresh.
+    GtkWidget* lbl = gtk_label_new(text);
+    gtk_widget_add_css_class(lbl, "aui-tooltip");
+    drawn_tooltip_label = lbl;
+    int content = aether_ui_register_widget(lbl);
+    // anchor top-start = h:start(0) + v:top(0) = 0.
+    drawn_tooltip_overlay = aether_ui_overlay_open_impl(0, content, 0, mx, my, 0);
+    return drawn_tooltip_overlay;
+}
+
+void aether_ui_vg_tooltip_hide_impl(void) {
+    if (drawn_tooltip_overlay) {
+        aether_ui_overlay_close_impl(drawn_tooltip_overlay);
+        drawn_tooltip_overlay = 0;
+        drawn_tooltip_label = NULL;
+    }
+}
+
+// Whether the drawn-tooltip path is active: forced by $AETHER_UI_TOOLTIP,
+// else on under sommelier (native tooltips don't display there).
+int aether_ui_vg_tooltip_drawn_impl(void) {
+    const char* force = getenv("AETHER_UI_TOOLTIP");
+    if (force && strcmp(force, "drawn") == 0) return 1;
+    if (force && strcmp(force, "native") == 0) return 0;
+    return getenv("SOMMELIER_VERSION") != NULL;
+}
+
 // Multi-window support
 typedef struct {
     GtkWindow* window;

@@ -37,7 +37,7 @@ cd "$ROOT"
 mkdir -p build
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo)
+EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -336,6 +336,18 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=overlay_demo/spec_overlay_demo \
     run_server_test "$(EX_BIN overlay_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" overlay_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5c: AetherUIDriver vg drawn-tooltip spec ==="
+# The drawn-tooltip half of the overlay layer: a vg shape's tooltip() opens a
+# label overlay near the pointer (forced on via AETHER_UI_TOOLTIP=drawn) —
+# hover a shape → tooltip appears; off it → gone. Driven via /canvas/1/move.
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    AETHER_UI_TOOLTIP=drawn \
+    UI_SPEC=vg_tooltip/spec_vg_tooltip \
+    run_server_test "$(EX_BIN vg_tooltip)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" vg_tooltip || FAIL=$((FAIL + 1))
 fi
 
 echo

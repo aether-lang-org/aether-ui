@@ -54,6 +54,7 @@ import vg.region
 import std.list
 import std.os
 import std.os (now_monotonic_ms)
+import std.string
 
 extern malloc(size: int) -> ptr
 
@@ -95,6 +96,21 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
         ui.canvas_clear(canvas_id)
         _flush_clipped(scene, canvas_id)
         ui.canvas_redraw(canvas_id)
+    }
+    // Hover: on the drawn-tooltip path (sommelier, or $AETHER_UI_TOOLTIP=drawn),
+    // resolve the tooltip under the pointer and show/hide a drawn overlay near
+    // it. Off the drawn path this no-ops (native GtkTooltip handles display).
+    // Coords are canvas-local px — the same space dispatch_click hit-tests in
+    // and the space the overlay positions from.
+    if ui.vg_tooltip_drawn() == 1 {
+        ui.canvas_on_move(canvas_id) callback |cx: float, cy: float| {
+            tip = events.tooltip_at(vg.scene_ctx(scene), cx, cy)
+            if string.length(tip) > 0 {
+                _ = ui.vg_tooltip_show(canvas_id, tip, cx, cy)
+            } else {
+                ui.vg_tooltip_hide()
+            }
+        }
     }
     // Resize: rescale the scene to the new canvas allocation. The hook fires
     // from the draw func with the new (rw, rh); rebuild the viewBox→canvas

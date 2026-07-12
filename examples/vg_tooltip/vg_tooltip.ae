@@ -1,0 +1,41 @@
+// Aether UI vg drawn-tooltip example — in-window tooltips for vg scenes.
+//
+// A vg shape carries a tooltip() (as it always could). On the drawn-tooltip
+// path — forced with AETHER_UI_TOOLTIP=drawn, or automatic under sommelier —
+// hovering the shape opens a styled label overlay INSIDE the window near the
+// pointer, instead of the native GtkTooltip (a compositor surface sommelier
+// won't display). Off the drawn path the native tooltip handles display.
+//
+// AetherUIDriver drives the hover directly: POST /canvas/1/move?x=&y= fires
+// the vg hover hit-test (bypassing the remote-control motion guard), so
+// GET /overlays then shows the drawn tooltip appear over the shape and vanish
+// off it — proving the in-window tooltip works on this window system, and (by
+// construction, no xdg_popup) on sommelier too.
+
+import ui                                   // full — transitive canvas_* resolve
+import ui (window, enable_test_server)
+import vg.live (vg)
+import vg                                    // full — vg_live uses vg.scene_new
+import vg (view_box, circle, rect, text, fill, stroke, tooltip)
+import std.os
+import std.os (os_getenv)
+
+main() {
+    window("vg drawn tooltip", 420, 360) {
+        vg(view_box(0, 0, 100, 100), 400, 300) {
+            circle(30, 40, 18) {
+                fill("#cc4444")
+                tooltip("The red circle")
+            }
+            rect(58, 22, 34, 34) {
+                fill("#3366cc")
+                stroke("#003366", 1)
+                tooltip("The blue square")
+            }
+            text(8, 92, "hover the shapes") {
+                fill("#222222")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
