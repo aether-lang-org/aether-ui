@@ -150,6 +150,8 @@ nothing. **Unlocks:** item 4, real breadcrumbs, dynamic forms.
 
 ### 4. Table / list / tree widgets
 
+**Hand-off brief: `briefs/table.md`** (2026-07-12 — GATED on item 3 landing).
+
 **Borrowed from:** Swing's genuinely great contribution — `JTable`/
 `JTree` with the renderer/editor split and sortable columns. QML
 `ListView` + delegates for the declarative shape; SwiftUI `List`/`Table`.
@@ -172,6 +174,8 @@ text measurement).
 
 ### 5. Effects: shadow, opacity groups, (later) backdrop blur
 
+**Hand-off brief: `briefs/effects.md`** (2026-07-12, ready for execution).
+
 **Borrowed from:** SwiftUI `.shadow(radius:x:y:)`; Flutter `BoxShadow`/
 `elevation`; QML GraphicalEffects (`DropShadow`, `FastBlur`); QML's
 layer.enabled for group opacity.
@@ -193,6 +197,8 @@ with 1).
 
 ### 6. Implicit transitions — QML `Behavior`, not SwiftUI `withAnimation`
 
+**Hand-off brief: `briefs/transitions.md`** (2026-07-12, ready for execution).
+
 **Borrowed from:** QML's `Behavior on opacity { NumberAnimation {} }` —
 declare once on a property, every subsequent setter animates. The most
 markup-centric of the three designs (SwiftUI's `withAnimation` is a
@@ -213,6 +219,8 @@ driver deterministic (specs can assert the END state; add a
 
 ### 7. Layout: flex weights, wrap, split panes, `on_layout`
 
+**Hand-off brief: `briefs/layout.md`** (2026-07-12, ready for execution).
+
 **Borrowed from:** Flutter `Expanded(flex:)`/`Flexible` (the constraints-
 down-sizes-up model's user face); SwiftUI `layoutPriority` +
 `GeometryReader`; QML anchors; every desktop toolkit's splitter
@@ -230,6 +238,8 @@ resize hook). **Effort:** M. **Risk:** low. **Depends on:** nothing.
 
 ### 8. Declarative bindings + typed state
 
+**Hand-off brief: `briefs/bindings.md`** (2026-07-12 — Phase A is a design memo).
+
 **Borrowed from:** SwiftUI `@State`/`@Binding`; QML property bindings
 (the whole language is bindings); our own vg.grammar.bind
 (`bind_fill/bind_text/bind_pos`) — the pattern is already in-repo.
@@ -245,6 +255,8 @@ routes. **Effort:** M. **Risk:** low-medium (unifying two reactivity
 systems is the design work, not the code).
 
 ### 9. Focus, tab order, shortcuts
+
+**Hand-off brief: `briefs/focus.md`** (2026-07-12, ready for execution).
 
 **Borrowed from:** Swing's second great contribution: `InputMap`/
 `ActionMap` (declarative keystroke→action, per focus scope). SwiftUI
