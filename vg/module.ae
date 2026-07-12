@@ -1013,6 +1013,20 @@ flush_text(ctx: ptr, be: ptr, p: ptr) {
         s = string.concat(s, "' fill='")
         s = string.concat(s, fillc)
     }
+    // Cached stroke from a vg.stroke() modifier on the text element — the
+    // deferred path rebuilds the <text> from scratch, so (like fill) the
+    // stroke must be re-emitted or it's lost (the transpiler emits
+    // vg.text_sized + vg.stroke for SVG stroke-on-<text>, e.g. bloglines).
+    if element.element_has_stroke(el) == 1 {
+        sc = element.element_last_stroke_color(el)
+        if string.length(sc) > 0 {
+            s = string.concat(s, "' stroke='")
+            s = string.concat(s, sc)
+            sw = element.element_last_stroke_width(el)
+            s = string.concat(s, "' stroke-width='")
+            s = string.concat(s, string.from_float(sw))
+        }
+    }
     if string.length(pend.anchor) > 0 {
         s = string.concat(s, "' text-anchor='")
         s = string.concat(s, pend.anchor)
