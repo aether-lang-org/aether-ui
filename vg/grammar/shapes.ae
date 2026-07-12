@@ -773,13 +773,20 @@ shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
 
     fill_color = utils.resolve_fill_color(style)
     stroke_color = utils.resolve_stroke_color(style)
+    // A `stroke="url(#id)"` gradient stroke resolves to an empty
+    // stroke_color (there's no solid fallback) but still strokes, so it
+    // still needs a stroke width. Without this the width defaults to 0
+    // and the backend fills the interior with the gradient rather than
+    // stroking the outline (php.svg's ellipse). Detect the gradient
+    // stroke and take the same width path.
+    has_stroke_grad = string.length(style_grad_id_of(style, "stroke")) > 0
     sw = 0.0
-    if string.length(stroke_color) > 0 {
+    if string.length(stroke_color) > 0 || has_stroke_grad {
         sw_raw = utils.style_num_default(style, "stroke-width", 1.0)
         smap = rendering.map_stroke_width(ctx, sw_raw)
         sw = rendering.stroke_width(smap)
         op = rendering.stroke_opacity_factor(smap)
-        if op < 1.0 {
+        if op < 1.0 && string.length(stroke_color) > 0 {
             stroke_color = utils.apply_opacity_to_color(stroke_color, op)
         }
     }
