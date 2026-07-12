@@ -351,6 +351,19 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
 fi
 
 echo
+echo "=== Phase 5d: AetherUIDriver picker ABI spec (drawn surface) ==="
+# Picker ABI parity: the same select/read-back assertions pass on the drawn
+# dropdown (a button + in-window overlay list) as on the native GtkDropDown.
+# Run here under the DRAWN surface — the native surface is the everyday path
+# and is smoke-launched in Phase 2.
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    AETHER_UI_PICKER=drawn \
+    UI_SPEC=picker/spec_picker \
+    run_server_test "$(EX_BIN picker)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" picker || FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "=== Phase 6: AetherUIDriver grand_perspective tests (Aeocha specs) ==="
 # One Aeocha spec per app component (tests/grand_perspective/spec_*.ae —
 # Aether programs driving the HTTP API via std.http.client; run_spec.sh is

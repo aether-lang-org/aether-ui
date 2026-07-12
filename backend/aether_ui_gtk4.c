@@ -920,6 +920,14 @@ double aether_ui_slider_get_value(int handle) {
 
 // Picker — dropdown / combo box.
 // Callback receives the selected index (int).
+//
+// Two surfaces, chosen at runtime (same pattern as the context menu):
+//   * DEFAULT: a GtkDropDown — the native combo on mainstream Linux.
+//   * DRAWN: a GtkButton trigger + an overlay list, drawn IN-WINDOW so it
+//     works where GtkDropDown's popup doesn't (sommelier: the list is an
+//     xdg_popup that never displays). Selected by $AETHER_UI_PICKER=drawn,
+//     default under $SOMMELIER_VERSION. Both surfaces share the picker ABI
+//     (create/add_item/set_selected/get_selected) behind the same handle.
 static void on_picker_changed(GtkDropDown* dropdown, GParamSpec* pspec, gpointer data) {
     (void)pspec;
     AeClosure* c = (AeClosure*)data;
@@ -929,8 +937,100 @@ static void on_picker_changed(GtkDropDown* dropdown, GParamSpec* pspec, gpointer
     }
 }
 
+// True when the drawn picker surface should be used (sommelier, or forced).
+static int aeui_picker_use_drawn(void) {
+    const char* force = getenv("AETHER_UI_PICKER");
+    if (force && strcmp(force, "drawn") == 0) return 1;
+    if (force && strcmp(force, "native") == 0) return 0;
+    return getenv("SOMMELIER_VERSION") != NULL;
+}
+
+// Per-drawn-picker state, hung off the trigger button via g_object_set_data.
+typedef struct {
+    GPtrArray* items;      // char* (owned copies)
+    int selected;
+    AeClosure* on_change;  // boxed, owned by Aether side
+    GtkWidget* trigger;    // the button (weak)
+    int overlay_handle;    // the open list overlay, or 0
+} DrawnPicker;
+
+static DrawnPicker* drawn_picker_of(GtkWidget* w) {
+    if (!w || !GTK_IS_BUTTON(w)) return NULL;
+    return (DrawnPicker*)g_object_get_data(G_OBJECT(w), "aeui-drawn-picker");
+}
+
+static void drawn_picker_update_label(DrawnPicker* dp) {
+    const char* txt = "";
+    if (dp->selected >= 0 && dp->selected < (int)dp->items->len)
+        txt = (const char*)g_ptr_array_index(dp->items, dp->selected);
+    gtk_button_set_label(GTK_BUTTON(dp->trigger), txt);
+}
+
+// A row in the open list was chosen: set selection, fire change, close list.
+static void on_drawn_picker_row(GtkListBox* lb, GtkListBoxRow* row, gpointer data) {
+    (void)lb;
+    DrawnPicker* dp = (DrawnPicker*)data;
+    int idx = gtk_list_box_row_get_index(row);
+    if (dp->overlay_handle) {
+        aether_ui_overlay_close_impl(dp->overlay_handle);
+        dp->overlay_handle = 0;
+    }
+    if (idx >= 0 && idx != dp->selected) {
+        dp->selected = idx;
+        drawn_picker_update_label(dp);
+        if (dp->on_change && dp->on_change->fn)
+            ((void(*)(void*, intptr_t))dp->on_change->fn)(dp->on_change->env,
+                                                          (intptr_t)idx);
+    }
+}
+
+// Trigger clicked → open an overlay list anchored under the button.
+static void on_drawn_picker_clicked(GtkButton* btn, gpointer data) {
+    DrawnPicker* dp = (DrawnPicker*)data;
+    if (dp->overlay_handle && aether_ui_overlay_is_live_impl(dp->overlay_handle)) {
+        aether_ui_overlay_close_impl(dp->overlay_handle);
+        dp->overlay_handle = 0;
+        return;
+    }
+    GtkWidget* list = gtk_list_box_new();
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
+    gtk_widget_add_css_class(list, "aui-drawn-dropdown");
+    for (guint i = 0; i < dp->items->len; i++) {
+        GtkWidget* lbl = gtk_label_new((const char*)g_ptr_array_index(dp->items, i));
+        gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+        gtk_widget_set_margin_start(lbl, 10); gtk_widget_set_margin_end(lbl, 10);
+        gtk_widget_set_margin_top(lbl, 4);    gtk_widget_set_margin_bottom(lbl, 4);
+        gtk_list_box_append(GTK_LIST_BOX(list), lbl);
+    }
+    g_signal_connect(list, "row-activated", G_CALLBACK(on_drawn_picker_row), dp);
+    // Anchor just below the trigger (top-start + the trigger's window-local
+    // top-left offset by its height).
+    GtkRoot* root = gtk_widget_get_root(GTK_WIDGET(btn));
+    int mx = 0, my = 0;
+    graphene_rect_t r;
+    if (root && GTK_IS_WINDOW(root) &&
+        gtk_widget_compute_bounds(GTK_WIDGET(btn), GTK_WIDGET(root), &r)) {
+        mx = (int)r.origin.x;
+        my = (int)(r.origin.y + r.size.height + 2);
+    }
+    int content = aether_ui_register_widget(list);
+    dp->overlay_handle = aether_ui_overlay_open_impl(0, content, 0, mx, my, 0);
+}
+
 int aether_ui_picker_create(void* boxed_closure) {
     ensure_gtk_init();
+    if (aeui_picker_use_drawn()) {
+        GtkWidget* btn = gtk_button_new_with_label("");
+        DrawnPicker* dp = g_new0(DrawnPicker, 1);
+        dp->items = g_ptr_array_new_with_free_func(g_free);
+        dp->selected = 0;
+        dp->on_change = (AeClosure*)boxed_closure;
+        dp->trigger = btn;
+        dp->overlay_handle = 0;
+        g_object_set_data(G_OBJECT(btn), "aeui-drawn-picker", dp);
+        g_signal_connect(btn, "clicked", G_CALLBACK(on_drawn_picker_clicked), dp);
+        return aether_ui_register_widget(btn);
+    }
     GtkStringList* model = gtk_string_list_new(NULL);
     GtkWidget* dropdown = gtk_drop_down_new(G_LIST_MODEL(model), NULL);
     if (boxed_closure) {
@@ -942,6 +1042,13 @@ int aether_ui_picker_create(void* boxed_closure) {
 
 void aether_ui_picker_add_item(int handle, const char* item) {
     GtkWidget* w = aether_ui_get_widget(handle);
+    DrawnPicker* dp = drawn_picker_of(w);
+    if (dp) {
+        g_ptr_array_add(dp->items, g_strdup(item ? item : ""));
+        // First item becomes the shown label (selected defaults to 0).
+        if (dp->items->len == 1) drawn_picker_update_label(dp);
+        return;
+    }
     if (w && GTK_IS_DROP_DOWN(w)) {
         GListModel* model = gtk_drop_down_get_model(GTK_DROP_DOWN(w));
         if (GTK_IS_STRING_LIST(model)) {
@@ -952,6 +1059,12 @@ void aether_ui_picker_add_item(int handle, const char* item) {
 
 void aether_ui_picker_set_selected(int handle, int index) {
     GtkWidget* w = aether_ui_get_widget(handle);
+    DrawnPicker* dp = drawn_picker_of(w);
+    if (dp) {
+        dp->selected = index;
+        drawn_picker_update_label(dp);
+        return;
+    }
     if (w && GTK_IS_DROP_DOWN(w)) {
         gtk_drop_down_set_selected(GTK_DROP_DOWN(w), (guint)index);
     }
@@ -959,6 +1072,8 @@ void aether_ui_picker_set_selected(int handle, int index) {
 
 int aether_ui_picker_get_selected(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
+    DrawnPicker* dp = drawn_picker_of(w);
+    if (dp) return dp->selected;
     if (w && GTK_IS_DROP_DOWN(w)) {
         return (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(w));
     }
@@ -2898,6 +3013,7 @@ static int banner_handle = 0;
 static const char* widget_type_name(GtkWidget* w) {
     if (!w) return "null";
     if (GTK_IS_LABEL(w)) return "text";
+    if (drawn_picker_of(w)) return "picker";   // drawn picker is a GtkButton
     if (GTK_IS_BUTTON(w)) return "button";
     if (GTK_IS_ENTRY(w)) return "textfield";
     if (GTK_IS_PASSWORD_ENTRY(w)) return "securefield";
@@ -2962,6 +3078,14 @@ static const char* widget_text_content(GtkWidget* w) {
     }
     if (GTK_IS_CHECK_BUTTON(w)) return gtk_check_button_get_label(GTK_CHECK_BUTTON(w));
     if (GTK_IS_BUTTON(w)) return gtk_button_get_label(GTK_BUTTON(w));
+    // Native picker: report the selected item's string, so "text" tracks the
+    // selection identically to the drawn picker (whose button label does).
+    if (GTK_IS_DROP_DOWN(w)) {
+        GListModel* model = gtk_drop_down_get_model(GTK_DROP_DOWN(w));
+        guint idx = gtk_drop_down_get_selected(GTK_DROP_DOWN(w));
+        if (GTK_IS_STRING_LIST(model) && idx != GTK_INVALID_LIST_POSITION)
+            return gtk_string_list_get_string(GTK_STRING_LIST(model), idx);
+    }
     return "";
 }
 
@@ -3019,6 +3143,10 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
     } else if (GTK_IS_PROGRESS_BAR(w)) {
         double val = gtk_progress_bar_get_fraction(GTK_PROGRESS_BAR(w));
         n += snprintf(buf + n, bufsize - n, ",\"value\":%.2f", val);
+    } else if (GTK_IS_DROP_DOWN(w) || drawn_picker_of(w)) {
+        // Picker selection (both surfaces) — "selected" for spec round-trips.
+        n += snprintf(buf + n, bufsize - n, ",\"selected\":%d",
+                      aether_ui_picker_get_selected(handle));
     }
 
     n += snprintf(buf + n, bufsize - n, "}");
@@ -3113,6 +3241,10 @@ static gboolean test_action_idle(gpointer data) {
                 gtk_range_set_value(GTK_RANGE(w), ta->dval);
             } else if (GTK_IS_PROGRESS_BAR(w)) {
                 gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(w), ta->dval);
+            } else if (GTK_IS_DROP_DOWN(w) || drawn_picker_of(w)) {
+                // Picker (either surface): select index via the ABI, which
+                // fires the change callback exactly as a user pick does.
+                aether_ui_picker_set_selected(ta->handle, (int)ta->dval);
             }
             break;
         case 5: // ctx_open — open the right-click menu, report mapped state
