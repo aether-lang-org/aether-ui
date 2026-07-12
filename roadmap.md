@@ -29,27 +29,25 @@ The ranking below is by (foundation-ness × evidence), not by shininess.
 
 ## The ranked items
 
-### 1. In-window overlay layer — the Swing z-layer, aimed at our sorest wound
+### 1. In-window overlay layer — the Swing z-layer, aimed at our sorest wound ✅ DONE (2026-07-12)
 
-**Hand-off brief: `briefs/overlay.md`** (2026-07-12).
-
-**Partially SHIPPED (2026-07-12, commit 526bd6a):** the overlay HOST +
-two consumers. A GtkOverlay is interposed lazily between window and root
+**Shipped** (commits 526bd6a host + toast + modal scrim, 27ad331 drawn
+tooltip, a9d73dc drawn dropdown): the full overlay layer + all three D3
+consumers. A GtkOverlay is interposed lazily between window and root
 (zero change when no overlay is open); `ui.overlay`/`overlay_modal`/
 `dismiss_overlay`/`toast` DSL; a full-window modal scrim (glass pane)
-that eats clicks; `GET /overlays` + a real-hit-test `GET /window/pick`
-driver route; examples/overlay_demo + a 6/6 spec (Phase 5b) proving the
-scrim resolves ahead of the button beneath it; win32/macOS stubs. Full
-ci.sh green. Because it draws in-window (no xdg_popup), it works on
-sommelier by construction (not machine-verifiable on this box).
-
-**Remaining (D3 tail, own commits when picked up):** the drawn tooltip
-for vg scenes (reuse `tooltip_at`; intercept canvas hover-dwell → open a
-label overlay) and the drawn dropdown replacing GtkDropDown-based
-`picker` under `$SOMMELIER_VERSION` (second surface behind the same
-picker ABI, `$AETHER_UI_PICKER=drawn|native`). Both non-trivial; the
-dropdown is the highest-risk (ABI parity for set/get_selected + change
-callbacks). See briefs/overlay.md §D3 for the shape.
+that eats clicks (proven by a real-hit-test `GET /window/pick` resolving
+the scrim ahead of the button beneath it); a drawn tooltip for vg scenes
+(`vg_tooltip_*`, wired into the vg live hover path, gated
+`$AETHER_UI_TOOLTIP=drawn`); a drawn dropdown picker (a button trigger +
+overlay list behind the same picker ABI, gated `$AETHER_UI_PICKER=drawn`,
+ABI parity with the native GtkDropDown proven by a surface-agnostic
+spec). `GET /overlays` + `GET /window/pick` driver routes; examples
+overlay_demo / vg_tooltip and the picker example, specs at ci.sh Phases
+5b/5c/5d (6+4+3 checks). win32/macOS stubs. Full ci.sh green. Because
+everything draws in-window (no xdg_popup), it works on sommelier by
+construction (design fact, not machine-verifiable on this box). Detail
+below is the original proposal, kept for the reasoning.
 
 **Borrowed from:** Swing `JLayeredPane` (POPUP_LAYER / MODAL_LAYER / glass
 pane) — its menus worked everywhere *because they were drawn in-window*,
@@ -304,7 +302,7 @@ format: comparisons, verdict, phased ci-gated migration).
 
 | Order | Item | Size | Why this order |
 |-------|------|------|----------------|
-| 1 | Overlay layer (+ drawn dropdown) | M | Retires a live platform bug; foundation for menus/toasts/modals |
+| 1 | Overlay layer ✅ | M | DONE 2026-07-12 (526bd6a/27ad331/a9d73dc) — host + toast + modal scrim + drawn tooltip + drawn dropdown; sommelier-proof by construction |
 | 2 | Typography ✅ | M | DONE 2026-07-12 (9e55d0c/12c32cc/aa78062/f299b06) — +17 debt gone, metrics API + driver route shipped |
 | 3 | `each` (dynamic children) | M | Loops/ifs are first-class + runtime attach probed working; only remove/insert + reconciler to build |
 | 4 | Table/list | L–XL | The flagship widget; needs 2 & 3 |
