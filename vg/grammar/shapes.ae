@@ -58,6 +58,10 @@ import vg.grammar.defs
 import std.math
 
 extern malloc(size: int) -> ptr
+// Real text advance width (canvas px) for text-anchor centring. GTK4 gives
+// cairo metrics; headless recording tests link a 0-returning stub, so
+// centring is a no-op there (they assert opts, not pixels).
+extern aether_ui_text_measure(size: float, text: string) -> float
 
 // ─── attr helpers ────────────────────────────────────────────────
 //
@@ -983,20 +987,26 @@ shape_text(ctx: ptr, backend: ptr, node_h: ptr) -> ptr {
     mx = transform.pt_x(p)
     my = transform.pt_y(p)
 
-    opts = mk_text_opts(content, mx, my - baseline_offset, fill_color,
+    // text-anchor: shift the DRAWN origin left by the real advance width
+    // (half for middle, full for end). SVG's x is the anchor point, not the
+    // left edge. Measured width falls back to a char estimate when the
+    // backend has no metrics (headless stub → 0), so a corpus render under
+    // GTK centres correctly and headless opt-tests stay stable.
+    adv = aether_ui_text_measure(text_size, content)
+    if adv <= 0.0 { adv = string.length(content) * text_size * 0.6 }
+    dx = mx
+    if string.equals(alignment, "center") == 1   { dx = mx - adv / 2.0 }
+    if string.equals(alignment, "trailing") == 1 { dx = mx - adv }
+
+    opts = mk_text_opts(content, dx, my - baseline_offset, fill_color,
                        text_size, alignment, bold, italic, monospace)
     underlying = dispatch.dispatch_text(backend, opts)
 
     maybe_pop_transform(ctx, did_push)
     el = element.element_new(underlying)
 
-    // Estimate bounds for hit-testing.
-    est_w = string.length(content) * text_size * 0.6
-    est_h = text_size
-    bx = mx
-    if string.equals(alignment, "center") == 1   { bx = mx - est_w / 2.0 }
-    if string.equals(alignment, "trailing") == 1 { bx = mx - est_w }
-    element.element_set_bounds(el, bx, my - est_h, est_w, est_h)
+    // Hit-test bounds from the same measured width, anchored at the drawn x.
+    element.element_set_bounds(el, dx, my - text_size, adv, text_size)
     return el
 }
 
