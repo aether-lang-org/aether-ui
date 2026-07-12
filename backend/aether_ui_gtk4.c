@@ -1666,6 +1666,20 @@ static void canvas_add_cmd(int canvas_id, CanvasCmd cmd) {
 // Replay a canvas command buffer onto any cairo context. Shared by the live
 // GtkDrawingArea draw func and the off-screen PNG renderer (canvas_write_png),
 // so on-screen and headless output are byte-identical.
+// Select a cairo toy font from packed flags: bit0 = monospace, bit1 = bold,
+// bit2 = italic. font-family maps to the generic cairo families
+// ("monospace"/"serif"/"sans-serif") — enough for the corpus's courier/serif/
+// sans without a full font-name database. Called before every text draw so
+// each run uses its own family/slant/weight (a prior run's face doesn't leak).
+static void canvas_select_font(cairo_t* cr, int flags) {
+    const char* family = (flags & 1) ? "monospace" : "sans-serif";
+    cairo_font_slant_t slant = (flags & 4) ? CAIRO_FONT_SLANT_ITALIC
+                                           : CAIRO_FONT_SLANT_NORMAL;
+    cairo_font_weight_t weight = (flags & 2) ? CAIRO_FONT_WEIGHT_BOLD
+                                             : CAIRO_FONT_WEIGHT_NORMAL;
+    cairo_select_font_face(cr, family, slant, weight);
+}
+
 static void canvas_replay(cairo_t* cr, CanvasState* cs) {
     if (!cs) return;
     for (int i = 0; i < cs->count; i++) {
@@ -1721,6 +1735,7 @@ static void canvas_replay(cairo_t* cr, CanvasState* cs) {
                 cairo_fill(cr);
                 break;
             case CANVAS_FILL_TEXT:
+                canvas_select_font(cr, c->iw);   // iw packs mono|bold<<1|italic<<2
                 cairo_set_source_rgba(cr, c->r, c->g, c->b, c->a);
                 cairo_set_font_size(cr, c->w);
                 cairo_move_to(cr, c->x, c->y);
@@ -1733,6 +1748,7 @@ static void canvas_replay(cairo_t* cr, CanvasState* cs) {
                 // Round join/cap so a wide stroke fills without miter spikes.
                 cairo_line_join_t pj = cairo_get_line_join(cr);
                 cairo_line_cap_t  pc = cairo_get_line_cap(cr);
+                canvas_select_font(cr, c->iw);
                 cairo_set_source_rgba(cr, c->r, c->g, c->b, c->a);
                 cairo_set_font_size(cr, c->w);
                 cairo_set_line_width(cr, c->h);
@@ -2209,9 +2225,11 @@ void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, dou
 
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
+                                      int font_flags,
                                       double r, double g, double b, double a) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size,
+        .iw = font_flags,   // mono|bold<<1|italic<<2 (see canvas_select_font)
         .r = r, .g = g, .b = b, .a = a,
         .text = text ? strdup(text) : NULL
     });
@@ -2221,10 +2239,11 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
 // r,g,b,a. Queue AFTER the fill for the same run so the outline paints on top.
 void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
-                                        double line_width,
+                                        double line_width, int font_flags,
                                         double r, double g, double b, double a) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_STROKE_TEXT, .x = x, .y = y, .w = font_size, .h = line_width,
+        .iw = font_flags,
         .r = r, .g = g, .b = b, .a = a,
         .text = text ? strdup(text) : NULL
     });

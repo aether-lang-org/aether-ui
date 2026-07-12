@@ -1629,7 +1629,9 @@ void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, dou
 
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
+                                      int font_flags,
                                       double r, double g, double b, double a) {
+    (void)font_flags;   // font-family selection not yet wired on AppKit
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size,
         .r = r, .g = g, .b = b, .a = a,
@@ -1642,10 +1644,10 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
 // Mac mini. No-op keeps the ABI linkable (the GTK4 backend is real).
 void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
-                                        double line_width,
+                                        double line_width, int font_flags,
                                         double r, double g, double b, double a) {
     (void)canvas_id; (void)text; (void)x; (void)y; (void)font_size;
-    (void)line_width; (void)r; (void)g; (void)b; (void)a;
+    (void)line_width; (void)font_flags; (void)r; (void)g; (void)b; (void)a;
 }
 
 // Text metrics — STUB (returns zeros). AppKit has real metrics via

@@ -2472,7 +2472,9 @@ void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, dou
 
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
+                                      int font_flags,
                                       double r, double g, double b, double a) {
+    (void)font_flags;   // font-family selection not yet wired on Win32
     CanvasCmd c = {0};
     c.k = CV_FILL_TEXT; c.p0 = x; c.p1 = y; c.p2 = font_size;
     c.cr = r; c.cg = g; c.cb = b; c.calpha = a;
@@ -2485,10 +2487,10 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
 // winbaz. No-op keeps the ABI linkable (the GTK4 backend is real).
 void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
-                                        double line_width,
+                                        double line_width, int font_flags,
                                         double r, double g, double b, double a) {
     (void)canvas_id; (void)text; (void)x; (void)y; (void)font_size;
-    (void)line_width; (void)r; (void)g; (void)b; (void)a;
+    (void)line_width; (void)font_flags; (void)r; (void)g; (void)b; (void)a;
 }
 
 // Text metrics — STUB (returns zeros). Win32 has real metrics via GDI

@@ -207,7 +207,12 @@ void aether_ui_canvas_close_path_impl(int canvas_id);
 void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a);
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
+                                      int font_flags,
                                       double r, double g, double b, double a);
+void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
+                                        double x, double y, double font_size,
+                                        double line_width, int font_flags,
+                                        double r, double g, double b, double a);
 void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
                                        int iw, int ih,
                                        const unsigned char* rgba, int byte_len);
