@@ -54,13 +54,25 @@ main() {
                     // Build the modal card content imperatively, then open it
                     // as a modal overlay (scrim + card). Dismiss via its button
                     // or by clicking the scrim.
+                    //
+                    // NB the Dismiss closure is created BEFORE modal_handle is
+                    // assigned below, so it must SHARE the variable rather than
+                    // capture a copy of it. Aether heap-promotes a captured
+                    // local that a closure ASSIGNS to (see aether
+                    // docs/closures-and-builder-dsl.md §Ref Cells) — a
+                    // read-only capture would take a by-value snapshot of the
+                    // pre-assignment value and dismiss the wrong (0) handle.
+                    // Zeroing it here is both the semantic reset AND what makes
+                    // the capture shared.
                     card = root_vstack(10)
                     _ = text(card, "Really do the thing?")
                     _ = btn(card, "Dismiss") callback {
                         dismiss_overlay(modal_handle)
+                        modal_handle = 0
                     }
                     modal_handle = overlay_modal(0, card, "center", 0, 0) callback {
-                        // scrim clicked → nothing extra; the layer closes it.
+                        // scrim clicked → the layer closes it; drop our handle.
+                        modal_handle = 0
                     }
                 }
             }
