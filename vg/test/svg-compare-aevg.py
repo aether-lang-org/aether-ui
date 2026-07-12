@@ -37,10 +37,12 @@ import tempfile
 from pathlib import Path
 from PIL import Image
 
-SCRIPT_DIR = Path(__file__).resolve().parent           # aevg/test
+SCRIPT_DIR = Path(__file__).resolve().parent           # vg/test
 AEVG_ROOT = SCRIPT_DIR.parent.parent                   # repo root (aether-ui)
-RENDER_BIN = AEVG_ROOT / 'build' / 'svg_render'
-BUILD_SH = AEVG_ROOT / 'build.sh'
+# Post-re-namespace (2026-07): the loader binary is the aeb-built
+# svg_render_png app, not the old build.sh `build/svg_render`.
+RENDER_BIN = AEVG_ROOT / 'target' / 'build' / 'apps' / 'svg_render_png' / 'bin' / 'svg_render_png'
+BUILD_SH = AEVG_ROOT / 'build.sh'      # only used by the --transpile path (removed; that path is stale)
 
 # Default corpus: the cosyne 208-file W3C/CVG set. Override with --svg-dir.
 DEFAULT_SVG_DIR = Path.home() / 'scm' / 'tsyne' / 'tsyne' / 'cosyne' / 'test' / 'svg'
