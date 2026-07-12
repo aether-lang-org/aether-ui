@@ -1356,6 +1356,15 @@ as_float_literal(s: string) -> string {
     }
     num = strbuilder.finish(out)
     if seen_digit == 0 { return "0.0" }
+    // A leading '.' (e.g. ".5" from `x='.5'`) or '-.' ("-.5") is not a
+    // valid Aether float literal — it needs a digit before the point.
+    if string.starts_with(num, ".") == 1 {
+        num = string.concat("0", num)
+    } else {
+        if string.starts_with(num, "-.") == 1 {
+            num = string.concat("-0", string.substring(num, 1, string.length(num)))
+        }
+    }
     if string.index_of(num, ".") >= 0 { return num }
     return string.concat(num, ".0")
 }

@@ -448,8 +448,70 @@ build_tree(tokens: ptr) -> *SvgNode {
 
 // ─── Entry point ─────────────────────────────────────────────────
 
+// ─── Custom entity expansion ─────────────────────────────────────
+//
+// DOCTYPE internal subsets may declare `<!ENTITY name "value">` and
+// the body then references them as `&name;`. ~5% of real-world SVGs
+// (and several W3C conformance samples, e.g. smile.svg) use this to
+// factor out repeated fragments. strip_headers() removes the DOCTYPE,
+// so we must harvest the entity table BEFORE stripping and expand the
+// `&name;` references afterwards.
+//
+// One expansion pass: an entity value may itself contain `&other;`,
+// but the common (and conformance-corpus) case is flat. We iterate a
+// few times so a value referencing another declared entity still
+// resolves, stopping once a pass makes no change.
+expand_entities(s: string) -> string {
+    // <!ENTITY name "value"> — value may span lines and contain markup
+    // (but not an unescaped '"'). Whole-match offsets only; re-scan for
+    // the name token and the quoted value, mirroring the transform.ae
+    // parser idiom.
+    re, e = regex.compile_flags("<!ENTITY\\s+[A-Za-z_][A-Za-z0-9_.-]*\\s+\"[^\"]*\">",
+                                regex.FLAG_DOTALL)
+    if e != "" { return s }
+    fa, fe = regex.find_all(re, s)
+    if fe != "" {
+        regex.free(re)
+        return s
+    }
+    n = regex.find_all_count(fa)
+    // Collect (name, value) pairs. No dynamic arrays of strings handy;
+    // build a single replacement pass by applying each as we parse.
+    out = s
+    i = 0
+    while i < n {
+        st = regex.find_all_start(fa, i)
+        en = regex.find_all_end(fa, i)
+        tok = string.substring(s, st, en)
+        // tok = <!ENTITY name "value">
+        // name: between the ENTITY keyword whitespace and the opening quote
+        q1 = string.index_of(tok, "\"")
+        if q1 < 0 { i = i + 1; continue }
+        head = string.trim(string.substring(tok, 8, q1)) // after "<!ENTITY"
+        // head is the entity name (possibly with trailing space already trimmed)
+        name = head
+        rest = string.substring(tok, q1 + 1, string.length(tok))
+        q2 = string.index_of(rest, "\"")
+        if q2 < 0 { i = i + 1; continue }
+        value = string.substring(rest, 0, q2)
+        // Replace every `&name;` in the body with value. `&` and `;`
+        // are not regex metacharacters and entity names are
+        // alphanumeric, so a literal pattern is safe.
+        ref_re, re_e = regex.compile(string.concat(string.concat("&", name), ";"))
+        if re_e == "" {
+            out, _ = regex.replace_all(ref_re, out, value)
+            regex.free(ref_re)
+        }
+        i = i + 1
+    }
+    regex.find_all_free(fa)
+    regex.free(re)
+    return out
+}
+
 parse_svg(s: string) -> ptr {
-    stripped = strip_headers(s)
+    expanded = expand_entities(s)
+    stripped = strip_headers(expanded)
     tokens = tokenize(stripped)
     root = build_tree(tokens)
     if root == null { return mk_node("svg") }

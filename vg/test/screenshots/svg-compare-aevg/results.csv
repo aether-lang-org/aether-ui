@@ -1,5 +1,4 @@
 file,loader_mae,loader_status,transpiled_mae
-smile.svg,87.7,diff,87.7
 circles1.svg,63.4,diff,95.4
 tiger.svg,59.4,diff,59.4
 bloglines.svg,39.2,ok,42.2
@@ -9,7 +8,7 @@ Steps.svg,33.6,ok,43.1
 mouseEvents.svg,32.4,ok,32.4
 test_style_stroke.svg,28.1,ok,28.1
 test_stroke_style.svg,25.2,ok,28.9
-preserveAspectRatio.svg,20.0,ok,21.9
+preserveAspectRatio.svg,20.1,ok,20.1
 AJ_Digital_Camera.svg,18.2,good,18.3
 accessible.svg,17.9,good,17.9
 ny1.svg,17.2,good,12.8
@@ -29,6 +28,7 @@ scimitar.svg,5.5,good,5.5
 italian-flag.svg,5.4,good,5.4
 rg1024_metal_effect.svg,5.3,good,5.3
 mozilla.svg,5.3,good,5.3
+smile.svg,5.2,good,5.2
 ruby.svg,4.9,good,4.9
 vote.svg,4.9,good,4.9
 displayWebStats.svg,4.8,good,5.2
