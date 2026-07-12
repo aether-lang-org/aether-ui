@@ -445,11 +445,15 @@ emit_node_explicit(sb: ptr, node: ptr, indent: int, ctr: ptr,
                 _ = strbuilder.append(sb, escape_str(rounded_rect_d(node)))
                 _ = strbuilder.append(sb, "\")\n")
             } else {
-                _ = strbuilder.append(sb, "vg.")
-                _ = strbuilder.append(sb, tag)
-                _ = strbuilder.append(sb, "(node")
-                emit_geom_args_explicit(sb, node, tag)
-                _ = strbuilder.append(sb, ")\n")
+                if string.equals(tag, "text") == 1 {
+                    emit_text_explicit(sb, node)
+                } else {
+                    _ = strbuilder.append(sb, "vg.")
+                    _ = strbuilder.append(sb, tag)
+                    _ = strbuilder.append(sb, "(node")
+                    emit_geom_args_explicit(sb, node, tag)
+                    _ = strbuilder.append(sb, ")\n")
+                }
             }
         }
     }
@@ -465,6 +469,52 @@ inherit_or(node: ptr, key: string, inherited: string) -> string {
     own = style_attr(node, key)
     if string.length(own) > 0 { return own }
     return inherited
+}
+
+// Explicit-node text emit: pick vg.text / text_sized / text_anchored so
+// font-size and text-anchor survive (the render-fn path; mirrors emit_text
+// in the module path). font-size/anchor read cascade-aware (own attr, inline
+// style, or inherited from a flattened <g>).
+emit_text_explicit(sb: ptr, node: ptr) {
+    fs = style_attr(node, "font-size")
+    anch = style_attr(node, "text-anchor")
+    is_anch = 0
+    if string.equals(anch, "middle") == 1 { is_anch = 1 }
+    if string.equals(anch, "end") == 1    { is_anch = 1 }
+    t = escape_str(parser.node_text(node))
+    if is_anch == 1 {
+        _ = strbuilder.append(sb, "vg.text_anchored(node, ")
+        emit_num_attr(sb, node, "x", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "y", 0)
+        _ = strbuilder.append(sb, ", ")
+        _ = strbuilder.append(sb, as_float_literal(font_size_or_zero(fs)))
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, anch)
+        _ = strbuilder.append(sb, "\", \"")
+        _ = strbuilder.append(sb, t)
+        _ = strbuilder.append(sb, "\")\n")
+        return
+    }
+    if string.length(fs) > 0 {
+        _ = strbuilder.append(sb, "vg.text_sized(node, ")
+        emit_num_attr(sb, node, "x", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "y", 0)
+        _ = strbuilder.append(sb, ", ")
+        _ = strbuilder.append(sb, as_float_literal(font_size_or_zero(fs)))
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, t)
+        _ = strbuilder.append(sb, "\")\n")
+        return
+    }
+    _ = strbuilder.append(sb, "vg.text(node, ")
+    emit_num_attr(sb, node, "x", 0)
+    _ = strbuilder.append(sb, ", ")
+    emit_num_attr(sb, node, "y", 0)
+    _ = strbuilder.append(sb, ", \"")
+    _ = strbuilder.append(sb, t)
+    _ = strbuilder.append(sb, "\")\n")
 }
 
 // Geometry args (leading ", ") per shape, for the explicit vg.<verb>(node, …).
@@ -828,16 +878,69 @@ emit_path(sb: ptr, node: ptr, indent: int) {
 
 emit_text(sb: ptr, node: ptr, indent: int) {
     t = parser.node_text(node)
+    // Carry font-size and text-anchor through — the plain text() verb drops
+    // both (size-0 default, no anchor), which rendered explicitly-sized /
+    // centred labels small and left-anchored (e.g. 410.svg). Pick the verb:
+    //   text(x,y,s)                     — no size, no anchor
+    //   text_sized(x,y,size,s)          — sized, start-anchored
+    //   text_anchored(x,y,size,anch,s)  — sized + text-anchor middle/end
+    fs = style_attr(node, "font-size")
+    anch = style_attr(node, "text-anchor")
+    has_anchor = 0
+    if string.equals(anch, "middle") == 1 { has_anchor = 1 }
+    if string.equals(anch, "end") == 1    { has_anchor = 1 }
     pad(sb, indent)
-    _ = strbuilder.append(sb, "text(")
-    emit_num_attr(sb, node, "x", 0)
-    _ = strbuilder.append(sb, ", ")
-    emit_num_attr(sb, node, "y", 0)
-    _ = strbuilder.append(sb, ", \"")
-    _ = strbuilder.append(sb, escape_str(t))
-    _ = strbuilder.append(sb, "\")")
+    if has_anchor == 1 {
+        _ = strbuilder.append(sb, "text_anchored(")
+        emit_num_attr(sb, node, "x", 0)
+        _ = strbuilder.append(sb, ", ")
+        emit_num_attr(sb, node, "y", 0)
+        _ = strbuilder.append(sb, ", ")
+        _ = strbuilder.append(sb, as_float_literal(font_size_or_zero(fs)))
+        _ = strbuilder.append(sb, ", \"")
+        _ = strbuilder.append(sb, anch)
+        _ = strbuilder.append(sb, "\", \"")
+        _ = strbuilder.append(sb, escape_str(t))
+        _ = strbuilder.append(sb, "\")")
+    } else {
+        if string.length(fs) > 0 {
+            _ = strbuilder.append(sb, "text_sized(")
+            emit_num_attr(sb, node, "x", 0)
+            _ = strbuilder.append(sb, ", ")
+            emit_num_attr(sb, node, "y", 0)
+            _ = strbuilder.append(sb, ", ")
+            _ = strbuilder.append(sb, as_float_literal(font_size_or_zero(fs)))
+            _ = strbuilder.append(sb, ", \"")
+            _ = strbuilder.append(sb, escape_str(t))
+            _ = strbuilder.append(sb, "\")")
+        } else {
+            _ = strbuilder.append(sb, "text(")
+            emit_num_attr(sb, node, "x", 0)
+            _ = strbuilder.append(sb, ", ")
+            emit_num_attr(sb, node, "y", 0)
+            _ = strbuilder.append(sb, ", \"")
+            _ = strbuilder.append(sb, escape_str(t))
+            _ = strbuilder.append(sb, "\")")
+        }
+    }
     emit_style_block(sb, node)
     _ = strbuilder.append(sb, "\n")
+}
+
+// Parse a CSS font-size like "48" or "48px" to a float literal string; "0"
+// when absent/unparseable (→ engine default).
+font_size_or_zero(fs: string) -> string {
+    if string.length(fs) == 0 { return "0" }
+    v, e = string.to_double(string.trim(strip_px(fs)))
+    if e != "" { return "0" }
+    return string.from_float(v)
+}
+
+strip_px(s: string) -> string {
+    if string.ends_with(s, "px") == 1 {
+        return string.substring(s, 0, string.length(s) - 2)
+    }
+    return s
 }
 
 // <ellipse> has no DSL verb — emit it as a path() with the two-arc d,

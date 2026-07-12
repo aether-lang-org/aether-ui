@@ -39,7 +39,7 @@
 
 exports (
     view_box,
-    circle, rect, line, path, text, text_sized, g,
+    circle, rect, line, path, text, text_sized, text_anchored, g,
     fill, stroke, opacity, transform, linecap, linejoin,
     // Interaction modifiers (attach a handler to the shape's element).
     on_click, on_hover, on_double_click, on_right_click, cursor, tooltip,
@@ -143,6 +143,7 @@ struct VgPending {
     ty: float       // text only: y
     content: string // text only: the string
     font_size: float // text only: font-size in viewBox units (0 = engine default)
+    anchor: string  // text only: "" (start) | "middle" | "end" (text-anchor)
     tracked: int    // 1 once track_element'd (re-flush must not double-track)
 }
 
@@ -352,9 +353,18 @@ text(_ctx: ptr, x: float, y: float, content: string) -> ptr {
 // text_sized — like text but with an explicit font-size (viewBox units). size
 // 0 falls back to the engine default. Both deferred and eager paths carry it.
 text_sized(_ctx: ptr, x: float, y: float, size: float, content: string) -> ptr {
+    return text_anchored(_ctx, x, y, size, "", content)
+}
+
+// text_anchored — text_sized plus a text-anchor ("middle"/"end"; ""/"start"
+// = leading). The renderer shifts the drawn origin by the measured width, so
+// x is the anchor point (SVG's text-anchor semantics). This is the verb the
+// SVG transpiler emits for anchored text; hand-written apps can use it to
+// centre a label without measuring.
+text_anchored(_ctx: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
     scene = node_scene(_ctx)
     if scene_is_deferred(scene) == 1 {
-        return record_text(scene, x, y, size, content)
+        return record_text(scene, x, y, size, anchor, content)
     }
     s = "<svg><text x='"
     s = string.concat(s, string.from_float(x))
@@ -363,6 +373,10 @@ text_sized(_ctx: ptr, x: float, y: float, size: float, content: string) -> ptr {
     if size > 0.0 {
         s = string.concat(s, "' font-size='")
         s = string.concat(s, string.from_float(size))
+    }
+    if string.length(anchor) > 0 {
+        s = string.concat(s, "' text-anchor='")
+        s = string.concat(s, anchor)
     }
     s = string.concat(s, "'>")
     s = string.concat(s, content)
@@ -574,10 +588,10 @@ record_shape(scene: ptr, kind: int, attrs: ptr) -> ptr {
     return mk_node(scene, el)
 }
 
-record_text(scene: ptr, x: float, y: float, size: float, content: string) -> ptr {
+record_text(scene: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
-    p = malloc(72) as *VgPending
+    p = malloc(80) as *VgPending
     p.kind = 4
     p.attrs = null
     p.element = el
@@ -589,6 +603,9 @@ record_text(scene: ptr, x: float, y: float, size: float, content: string) -> ptr
     string_retain(cc)
     p.content = cc
     p.font_size = size
+    ac = string.copy(anchor)
+    string_retain(ac)
+    p.anchor = ac
     p.tracked = 0
     _ = list.add(s.pending, p)
     return mk_node(scene, el)
@@ -780,7 +797,7 @@ scene_free_recording(scene: ptr) {
             item, _ = list.get(s.pending, i)
             pend = item as *VgPending
             if pend.attrs != null { map.free(pend.attrs) }
-            if pend.kind == 4 { string_release(pend.content) }
+            if pend.kind == 4 { string_release(pend.content); string_release(pend.anchor) }
             element.element_release(pend.element)
             free(item)
             i = i + 1
@@ -995,6 +1012,10 @@ flush_text(ctx: ptr, be: ptr, p: ptr) {
     if string.length(fillc) > 0 {
         s = string.concat(s, "' fill='")
         s = string.concat(s, fillc)
+    }
+    if string.length(pend.anchor) > 0 {
+        s = string.concat(s, "' text-anchor='")
+        s = string.concat(s, pend.anchor)
     }
     s = string.concat(s, "'>")
     s = string.concat(s, pend.content)
