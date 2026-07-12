@@ -23,17 +23,31 @@ pre-allocating widget pools. Concretely:
 
 ## Ground truth (verified 2026-07-12 — start here; two roadmap claims are STALE)
 
+- **Why `each` is not duplicating "DSL with scope"** (the design
+  boundary — see aether/docs/closures-and-builder-dsl.md): the language
+  already gives repetition over SPACE at build time (immediate blocks
+  are inline code, so `while`/`for` inside `window {}` is a build-time
+  Repeater — do NOT build a loop wrapper). What it cannot give is
+  repetition over TIME: re-running the per-item build when the list
+  CHANGES, scoping which children belong to the group, and removing the
+  ones that fell off. That reconciler is why SwiftUI has ForEach and
+  React has keys despite both host languages having loops. `each` is
+  only that half.
 - **Runtime creation + attach is SHIPPED CODE, not just a probe.**
   `examples/overlay_demo/overlay_demo.ae` builds its modal card
   imperatively INSIDE a button callback: `card = root_vstack(10)` then
   `_ = text(card, "…")`, `_ = btn(card, "Dismiss") callback {…}` — the
   handle-as-`_ctx` first-arg pattern attaches at runtime and displays
-  (landed 526bd6a, spec-covered in ci Phase 5b). There is NO
-  `builder_context()` function anywhere in the repo — the roadmap's
-  sketch of one is pseudo-code; capturing the container's *handle*
-  (every container verb returns it) IS the mechanism. Ergonomics item
-  (c) from the roadmap is therefore mostly *verify + document*, not
-  build.
+  (landed 526bd6a, spec-covered in ci Phase 5b).
+- **`builder_context()` IS a language builtin** (aether repo:
+  typechecker.c:2497 registers it; codegen_expr.c:3334 emits the
+  context-stack read; documented in docs/closures-and-builder-dsl.md
+  §Builder Context Stack). Nothing in aether-ui uses it yet — that's
+  why a repo grep finds nothing. It reads the CURRENT stack, so it's
+  live inside immediate blocks but NOT inside a later callback (the
+  stack has unwound by then) — hence capturing the container *handle*
+  remains the callback-safe mechanism, and roadmap item (c) is mostly
+  *verify + document*, not build.
 - **remove_child / clear_children ALREADY EXIST** (the roadmap's
   "removal doesn't" is stale): exported from `ui/module.ae:48`, wrappers
   at ~1182, impls on ALL THREE backends —
@@ -119,6 +133,16 @@ pre-allocating widget pools. Concretely:
   arg `|item, i, parent|`; pick whichever the closure/param plumbing
   makes cleaner (the 3-arg form avoids the chicken-and-egg of using
   `crumbs` inside its own defining block — RECOMMENDED).
+- **Phase-A probe, optional upgrade:** the compiler's context stack has
+  a C ABI (`_aether_ctx_push`/`_aether_ctx_pop` — see
+  closures-and-builder-dsl.md §Implementation Notes). If those are
+  extern-declarable from Aether and safe to call, `each_update` can
+  push the group container around the render invocation — then the
+  render body uses PLAIN declarative verbs (auto-injected `_ctx`, no
+  parent param at all), reading exactly like the rest of the DSL. Probe
+  it; if it works, prefer it; if it's fragile (internal ABI, stack
+  depth 64), fall back to the 3-arg form without ceremony. Do NOT file
+  an aether ask for this in this brief's scope.
 - If GTK_IS_BOX-only `clear_children` proves insufficient for the group
   container, extend the C impl minimally (it's already box-only-safe:
   the group IS a box by construction).
