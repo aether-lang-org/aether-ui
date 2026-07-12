@@ -16,16 +16,21 @@ OS="$(uname -s)"
 # Build the driver app for whichever platform we're on.
 case "$OS" in
     MINGW*|MSYS*|CYGWIN*)
-        # Backend sources live under backend/ (post-re-namespace). Link flags
-        # mirror build.sh's Windows branch — notably -lbcrypt (libaether's
-        # BCryptGenRandom) and -lmsimg32.
+        # Backend sources live under backend/ (post-re-namespace). The win32
+        # backend now pulls aether runtime symbols (floatarr_* in the gradient
+        # path), so we must link libaether — includes + -L come from
+        # `ae cflags`, exactly like build.sh. Link flags mirror build.sh's
+        # Windows branch (-lbcrypt for libaether's BCryptGenRandom, -lmsimg32).
         mkdir -p "$ROOT/build"
+        AE_INC="$(ae cflags 2>/dev/null | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ')"
+        AE_LPATH="$(ae cflags --libs 2>/dev/null | tr ' ' '\n' | grep -E '^-L' | head -1)"
         gcc -O2 \
-            -I"$ROOT" -I"$ROOT/backend" \
+            -I"$ROOT" -I"$ROOT/backend" $AE_INC \
             "$SCRIPT_DIR/test_driver_app.c" \
             "$ROOT/backend/aether_ui_win32.c" \
             "$ROOT/backend/aether_ui_test_server.c" \
             "$ROOT/backend/aether_ui_system_extras.c" \
+            $AE_LPATH -laether \
             -o "$ROOT/build/test_driver_app.exe" \
             -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
             -lshell32 -lole32 -luuid -ldwmapi -luxtheme \
