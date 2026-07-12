@@ -180,6 +180,10 @@ static AppEntry* apps = NULL;
 static int app_count = 0;
 static int app_capacity = 0;
 
+// The primary application window (set in on_activate). The overlay layer
+// resolves handle 0 to this — the driver's common "main window" case.
+static GtkWindow* primary_window = NULL;
+
 // ---------------------------------------------------------------------------
 // Surface table — "DSL with Scope" surfaces (window / render_to / record).
 //
@@ -313,6 +317,7 @@ static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
     GtkWidget* window = gtk_application_window_new(gtk_app);
     gtk_window_set_title(GTK_WINDOW(window), entry->title);
     gtk_window_set_default_size(GTK_WINDOW(window), entry->width, entry->height);
+    primary_window = GTK_WINDOW(window);   // overlay layer resolves handle 0 here
 
     if (entry->root_handle > 0) {
         GtkWidget* root = aether_ui_get_widget(entry->root_handle);
@@ -1472,6 +1477,246 @@ int aether_ui_dark_mode_check(void) {
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// In-window overlay layer (roadmap item 1) — the Swing JLayeredPane / Flutter
+// Overlay, aimed at the sommelier wound.
+//
+// A window's overlay entries (toasts, dropdowns, tooltips, modal scrims) are
+// drawn IN-WINDOW via a GtkOverlay interposed between the window and its root
+// widget — NOT as compositor popups (xdg_popup surfaces never display under
+// ChromeOS/Crostini sommelier; a drawn overlay always does, by construction).
+//
+// The GtkOverlay is interposed LAZILY the first time an overlay opens on a
+// window: we take the window's current child, make it the overlay's main
+// child, and set the overlay as the window's child. When no overlay is open
+// the window structure is byte-identical to before — so existing apps and
+// specs see zero change. (Verified design: GtkOverlay adds no chrome and the
+// main child fills it exactly as it filled the window.)
+//
+// Positioning is anchor (9 halign/valign combos) + margin (dx, dy). A modal
+// entry first inserts a full-window scrim that eats clicks and, on click/Esc,
+// fires the on-dismiss closure (Swing's glass pane).
+// ---------------------------------------------------------------------------
+
+// Anchor enum: halign in bits 0-1 (0=start,1=center,2=end), valign in bits
+// 2-3. Matches the DSL string→int mapping in ui/module.ae.
+static GtkAlign aeui_anchor_h(int anchor) {
+    switch (anchor & 3) {
+        case 0: return GTK_ALIGN_START;
+        case 2: return GTK_ALIGN_END;
+        default: return GTK_ALIGN_CENTER;
+    }
+}
+static GtkAlign aeui_anchor_v(int anchor) {
+    switch ((anchor >> 2) & 3) {
+        case 0: return GTK_ALIGN_START;
+        case 2: return GTK_ALIGN_END;
+        default: return GTK_ALIGN_CENTER;
+    }
+}
+
+typedef struct {
+    GtkWidget* content;      // the overlay entry's content widget (weak: owned by GTK)
+    GtkWidget* scrim;        // modal scrim (NULL for non-modal)
+    GtkWindow* window;       // owning window
+    AeClosure* on_dismiss;   // fired on scrim click / dismiss (owned copy, may be NULL)
+    int modal;
+    int live;                // 0 once closed
+} OverlayEntry;
+
+static OverlayEntry* overlays = NULL;
+static int overlay_count = 0;
+static int overlay_capacity = 0;
+
+// Install overlay CSS (scrim dim, toast/tooltip chrome) once, on first use.
+static void aeui_overlay_css_once(void) {
+    static int done = 0;
+    if (done) return;
+    done = 1;
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) { done = 0; return; }
+    GtkCssProvider* prov = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(prov,
+        ".aui-overlay-scrim { background-color: rgba(0,0,0,0.45); }"
+        ".aui-toast {"
+        "  background-color: rgba(30,30,30,0.92); color: white;"
+        "  padding: 10px 18px; border-radius: 8px; margin: 24px;"
+        "}"
+        ".aui-tooltip {"
+        "  background-color: rgba(20,20,20,0.95); color: white;"
+        "  padding: 4px 8px; border-radius: 4px;"
+        "}"
+        ".aui-drawn-dropdown {"
+        "  background-color: @theme_bg_color;"
+        "  border: 1px solid alpha(currentColor, 0.25); border-radius: 6px;"
+        "}"
+        ".aui-overlay-card {"
+        "  background-color: @theme_bg_color;"
+        "  border: 1px solid alpha(currentColor, 0.2); border-radius: 10px;"
+        "  padding: 20px;"
+        "}", -1);
+    gtk_style_context_add_provider_for_display(
+        display, GTK_STYLE_PROVIDER(prov),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
+    g_object_unref(prov);
+}
+
+// Interpose (lazily) and return the GtkOverlay hosting a window's content.
+static GtkOverlay* aeui_window_overlay(GtkWindow* win) {
+    if (!win) return NULL;
+    aeui_overlay_css_once();
+    GtkWidget* child = gtk_window_get_child(win);
+    if (child && GTK_IS_OVERLAY(child) &&
+        g_object_get_data(G_OBJECT(child), "aeui-overlay-host")) {
+        return GTK_OVERLAY(child);
+    }
+    // Interpose: window -> overlay -> (old child as main).
+    GtkWidget* ov = gtk_overlay_new();
+    g_object_set_data(G_OBJECT(ov), "aeui-overlay-host", GINT_TO_POINTER(1));
+    if (child) {
+        g_object_ref(child);
+        gtk_window_set_child(win, NULL);
+        gtk_overlay_set_child(GTK_OVERLAY(ov), child);
+        g_object_unref(child);
+    }
+    gtk_window_set_child(win, ov);
+    return GTK_OVERLAY(ov);
+}
+
+// Resolve a 1-based aether window handle (0 = the primary app window) to its
+// GtkWindow. Overlay APIs accept 0 to mean "the main window" (the driver's
+// common case); >0 indexes extra_windows.
+static GtkWindow* aeui_resolve_window(int win_handle);   // fwd (defined after WindowEntry)
+
+static void overlay_fire_dismiss(OverlayEntry* e) {
+    if (e->on_dismiss && e->on_dismiss->fn)
+        ((void(*)(void*))e->on_dismiss->fn)(e->on_dismiss->env);
+}
+
+static void overlay_do_close(OverlayEntry* e) {
+    if (!e->live) return;
+    e->live = 0;
+    GtkOverlay* ov = aeui_window_overlay(e->window);
+    if (ov) {
+        if (e->scrim) gtk_overlay_remove_overlay(ov, e->scrim);
+        if (e->content) gtk_overlay_remove_overlay(ov, e->content);
+    }
+    e->scrim = NULL;
+    e->content = NULL;
+}
+
+static void on_scrim_pressed(GtkGestureClick* g, int n, double x, double y,
+                             gpointer data) {
+    (void)g; (void)n; (void)x; (void)y;
+    OverlayEntry* e = (OverlayEntry*)data;
+    overlay_fire_dismiss(e);
+    overlay_do_close(e);
+}
+
+// aether_ui_overlay_open_impl(win_handle, content_handle, anchor, dx, dy,
+// modal) -> overlay handle (1-based, 0 on failure).
+int aether_ui_overlay_open_impl(int win_handle, int content_handle,
+                                int anchor, int dx, int dy, int modal) {
+    GtkWindow* win = aeui_resolve_window(win_handle);
+    GtkWidget* content = aether_ui_get_widget(content_handle);
+    if (!win || !content) return 0;
+    GtkOverlay* ov = aeui_window_overlay(win);
+    if (!ov) return 0;
+
+    if (overlay_count >= overlay_capacity) {
+        overlay_capacity = overlay_capacity == 0 ? 8 : overlay_capacity * 2;
+        overlays = realloc(overlays, sizeof(OverlayEntry) * overlay_capacity);
+    }
+    OverlayEntry* e = &overlays[overlay_count++];
+    e->content = content;
+    e->scrim = NULL;
+    e->window = win;
+    e->on_dismiss = NULL;
+    e->modal = modal;
+    e->live = 1;
+
+    if (modal) {
+        // Full-window scrim first (below the content, above the app). A
+        // GtkDrawingArea with a translucent CSS background; a click gesture
+        // eats the press and dismisses.
+        GtkWidget* scrim = gtk_drawing_area_new();
+        gtk_widget_set_hexpand(scrim, TRUE);
+        gtk_widget_set_vexpand(scrim, TRUE);
+        gtk_widget_add_css_class(scrim, "aui-overlay-scrim");
+        GtkGesture* click = gtk_gesture_click_new();
+        g_signal_connect(click, "pressed", G_CALLBACK(on_scrim_pressed), e);
+        gtk_widget_add_controller(scrim, GTK_EVENT_CONTROLLER(click));
+        gtk_overlay_add_overlay(ov, scrim);
+        e->scrim = scrim;
+    }
+
+    // A modal's content is a card floating over the scrim — give it an opaque
+    // themed background so the dimmed app doesn't show through it.
+    if (modal) gtk_widget_add_css_class(content, "aui-overlay-card");
+
+    gtk_widget_set_halign(content, aeui_anchor_h(anchor));
+    gtk_widget_set_valign(content, aeui_anchor_v(anchor));
+    gtk_widget_set_margin_start(content, dx > 0 ? dx : 0);
+    gtk_widget_set_margin_end(content, dx < 0 ? -dx : 0);
+    gtk_widget_set_margin_top(content, dy > 0 ? dy : 0);
+    gtk_widget_set_margin_bottom(content, dy < 0 ? -dy : 0);
+    gtk_overlay_add_overlay(ov, content);
+
+    return overlay_count; // 1-based
+}
+
+void aether_ui_overlay_close_impl(int overlay_handle) {
+    if (overlay_handle < 1 || overlay_handle > overlay_count) return;
+    overlay_do_close(&overlays[overlay_handle - 1]);
+}
+
+void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle,
+                                           void* boxed_closure) {
+    if (overlay_handle < 1 || overlay_handle > overlay_count) return;
+    overlays[overlay_handle - 1].on_dismiss = (AeClosure*)boxed_closure;
+}
+
+// True if an overlay handle is still open (for the driver route + tests).
+int aether_ui_overlay_is_live_impl(int overlay_handle) {
+    if (overlay_handle < 1 || overlay_handle > overlay_count) return 0;
+    return overlays[overlay_handle - 1].live;
+}
+
+int aether_ui_overlay_count_impl(void) { return overlay_count; }
+int aether_ui_overlay_is_modal_impl(int overlay_handle) {
+    if (overlay_handle < 1 || overlay_handle > overlay_count) return 0;
+    return overlays[overlay_handle - 1].modal;
+}
+
+// Toast — a self-contained styled label opened as a bottom-center overlay,
+// auto-dismissed after `ms` via a one-shot timer. Returns the overlay handle.
+// (A convenience over overlay_open; the chrome lives in the .aui-toast CSS.)
+typedef struct { int overlay_handle; } ToastTimer;
+
+static gboolean on_toast_expire(gpointer data) {
+    ToastTimer* t = (ToastTimer*)data;
+    aether_ui_overlay_close_impl(t->overlay_handle);
+    free(t);
+    return G_SOURCE_REMOVE;
+}
+
+int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
+    GtkWindow* win = aeui_resolve_window(win_handle);
+    if (!win) return 0;
+    GtkWidget* lbl = gtk_label_new(text ? text : "");
+    gtk_widget_add_css_class(lbl, "aui-toast");
+    int content = aether_ui_register_widget(lbl);
+    // Bottom-center (anchor v=bottom(2)<<2 | h=center(1) = 9), margin handled
+    // by the .aui-toast CSS.
+    int h = aether_ui_overlay_open_impl(win_handle, content, 9, 0, 0, 0);
+    if (h > 0 && ms > 0) {
+        ToastTimer* t = malloc(sizeof(ToastTimer));
+        t->overlay_handle = h;
+        g_timeout_add((guint)ms, on_toast_expire, t);
+    }
+    return h;
+}
+
 // Multi-window support
 typedef struct {
     GtkWindow* window;
@@ -1481,6 +1726,14 @@ typedef struct {
 static WindowEntry* extra_windows = NULL;
 static int extra_window_count = 0;
 static int extra_window_capacity = 0;
+
+// Resolve an overlay window handle: 0 = the primary app window; >0 indexes
+// the extra_windows table (1-based).
+static GtkWindow* aeui_resolve_window(int win_handle) {
+    if (win_handle == 0) return primary_window;
+    if (win_handle < 1 || win_handle > extra_window_count) return NULL;
+    return extra_windows[win_handle - 1].window;
+}
 
 int aether_ui_window_create_impl(const char* title, int width, int height) {
     ensure_gtk_init();
@@ -2602,6 +2855,40 @@ static const char* widget_type_name(GtkWidget* w) {
     return "widget";
 }
 
+// GET /window/pick?x=&y= — real GTK hit-test at a window-local point. Returns
+// the topmost widget's type + registered handle. This is the honest test of
+// overlay input policy: with a modal scrim up, a pick at a button's location
+// resolves to the scrim (a full-window widget above the app), NOT the button —
+// proving the glass pane eats clicks. Unlike /widget/{id}/click (which invokes
+// the handler directly, bypassing hit-testing), pick sees the real z-order.
+typedef struct { double x, y; int done; int handle; char type[32]; int on_scrim; } PickAction;
+
+static gboolean window_pick_idle(gpointer data) {
+    PickAction* pa = (PickAction*)data;
+    pa->handle = 0; pa->on_scrim = 0;
+    strcpy(pa->type, "none");
+    if (primary_window) {
+        GtkWidget* picked = gtk_widget_pick(GTK_WIDGET(primary_window),
+                                            pa->x, pa->y, GTK_PICK_DEFAULT);
+        // Walk up to the first widget we can name / that is a scrim.
+        for (GtkWidget* w = picked; w; w = gtk_widget_get_parent(w)) {
+            if (gtk_widget_has_css_class(w, "aui-overlay-scrim")) {
+                pa->on_scrim = 1;
+                strcpy(pa->type, "scrim");
+                break;
+            }
+            int h = handle_for_widget(w);
+            if (h > 0) {
+                pa->handle = h;
+                strncpy(pa->type, widget_type_name(w), sizeof(pa->type) - 1);
+                break;
+            }
+        }
+    }
+    pa->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
 // Get widget text content (for text labels and text fields).
 static const char* widget_text_content(GtkWidget* w) {
     if (!w) return "";
@@ -2644,6 +2931,20 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
     // to compute the viewBox→pixel mapping after a /window/resize.
     n += snprintf(buf + n, bufsize - n, ",\"w\":%d,\"h\":%d",
                   gtk_widget_get_width(w), gtk_widget_get_height(w));
+
+    // Window-local position (x,y) of the widget's top-left, for /window/pick
+    // based tests. 0,0 until mapped or if the root isn't a window.
+    {
+        GtkRoot* root = gtk_widget_get_root(w);
+        graphene_rect_t r;
+        if (root && GTK_IS_WIDGET(root) &&
+            gtk_widget_compute_bounds(w, GTK_WIDGET(root), &r)) {
+            n += snprintf(buf + n, bufsize - n, ",\"x\":%d,\"y\":%d",
+                          (int)r.origin.x, (int)r.origin.y);
+        } else {
+            n += snprintf(buf + n, bufsize - n, ",\"x\":0,\"y\":0");
+        }
+    }
 
     // Add type-specific values
     if (GTK_IS_CHECK_BUTTON(w)) {
@@ -3050,6 +3351,44 @@ static void handle_test_request(int client_fd) {
             send_response(client_fd, 500, "Error", "application/json",
                           "{\"error\":\"screenshot failed\"}");
         }
+        close(client_fd);
+        return;
+    }
+
+    // GET /overlays — list overlay entries (handle, modal, live). The overlay
+    // layer draws in-window (no compositor surface), so "live" is authoritative
+    // regardless of backend/compositor. Handles are 1-based, monotonic.
+    if (method == 0 && strcmp(path, "/overlays") == 0) {
+        char buf[4096];
+        int n = aether_ui_overlay_count_impl();
+        int off = snprintf(buf, sizeof(buf), "{\"count\":%d,\"overlays\":[", n);
+        for (int i = 1; i <= n && off < (int)sizeof(buf) - 64; i++) {
+            off += snprintf(buf + off, sizeof(buf) - off,
+                "%s{\"handle\":%d,\"modal\":%d,\"live\":%d}",
+                i > 1 ? "," : "", i,
+                aether_ui_overlay_is_modal_impl(i),
+                aether_ui_overlay_is_live_impl(i));
+        }
+        snprintf(buf + off, sizeof(buf) - off, "]}");
+        send_response(client_fd, 200, "OK", "application/json", buf);
+        close(client_fd);
+        return;
+    }
+
+    // GET /window/pick?x=&y= — hit-test at a window-local point (real z-order).
+    if (method == 0 && strncmp(path, "/window/pick", 12) == 0) {
+        PickAction pa = {0};
+        const char* xs = extract_query_param(path, "x");
+        const char* ys = extract_query_param(path, "y");
+        pa.x = xs ? atof(xs) : 0.0;
+        pa.y = ys ? atof(ys) : 0.0;
+        g_idle_add(window_pick_idle, &pa);
+        while (!pa.done) usleep(1000);
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "{\"handle\":%d,\"type\":\"%s\",\"on_scrim\":%d}",
+            pa.handle, pa.type, pa.on_scrim);
+        send_response(client_fd, 200, "OK", "application/json", buf);
         close(client_fd);
         return;
     }

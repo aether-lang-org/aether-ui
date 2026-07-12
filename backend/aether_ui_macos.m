@@ -1205,6 +1205,26 @@ void aether_ui_window_close_impl(int win_handle) {
     [extra_windows[win_handle - 1] close];
 }
 
+// In-window overlay layer — no-op stubs on AppKit (real z-layer lands next
+// time on the Mac mini; house pattern, same as canvas_on_move). The DSL links
+// and runs; overlays simply don't display here.
+int aether_ui_overlay_open_impl(int win_handle, int content_handle,
+                                int anchor, int dx, int dy, int modal) {
+    (void)win_handle; (void)content_handle; (void)anchor;
+    (void)dx; (void)dy; (void)modal;
+    return 0;
+}
+void aether_ui_overlay_close_impl(int overlay_handle) { (void)overlay_handle; }
+void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure) {
+    (void)overlay_handle; (void)boxed_closure;
+}
+int aether_ui_overlay_is_live_impl(int overlay_handle) { (void)overlay_handle; return 0; }
+int aether_ui_overlay_count_impl(void) { return 0; }
+int aether_ui_overlay_is_modal_impl(int overlay_handle) { (void)overlay_handle; return 0; }
+int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
+    (void)win_handle; (void)text; (void)ms; return 0;
+}
+
 // Sheet — modal NSWindow attached to primary window via beginSheet:.
 static NSMutableArray<NSWindow*>* sheet_windows = nil;
 

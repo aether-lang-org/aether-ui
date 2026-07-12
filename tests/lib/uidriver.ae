@@ -19,6 +19,7 @@ exports (
     click, click_widget, toggle_widget, key, move_to, resize_window,
     set_state, state_value_int,
     widget_id_by_text, widget_id_of, widget_text_by_id, widget_bool_by_text,
+    widget_int_field_by_id,
     canvas_w, canvas_h, canvas_widget_id,
     wait_server, wait_body_contains
 )
@@ -208,6 +209,17 @@ widget_text_by_id(id: int) -> string {
         if field_int(w, "id") == id { r = field_str(w, "text") }
         i = i + 1
     }
+    json.json_free(v)
+    return r
+}
+
+// An integer field ("x", "y", "w", "h") of widget `id`; 0 when absent.
+// Used to compute a widget's on-screen center for /window/pick tests.
+widget_int_field_by_id(id: int, fieldname: string) -> int {
+    body = get_body("/widget/${id}")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = field_int(v, fieldname)
     json.json_free(v)
     return r
 }

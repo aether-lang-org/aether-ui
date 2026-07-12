@@ -137,6 +137,16 @@ void aether_ui_window_set_body_impl(int win_handle, int root_handle);
 void aether_ui_window_show_impl(int win_handle);
 void aether_ui_window_close_impl(int win_handle);
 
+/* In-window overlay layer (roadmap item 1). */
+int aether_ui_overlay_open_impl(int win_handle, int content_handle,
+                                int anchor, int dx, int dy, int modal);
+void aether_ui_overlay_close_impl(int overlay_handle);
+void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure);
+int aether_ui_overlay_is_live_impl(int overlay_handle);
+int aether_ui_overlay_count_impl(void);
+int aether_ui_overlay_is_modal_impl(int overlay_handle);
+int aether_ui_toast_impl(int win_handle, const char* text, int ms);
+
 int aether_ui_sheet_create_impl(const char* title, int width, int height);
 void aether_ui_sheet_set_body_impl(int handle, int root_handle);
 void aether_ui_sheet_present_impl(int handle);

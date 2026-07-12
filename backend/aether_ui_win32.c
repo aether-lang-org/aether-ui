@@ -1937,6 +1937,26 @@ void aether_ui_window_set_body_impl(int win_handle, int root_handle) {
                  SWP_NOZORDER | SWP_SHOWWINDOW);
 }
 
+// In-window overlay layer — no-op stubs on Win32 (real z-layer lands next
+// time on winbaz; house pattern, same as canvas_on_move). The DSL links and
+// runs; overlays simply don't display here.
+int aether_ui_overlay_open_impl(int win_handle, int content_handle,
+                                int anchor, int dx, int dy, int modal) {
+    (void)win_handle; (void)content_handle; (void)anchor;
+    (void)dx; (void)dy; (void)modal;
+    return 0;
+}
+void aether_ui_overlay_close_impl(int overlay_handle) { (void)overlay_handle; }
+void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure) {
+    (void)overlay_handle; (void)boxed_closure;
+}
+int aether_ui_overlay_is_live_impl(int overlay_handle) { (void)overlay_handle; return 0; }
+int aether_ui_overlay_count_impl(void) { return 0; }
+int aether_ui_overlay_is_modal_impl(int overlay_handle) { (void)overlay_handle; return 0; }
+int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
+    (void)win_handle; (void)text; (void)ms; return 0;
+}
+
 void aether_ui_window_show_impl(int win_handle) {
     Widget* w = widget_at(win_handle);
     if (w) { ShowWindow(w->hwnd, SW_SHOW); UpdateWindow(w->hwnd); }

@@ -37,7 +37,7 @@ cd "$ROOT"
 mkdir -p build
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator context_menu)
+EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -325,6 +325,17 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=context_menu/spec_context_menu \
     run_server_test "$(EX_BIN context_menu)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" context_menu || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5b: AetherUIDriver overlay-layer spec ==="
+# In-window overlay layer (roadmap item 1): toast open + auto-dismiss, modal
+# scrim proven by a real /window/pick hit-test (the glass pane resolves ahead
+# of the button beneath it), dismiss restores access.
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=overlay_demo/spec_overlay_demo \
+    run_server_test "$(EX_BIN overlay_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" overlay_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

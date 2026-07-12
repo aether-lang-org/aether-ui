@@ -1,0 +1,72 @@
+// Aether UI overlay-layer example — in-window overlays (roadmap item 1).
+//
+// The overlay layer draws menus/toasts/modals INSIDE the window (a GtkOverlay
+// above the root), not as compositor popups — so they display everywhere,
+// including ChromeOS/Crostini sommelier where xdg_popups never map.
+//
+// This demo exercises three things the AetherUIDriver spec then asserts:
+//   - "Show toast"   → a bottom-center toast overlay, auto-dismissed.
+//   - "Confirm"      → a MODAL overlay: a scrim (glass pane) dims the app and
+//                      eats clicks, plus a content card with a Dismiss button.
+//   - "Bump counter" → increments a visible count. Under the modal scrim this
+//                      button must NOT increment (the scrim eats the click) —
+//                      the spec proves the glass pane by clicking through it.
+//
+// Platform note: GTK4 (Linux) has the full implementation. AppKit/Win32 are
+// no-op stubs for now (same precedent as canvas_on_move) — the DSL links and
+// runs; overlays just don't display there.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+//   GET /overlays lists live overlay entries; GET /widgets shows the counter.
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider,
+    root_vstack, toast, overlay_modal, dismiss_overlay, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    count = 0
+    modal_handle = 0
+
+    window("Overlay demo", 480, 320) {
+        vstack(12) {
+            text("In-window overlay layer demo")
+            divider()
+
+            count_lbl = text("count: 0")
+
+            hstack(10) {
+                bump = btn("Bump counter") callback {
+                    count = count + 1
+                    s = "count: "
+                    s2 = string.concat(s, string.from_int(count))
+                    aether_ui_text_set_string(count_lbl, s2)
+                }
+
+                show_toast = btn("Show toast") callback {
+                    _ = toast(0, "Saved.", 1500)
+                }
+
+                confirm = btn("Confirm") callback {
+                    // Build the modal card content imperatively, then open it
+                    // as a modal overlay (scrim + card). Dismiss via its button
+                    // or by clicking the scrim.
+                    card = root_vstack(10)
+                    _ = text(card, "Really do the thing?")
+                    _ = btn(card, "Dismiss") callback {
+                        dismiss_overlay(modal_handle)
+                    }
+                    modal_handle = overlay_modal(0, card, "center", 0, 0) callback {
+                        // scrim clicked → nothing extra; the layer closes it.
+                    }
+                }
+            }
+            divider()
+            text("Toast auto-hides; Confirm dims the app behind a scrim.")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

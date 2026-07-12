@@ -36,6 +36,7 @@ exports (
     alert, clipboard_write, open_url, is_dark_mode,
     timer, timer_cancel,
     window_create, window_set_body, window_show, window_close,
+    overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_size,
     canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -53,6 +54,8 @@ exports (
     app_run_headless,
     notify, notify_full, notify_request_permission
 )
+
+import std.string   // overlay_anchor_code parses the anchor string
 
 // ---------------------------------------------------------------------------
 // C externs — raw widget creation and manipulation
@@ -189,6 +192,18 @@ extern aether_ui_window_create_impl(title: string, width: int, height: int) -> i
 extern aether_ui_window_set_body_impl(win_handle: int, root_handle: int)
 extern aether_ui_window_show_impl(win_handle: int)
 extern aether_ui_window_close_impl(win_handle: int)
+
+// In-window overlay layer (roadmap item 1). win_handle 0 = the primary
+// (main) window. anchor is a packed int (halign bits 0-1, valign bits 2-3);
+// dx/dy are signed margins. Returns a 1-based overlay handle (0 on failure).
+extern aether_ui_overlay_open_impl(win_handle: int, content_handle: int,
+                                   anchor: int, dx: int, dy: int, modal: int) -> int
+extern aether_ui_overlay_close_impl(overlay_handle: int)
+extern aether_ui_overlay_set_on_dismiss_impl(overlay_handle: int, boxed_closure: ptr)
+extern aether_ui_overlay_is_live_impl(overlay_handle: int) -> int
+extern aether_ui_overlay_count_impl() -> int
+extern aether_ui_overlay_is_modal_impl(overlay_handle: int) -> int
+extern aether_ui_toast_impl(win_handle: int, text: string, ms: int) -> int
 
 extern aether_ui_sheet_create_impl(title: string, width: int, height: int) -> int
 extern aether_ui_sheet_set_body_impl(handle: int, root_handle: int)
@@ -908,6 +923,58 @@ window_show(win_handle: int) {
 
 window_close(win_handle: int) {
     aether_ui_window_close_impl(win_handle)
+}
+
+// ---------------------------------------------------------------------------
+// In-window overlay layer — the Swing JLayeredPane / Flutter Overlay.
+//
+// Build the content as an ordinary container (vstack/box/vg canvas) then open
+// it as an overlay above a window's root. Anchor is one of the 9 combos:
+// "top-start" "top" "top-end" "start" "center" "end"
+// "bottom-start" "bottom" "bottom-end". dx/dy are signed margins (px).
+// ---------------------------------------------------------------------------
+overlay_anchor_code(anchor: string) -> int {
+    h = 1  // horizontal: 0=start, 1=center, 2=end
+    v = 1  // vertical:   0=top,   1=center, 2=bottom
+    if string.contains(anchor, "start") == 1 { h = 0 }
+    if string.contains(anchor, "end") == 1   { h = 2 }
+    if string.contains(anchor, "top") == 1    { v = 0 }
+    if string.contains(anchor, "bottom") == 1 { v = 2 }
+    return h + v * 4
+}
+
+// overlay(win, content, anchor, dx, dy) -> overlay handle. win 0 = main window.
+overlay(win_handle: int, content_handle: int, anchor: string, dx: int, dy: int) -> int {
+    code = overlay_anchor_code(anchor)
+    return aether_ui_overlay_open_impl(win_handle, content_handle, code, dx, dy, 0)
+}
+
+// overlay_modal(win, content, anchor, dx, dy, on_dismiss) -> overlay handle.
+// Inserts a full-window scrim below the content that eats clicks and fires
+// on_dismiss (the glass pane).
+overlay_modal(win_handle: int, content_handle: int, anchor: string,
+              dx: int, dy: int, on_dismiss: fn) -> int {
+    code = overlay_anchor_code(anchor)
+    h = aether_ui_overlay_open_impl(win_handle, content_handle, code, dx, dy, 1)
+    if h > 0 {
+        boxed = box_closure(on_dismiss)
+        aether_ui_overlay_set_on_dismiss_impl(h, boxed)
+    }
+    return h
+}
+
+dismiss_overlay(overlay_handle: int) {
+    aether_ui_overlay_close_impl(overlay_handle)
+}
+
+overlay_is_live(overlay_handle: int) -> int {
+    return aether_ui_overlay_is_live_impl(overlay_handle)
+}
+
+// toast(win, text, ms) — a transient bottom-center message, auto-dismissed
+// after ms. win 0 = main window. Returns the overlay handle.
+toast(win_handle: int, text: string, ms: int) -> int {
+    return aether_ui_toast_impl(win_handle, text, ms)
 }
 
 // Modal sheet
