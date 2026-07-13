@@ -1,0 +1,88 @@
+// Aether UI table example — columns + header sort over a listbox (item 4 D2).
+//
+// A column spec renders a header row (buttons firing on_sort) and sized text
+// cells per row. Sorting is a HOOK: the app re-orders its own list and calls
+// table_update — the widget never owns the data.
+//
+//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider,
+    table_cols, table_col, table, table_update, table_selected, table_count,
+    table_on_select, on_sort, enable_test_server)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern aether_ui_text_set_string(handle: int, text: string)
+extern malloc(size: int) -> ptr
+
+struct Person { name: string, kb: int }
+
+mk_p(name: string, kb: int) -> ptr {
+    p = malloc(24) as *Person
+    p.name = name
+    p.kb = kb
+    return p as ptr
+}
+
+// Insertion sort of the ptr list by column c (0 = name asc, 1 = kb desc).
+sort_by(items: ptr, c: int) {
+    n = list.size(items)
+    i = 1
+    while i < n {
+        j = i
+        while j > 0 {
+            ap, _a = list.get(items, j - 1)
+            bp, _b = list.get(items, j)
+            a = ap as *Person
+            b = bp as *Person
+            swap = 0
+            if c == 0 { if string.compare(a.name, b.name) > 0 { swap = 1 } }
+            if c == 1 { if a.kb < b.kb { swap = 1 } }
+            if swap == 1 {
+                list.set(items, j - 1, bp)
+                list.set(items, j, ap)
+                j = j - 1
+            } else {
+                j = 0
+            }
+        }
+        i = i + 1
+    }
+}
+
+main() {
+    items = list.new()
+    _ = list.add(items, mk_p("carol", 30))
+    _ = list.add(items, mk_p("alice", 90))
+    _ = list.add(items, mk_p("bob", 95))
+
+    window("table demo", 520, 420) {
+        vstack(8) {
+            status = text("status: idle")
+            divider()
+
+            cols = table_cols()
+            table_col(cols, "Name", 220)
+            table_col(cols, "Size", 90)
+            t = table(cols) callback |item: ptr, c: int| {
+                p = item as *Person
+                if c == 1 { return string.concat(string.from_int(p.kb), " KB") }
+                return p.name
+            }
+            table_on_select(t) callback |i: int| {
+                aether_ui_text_set_string(status,
+                    string.concat("selected row ", string.from_int(i)))
+            }
+            on_sort(t) callback |c: int| {
+                sort_by(items, c)
+                table_update(t, items)
+                aether_ui_text_set_string(status,
+                    string.concat("sorted by col ", string.from_int(c)))
+            }
+            table_update(t, items)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

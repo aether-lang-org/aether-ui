@@ -1,0 +1,66 @@
+// spec_table_demo.ae — drives the table example over the AetherUIDriver.
+// Proves item 4 D2: header buttons fire on_sort with the RIGHT column index
+// (per-header closure over the loop counter), the app-side re-sort + update
+// re-renders rows in the new order (asserted via text positions in /widgets,
+// which lists widgets in creation order), cells render per column, and row
+// selection delegates to the listbox layer.
+//
+// Data: carol 30 / alice 90 / bob 95 — name-asc (alice,bob,carol) differs
+// from size-desc (bob,alice,carol), so the two sorts are distinguishable.
+import aeocha
+import uidriver
+import std.string
+
+// 1 if a appears before b in the current /widgets body.
+before(a: string, b: string) -> int {
+    body = uidriver.get_body("/widgets")
+    ia = string.index_of(body, a)
+    ib = string.index_of(body, b)
+    if ia < 0 { return 0 }
+    if ib < 0 { return 0 }
+    if ia < ib { return 1 }
+    return 0
+}
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "table over AetherUIDriver") {
+        aeocha.it("renders cells per column") callback {
+            ok = uidriver.wait_body_contains("/widgets", "95 KB", 20)
+            aeocha.assert_true(ok, "size cell rendered")
+            b = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b, "carol", "name cell rendered")
+            aeocha.assert_contains(b, "\"text\":\"Name\"", "header button Name")
+            aeocha.assert_contains(b, "\"text\":\"Size\"", "header button Size")
+        }
+
+        aeocha.it("Name header sorts ascending (col 0)") callback {
+            h = uidriver.widget_id_by_text("Name")
+            uidriver.post_ok("/widget/${h}/click", "sort by name")
+            ok = uidriver.wait_body_contains("/widgets", "sorted by col 0", 20)
+            aeocha.assert_true(ok, "on_sort fired with col 0")
+            aeocha.assert_true(before("alice", "bob"), "alice before bob")
+            aeocha.assert_true(before("bob", "carol"), "bob before carol")
+        }
+
+        aeocha.it("Size header sorts descending (col 1)") callback {
+            h = uidriver.widget_id_by_text("Size")
+            uidriver.post_ok("/widget/${h}/click", "sort by size")
+            ok = uidriver.wait_body_contains("/widgets", "sorted by col 1", 20)
+            aeocha.assert_true(ok, "on_sort fired with col 1 (per-header closure index)")
+            aeocha.assert_true(before("bob", "alice"), "bob (95) before alice (90)")
+            aeocha.assert_true(before("alice", "carol"), "alice before carol (30)")
+        }
+
+        aeocha.it("row selection delegates to the listbox layer") callback {
+            lbl = uidriver.widget_id_by_text("alice")
+            r = uidriver.widget_int_field_by_id(lbl, "parent")
+            uidriver.post_ok("/widget/${r}/click", "click alice row")
+            ok = uidriver.wait_body_contains("/widgets", "selected row 1", 20)
+            aeocha.assert_true(ok, "on_select fired with row index 1")
+        }
+    }
+    aeocha.run_summary(fw)
+}

@@ -41,6 +41,8 @@ exports (
     each, each_update, each_count, each_parent,
     listbox, listbox_update, listbox_select, listbox_selected, listbox_count,
     on_select, add_css_class, remove_css_class,
+    table_cols, table_col, table, table_update, table_select, table_selected,
+    table_count, table_on_select, on_sort,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_size,
     canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -1213,6 +1215,121 @@ add_css_class(handle: int, cls: string) {
 }
 remove_css_class(handle: int, cls: string) {
     aether_ui_widget_remove_css_class_impl(handle, cls)
+}
+
+// ---------------------------------------------------------------------------
+// table — the column layer over listbox (item 4 D2).
+//
+// A column spec + a per-cell TEXT template. The header row is buttons firing
+// on_sort(col) — the APP re-orders its list and calls table_update; the
+// widget never owns the data. Cells are text widgets sized to the column
+// width; selection/update/driver surface are the listbox's.
+//
+//   cols = table_cols()
+//   table_col(cols, "Name", 220)
+//   table_col(cols, "Size", 90)
+//   t = table(cols) callback |item: ptr, c: int| -> string {
+//       p = item as *Person
+//       if c == 1 { return p.size }
+//       return p.name
+//   }
+//   on_sort(t) callback |c: int| { …sort my list…; table_update(t, my_list) }
+//   table_update(t, my_list)
+// ---------------------------------------------------------------------------
+
+struct TableCol { title: string, w: int }
+struct TableDef { cols: ptr, lb: ptr, cell: ptr, sort_cb: ptr }
+
+table_cols() -> ptr { return list.new() }
+
+table_col(cols: ptr, title: string, w: int) {
+    c = malloc(16) as *TableCol
+    c.title = title
+    c.w = w
+    _ = list.add(cols, c as ptr)
+}
+
+_table_invoke_cell(cb: fn, item: ptr, c: int) -> string {
+    return cb(item, c)
+}
+
+_table_invoke_sort(cb: fn, c: int) {
+    cb(c)
+}
+
+// table(cols, cell) -> table-handle. cell = |item, c| -> string.
+table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
+    t = malloc(32) as *TableDef
+    t.cols = cols
+    t.cell = box_closure(cell)
+    t.sort_cb = null
+    tp = t as ptr
+    // Header row: one flat button per column, at the column's width.
+    hdr = hstack(_ctx, 8)
+    nc = list.size(cols)
+    ci = 0
+    while ci < nc {
+        cp, _ce = list.get(cols, ci)
+        col = cp as *TableCol
+        hb = btn(hdr, col.title) callback { _table_header_clicked(tp, ci) }
+        _w1 = width(hb, col.w)
+        ci = ci + 1
+    }
+    // Body: a listbox whose row template renders one sized text per column.
+    t.lb = listbox(_ctx, 2) callback |item: ptr, i: int, row: int| {
+        cf = unbox_closure(t.cell)
+        cj = 0
+        n2 = list.size(t.cols)
+        while cj < n2 {
+            cp2, _ce2 = list.get(t.cols, cj)
+            col2 = cp2 as *TableCol
+            cell_s = _table_invoke_cell(cf, item, cj)
+            tx = text(row, cell_s)
+            _w2 = width(tx, col2.w)
+            cj = cj + 1
+        }
+    }
+    return tp
+}
+
+_table_header_clicked(tp: ptr, c: int) {
+    t = tp as *TableDef
+    if t.sort_cb != null {
+        cb = unbox_closure(t.sort_cb)
+        _table_invoke_sort(cb, c)
+    }
+}
+
+// on_sort(t) callback |c: int| { … } — header click; the app sorts + updates.
+on_sort(tp: ptr, cb: fn) {
+    t = tp as *TableDef
+    t.sort_cb = box_closure(cb)
+}
+
+table_update(tp: ptr, items: ptr) {
+    t = tp as *TableDef
+    listbox_update(t.lb, items)
+}
+
+table_select(tp: ptr, i: int) {
+    t = tp as *TableDef
+    listbox_select(t.lb, i)
+}
+
+table_selected(tp: ptr) -> int {
+    t = tp as *TableDef
+    return listbox_selected(t.lb)
+}
+
+table_count(tp: ptr) -> int {
+    t = tp as *TableDef
+    return listbox_count(t.lb)
+}
+
+// table_on_select(t) callback |i: int| — row selection (delegates to listbox).
+table_on_select(tp: ptr, cb: fn) {
+    t = tp as *TableDef
+    on_select(t.lb, cb)
 }
 
 // Modal sheet
