@@ -46,7 +46,7 @@ LIST_ROW_H() -> float { return 25.0 }
 LIST_MAX() -> int     { return 20 }      // rows shown before "+N more…"
 LEG_TOP() -> float   { return 52.0 }
 LEG_ROW_H() -> float { return 27.0 }
-CRUMBS() -> int { return 8 }             // breadcrumb button pool size
+CRUMBS() -> int { return 8 }             // visible breadcrumb cap (deeper paths ellipsize)
 
 // AETHER_UI_DEBUG=1 (the backend's own debug gate) also traces this app's
 // click routing: raw px → viewBox coords, double-click verdict, pane, hit

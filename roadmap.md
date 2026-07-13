@@ -110,12 +110,23 @@ the ~86% librsvg parity number guards against regressions here).
 needle; the compare harness is the gate. **Depends on:** nothing.
 **Unlocks:** items 4 and 9; honest labels everywhere.
 
-### 3. Dynamic children — `each` (smaller than a QML Repeater)
+### 3. Dynamic children — `each` (smaller than a QML Repeater) ✅ DONE (2026-07-13)
 
-**Hand-off brief: `briefs/each.md`** (2026-07-12, ready for execution —
-NB it corrects two stale claims below: remove_child/clear_children
-already exist on all three backends, and runtime attach is shipped code
-in overlay_demo, not just a probe).
+**Shipped** (commits 7216239 verb+demo+spec, a552550 gp crumbs; plus the
+compiler work it forced: aether PR #1125 fixed closure-in-closure capture
+[filed by us], and aether PR #1127 — AUTHORED by us — made closure envs
+retain captured heap strings; both released, toolchain on v0.390).
+`ui.each(orientation, spacing) callback |item, i, parent| {…}` +
+`each_update(e, items)` — an owned group container, clear+rebuild
+reconcile, ng-repeat-without-track-by semantics; explicit update (item 8
+adds the binding overload later). examples/each_demo + 6/6 Aeocha spec
+(ci.sh Phase 5e) prove add/remove/reset and — the assertion that was
+GARBAGE before v0.390 — that each per-item closure fires with ITS item's
+computed label. Proving consumer: gp's breadcrumb pool of 8 (and its
+stale "widgets can't be created post-build" belief) replaced by real
+dynamic crumbs; all 5 gp specs green unchanged. Item 4 (table/list) is
+now un-gated. Detail below is the original proposal, kept for the
+reasoning.
 
 **Borrowed from:** QML's `Repeater`/model-delegate split — but Aether
 needs LESS than QML did, on two counts verified 2026-07-12:
@@ -321,7 +332,7 @@ format: comparisons, verdict, phased ci-gated migration).
 |-------|------|------|----------------|
 | 1 | Overlay layer ✅ | M | DONE 2026-07-12 (526bd6a/27ad331/a9d73dc) — host + toast + modal scrim + drawn tooltip + drawn dropdown; sommelier-proof by construction |
 | 2 | Typography ✅ | M | DONE 2026-07-12 (9e55d0c/12c32cc/aa78062/f299b06) — +17 debt gone, metrics API + driver route shipped |
-| 3 | `each` (dynamic children) | M | Loops/ifs are first-class + runtime attach probed working; only remove/insert + reconciler to build |
+| 3 | `each` ✅ | M | DONE 2026-07-13 (7216239/a552550 + aether PRs #1125/#1127) — verb + spec + gp crumb pool retired |
 | 4 | Table/list | L–XL | The flagship widget; needs 2 & 3 |
 | 5 | Shadows + group opacity | S–M | Cheap, visible, pairs with 1 |
 | 6 | Implicit transitions | S–M | Perceived quality; machinery exists in vg |
