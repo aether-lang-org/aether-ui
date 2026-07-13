@@ -37,7 +37,7 @@ cd "$ROOT"
 mkdir -p build
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo)
+EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -152,7 +152,7 @@ run_smoke_test() {
 # AeVG port unit tests — pure Aether (no GTK/display), so they run even
 # under SKIP_RUNTIME. Each is a self-contained `main()` that exits non-zero
 # on the first failed assertion. Append new modules' tests here as they land.
-AEVG_TESTS=(test_transform test_normalizer test_easing test_parser test_bbox test_blur test_rasterize test_grammar_utils test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_render_as_raster test_grammar_bind test_grammar_reactive test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip test_filter_routing test_gradient_fill test_vg test_transpiler test_grammar_interaction test_vg_interactive test_vg_when test_vg_bindto test_vg_bindpos test_vg_clock test_vg_hidpi test_vg_anim test_live_region test_effects)
+AEVG_TESTS=(test_transform test_normalizer test_easing test_parser test_bbox test_blur test_rasterize test_grammar_utils test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_render_as_raster test_grammar_bind test_grammar_reactive test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip test_filter_routing test_gradient_fill test_vg test_transpiler test_grammar_interaction test_vg_interactive test_vg_when test_vg_bindto test_vg_bindpos test_vg_clock test_vg_hidpi test_vg_anim test_live_region test_effects test_behavior)
 # Tests that exercise the REAL cairo text metrics — linked against the GTK4
 # backend (the pure-Aether AEVG_TESTS link with $(ae cflags) only).
 AEVG_GTK_TESTS=(test_text_metrics test_group_pixels)
@@ -292,6 +292,11 @@ else
     AEOCHA_OK=1
 fi
 
+# Implicit transitions (item 6) exist now: every DRIVER phase runs with
+# animations OFF so specs assert end states deterministically (house rule).
+# Phase 5h is the exception — it PROVES the tween, so it unsets this.
+export AETHER_UI_NO_ANIMATION=1
+
 echo
 echo "=== Phase 3: AetherUIDriver calculator spec ==="
 if [ "$AEOCHA_OK" -eq 1 ]; then
@@ -394,6 +399,15 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=table_demo/spec_table_demo \
     run_server_test "$(EX_BIN table_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" table_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5h: implicit transitions tween proof (animations ON) ==="
+# ui.transition must actually TWEEN: screenshot mid-flight differs from
+# settled. Shell checks (PNG byte compare — see tests/transitions_demo/).
+if true; then
+    ( unset AETHER_UI_NO_ANIMATION
+      run_server_test "$(EX_BIN transitions_demo)"                       "$SCRIPT_DIR/tests/transitions_demo/test_tween.sh" transitions ) || FAIL=$((FAIL + 1))
 fi
 
 echo

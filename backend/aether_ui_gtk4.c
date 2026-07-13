@@ -1680,6 +1680,23 @@ static void aeui_overlay_css_once(void) {
         display, GTK_STYLE_PROVIDER(prov),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
     g_object_unref(prov);
+
+    // Enter transitions for overlay chrome (item 6): toasts and the modal
+    // scrim fade in via CSS keyframes — zero code, zero timers. Suppressed
+    // by AETHER_UI_NO_ANIMATION so driver suites stay deterministic.
+    const char* noanim = getenv("AETHER_UI_NO_ANIMATION");
+    if (!(noanim && noanim[0] && noanim[0] != '0')) {
+        GtkCssProvider* anim = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(anim,
+            "@keyframes aui-fade-in { from { opacity: 0; } to { opacity: 1; } }"
+            ".aui-toast { animation: aui-fade-in 200ms ease-out; }"
+            ".aui-overlay-scrim { animation: aui-fade-in 150ms ease-out; }"
+            ".aui-overlay-card { animation: aui-fade-in 150ms ease-out; }", -1);
+        gtk_style_context_add_provider_for_display(
+            display, GTK_STYLE_PROVIDER(anim),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
+        g_object_unref(anim);
+    }
 }
 
 // Interpose (lazily) and return the GtkOverlay hosting a window's content.

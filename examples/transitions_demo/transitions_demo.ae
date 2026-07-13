@@ -1,0 +1,39 @@
+// Aether UI implicit-transitions example (roadmap item 6).
+//
+// ui.transition(handle, "opacity", ms, easing): declared ONCE on the label,
+// every later style_opacity change tweens instead of snapping (QML Behavior,
+// not SwiftUI withAnimation). AETHER_UI_NO_ANIMATION=1 turns every tween
+// into an instant change (the ci determinism switch).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider,
+    transition, style_opacity, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    faded = 0
+    window("transitions demo", 420, 260) {
+        vstack(10) {
+            status = text("state: opaque")
+            divider()
+            target = text("WATCH ME FADE")
+            _tr = transition(target, "opacity", 1200, "ease_out")
+            divider()
+            _f = btn("Toggle fade") callback {
+                if faded == 0 {
+                    _o1 = style_opacity(target, 0.15)
+                    faded = 1
+                    aether_ui_text_set_string(status, "state: faded")
+                } else {
+                    _o2 = style_opacity(target, 1.0)
+                    faded = 0
+                    aether_ui_text_set_string(status, "state: opaque")
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

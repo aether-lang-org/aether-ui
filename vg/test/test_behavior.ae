@@ -1,0 +1,83 @@
+// test_behavior.ae — vg.behavior implicit transitions (roadmap item 6).
+//
+// Headless, manual clock (the animations.ae discipline — never wall-clock).
+// After behavior(el, "fill", 1000ms), element_set_fill tweens: mid-clock the
+// cached fill is the lerp, at the end it's the target. Same for opacity.
+// Also: without behavior, set_fill still snaps (control).
+
+import std.string
+import vg
+import vg.grammar.context
+import vg.grammar.element
+import vg.backend.record
+import vg.geom.transform
+
+extern exit(code: int)
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label} — got '${got}' want '${want}'"); exit(1) }
+}
+assert_near(label: string, got: float, want: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < 0.01 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label} — got ${got} want ${want}"); exit(1) }
+}
+
+mk_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0, id)
+    return context.new_context(m)
+}
+
+main() {
+    println("=== test_behavior ===")
+
+    ctx = mk_ctx()
+    bk = record.backend_new()
+    scene = vg.scene_new(ctx, bk)
+    vg.scene_set_deferred(scene, 1)
+    root = vg.vg_root(scene)
+
+    rn = vg.rect(root, 10.0, 10.0, 40.0, 20.0)
+    vg.fill(rn, "#000000")
+    vg.behavior(rn, "fill", 1000, "linear")
+    el = vg.node_element(rn)
+
+    // Baseline clock, then a tweened set.
+    _a0 = vg.scene_advance(scene, 1000)
+    vg.element_set_fill(el, "#ffffff")
+
+    // Mid-flight: lerp black→white at t=0.5.
+    _a1 = vg.scene_advance(scene, 1500)
+    assert_eq_str("fill mid-tween is the lerp",
+                  element.element_last_fill(el), "rgb(128,128,128)")
+
+    // Done: exactly the target (as rgb).
+    _a2 = vg.scene_advance(scene, 2100)
+    assert_eq_str("fill lands on the target",
+                  element.element_last_fill(el), "rgb(255,255,255)")
+
+    // Opacity behavior.
+    on = vg.rect(root, 50.0, 10.0, 20.0, 20.0)
+    vg.fill(on, "#ff0000")
+    vg.opacity(on, 1.0)
+    vg.behavior(on, "opacity", 1000, "linear")
+    oel = vg.node_element(on)
+    _b0 = vg.scene_advance(scene, 5000)
+    vg.element_set_opacity(oel, 0.0)
+    _b1 = vg.scene_advance(scene, 5500)
+    assert_near("opacity mid-tween", element.element_last_opacity(oel), 0.5)
+    _b2 = vg.scene_advance(scene, 6100)
+    assert_near("opacity lands", element.element_last_opacity(oel), 0.0)
+
+    // Control: no behavior → snap.
+    cn = vg.rect(root, 10.0, 50.0, 10.0, 10.0)
+    vg.fill(cn, "#000000")
+    cel = vg.node_element(cn)
+    vg.element_set_fill(cel, "#ffffff")
+    assert_eq_str("no behavior → instant", element.element_last_fill(cel), "#ffffff")
+
+    println("=== test_behavior passed ===")
+}

@@ -77,7 +77,7 @@
 import ui
 import ui (window, vstack, hstack, btn, text, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_key, timer,
-    toggle, toggle_group, each, each_parent, scrollview, width,
+    toggle, toggle_group, each, each_parent, scrollview, width, transition,
     table_cols, table_col, table, table_on_select,
     context_menu_item, clipboard_write, margin_of)
 import vg.live (vg, canvas_region, vg_flush_live, region_set_animated)
@@ -189,6 +189,15 @@ main() {
         // and tick the active colour scheme's radio.
         scan_buttons(st)
         scheme_buttons(st)
+        // Implicit transitions (item 6): the Stop/Rescan ghosting and the
+        // colour-scheme radio flips fade instead of snapping. "all" covers
+        // the theme's enabled/disabled restyle. No-ops under
+        // AETHER_UI_NO_ANIMATION (which ci exports for the driver specs).
+        _t1 = transition(st.stop_btn, "all", 150, "ease_out")
+        _t2 = transition(st.rescan_btn, "all", 150, "ease_out")
+        _t3 = transition(st.scheme_btn0, "all", 150, "ease_out")
+        _t4 = transition(st.scheme_btn1, "all", 150, "ease_out")
+        _t5 = transition(st.scheme_btn2, "all", 150, "ease_out")
 
         // Breadcrumb NAV: the drill path as clickable segments — a ui.each
         // group, one real button per visible segment, rebuilt by

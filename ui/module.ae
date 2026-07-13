@@ -37,6 +37,7 @@ exports (
     timer, timer_cancel,
     window_create, window_set_body, window_show, window_close,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast, style_shadow,
+    transition,
     vg_tooltip_show, vg_tooltip_hide, vg_tooltip_drawn,
     each, each_update, each_count, each_parent,
     listbox, listbox_update, listbox_select, listbox_selected, listbox_count,
@@ -64,6 +65,7 @@ exports (
 
 import std.string   // overlay_anchor_code parses the anchor string
 import std.list     // each_update walks the items list
+import std.os (os_getenv)   // transition honours AETHER_UI_NO_ANIMATION
 import std.intarr   // listbox row-handle tracking
 import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
 
@@ -837,7 +839,10 @@ style_corner_radius(handle: int, radius: float) -> int {
 }
 
 style_opacity(handle: int, val: float) -> int {
-    aether_ui_set_opacity(handle, val)
+    // Via CSS (not gtk_widget_set_opacity): a registered ui.transition on
+    // "opacity" then tweens the change; with no transition it's instant.
+    css = "opacity: ${val};"
+    aether_ui_widget_apply_css_impl(handle, css)
     return handle
 }
 
@@ -1215,6 +1220,24 @@ on_select(lbp: ptr, cb: fn) {
 
 // Generic CSS-class styling (the selection-visual primitive, exported for
 // apps too; GTK-only — no-op stubs elsewhere).
+// transition(handle, prop, ms, easing) — QML-Behavior-style: declare once,
+// every subsequent change of `prop` on this widget TWEENS instead of
+// snapping. v1 props: "opacity" (style_opacity routes through CSS so the
+// transition engine sees it) and "all" (any CSS-driven change, incl. the
+// theme's enabled/disabled fade). easing: "linear" | "ease_out".
+// AETHER_UI_NO_ANIMATION=1 makes this a no-op — every change is instant
+// (ci.sh exports it for spec phases; specs assert END states).
+transition(handle: int, prop: string, ms: int, easing: string) -> int {
+    if os_getenv("AETHER_UI_NO_ANIMATION") != null { return handle }
+    ease = "ease-out"
+    if string.equals(easing, "linear") == 1 { ease = "linear" }
+    css = "transition: ${prop} ${ms}ms "
+    css = string.concat(css, ease)
+    css = string.concat(css, ";")
+    aether_ui_widget_apply_css_impl(handle, css)
+    return handle
+}
+
 // style_shadow(handle, dx, dy, blur, css_color) — a CSS box-shadow on a
 // native widget (GTK; no-op elsewhere). The vg-side sibling is vg.shadow.
 style_shadow(handle: int, dx: int, dy: int, blur: int, color: string) -> int {

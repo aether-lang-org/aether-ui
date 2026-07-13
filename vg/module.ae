@@ -43,7 +43,7 @@ exports (
     fill, stroke, opacity, transform, linecap, linejoin,
     // Interaction modifiers (attach a handler to the shape's element).
     on_click, on_hover, on_double_click, on_right_click, cursor, tooltip,
-    shadow, group_begin, group_end,
+    shadow, group_begin, group_end, behavior,
     on_click_recolor, visible_when,
     bind_fill, bind_stroke, bind_opacity, bind_text, bind_pos,
     // Re-exported element mutators so a handler can recolor the element it
@@ -76,7 +76,9 @@ import vg.grammar.context
 import vg.grammar.shapes
 import vg.grammar.element
 import vg.grammar.events
+import std.os (os_getenv)
 import vg.raster.render_as_raster
+import vg.raster.rasterize
 import vg.backend.dispatch
 import vg.grammar.reactive
 import vg.grammar.bind
@@ -85,6 +87,7 @@ import vg.region
 import vg.svg.parser
 
 extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
 extern free(p: ptr)
 extern string_retain(s: string)
 extern string_release(s: string)
@@ -132,6 +135,7 @@ struct VgScene {
                     //   scene_free_recording can free them. Set ONLY on the
                     //   per-frame draw-region sub-scenes (render_one_draw);
                     //   null (untracked) for ordinary long-lived scenes.
+    last_now: long  // most recent tick/advance clock (behavior tween start)
 }
 
 // One deferred shape: enough to dispatch it after its style is known.
@@ -224,13 +228,14 @@ scene_canvas(p: ptr) -> int        { s = p as *VgScene; return s.canvas_id }
 // canvas" (headless / recording). vg_root wraps it as the root VgNode the
 // shape verbs accept as _ctx.
 scene_new(ctx: ptr, backend: ptr) -> ptr {
-    s = malloc(96) as *VgScene
+    s = malloc(112) as *VgScene
     s.ctx = ctx
     s.backend = backend
     s.canvas_id = 0
     s.deferred = 0
     s.pending = null
     s.event_state = null
+    s.last_now = 0
     s.anim_mgr = null
     s.live_regions = null
     s.refreshing = 0
@@ -494,6 +499,21 @@ shadow(_ctx: ptr, dx: float, dy: float, blur: float, color: string) {
     }
 }
 
+// behavior(prop, ms, easing) — QML Behavior: after this, every
+// vg.element_set_fill / element_set_opacity on THIS element tweens from the
+// current value to the target over ms instead of snapping. prop: "fill" |
+// "opacity"; easing: "linear" | "ease_out". The tween rides the scene's
+// existing animation manager + live loop (idle stays zero). Honours
+// AETHER_UI_NO_ANIMATION=1 (no-op → instant, for deterministic specs).
+behavior(_ctx: ptr, prop: string, ms: long, easing: string) {
+    if os_getenv("AETHER_UI_NO_ANIMATION") != null { return }
+    el = node_payload(_ctx)
+    if el == null { return }
+    ease = 0
+    if string.equals(easing, "ease_out") == 1 { ease = 1 }
+    element.element_set_behavior(el, prop, ms, ease, node_scene(_ctx))
+}
+
 stroke(_ctx: ptr, color: string, width: float) {
     el = node_payload(_ctx)
     if el != null {
@@ -637,11 +657,74 @@ tooltip(_ctx: ptr, t: string) {
 // A handler recolors the element it captured. These forward to grammar_element
 // so callers need only `import vg`, not grammar_element too.
 
-element_set_fill(el: ptr, color: string) { element.element_set_fill(el, color) }
+element_set_fill(el: ptr, color: string) {
+    ms = element.element_behavior_fill_ms(el)
+    if ms > 0 {
+        bscene = element.element_behavior_scene(el)
+        if bscene != null {
+            from = element.element_last_fill(el)
+            if string.length(from) > 0 {
+                _tw = tween_fill(bscene, el, from, color, ms,
+                                 element.element_behavior_ease(el))
+                return
+            }
+        }
+    }
+    element.element_set_fill(el, color)
+}
+
+// Lerp helper: start a fill animation from → to on the scene's manager.
+// Ticks write via the GRAMMAR setter (element.element_set_fill), not this
+// module wrapper — re-triggering the behavior would loop.
+tween_fill(scene: ptr, el: ptr, from: string, to: string, ms: long, ease: int) -> int {
+    fr = rasterize.parse_color_to_rgba(from)
+    tr = rasterize.parse_color_to_rgba(to)
+    f_r = rasterize.rgba_r(fr); f_g = rasterize.rgba_g(fr); f_b = rasterize.rgba_b(fr)
+    t_r = rasterize.rgba_r(tr); t_g = rasterize.rgba_g(tr); t_b = rasterize.rgba_b(tr)
+    mgr = scene_animation_manager(scene)
+    now = scene_last_now(scene)
+    _h = animations.add_animation(mgr, el, ms, 0, 0, 0, now) callback |ae: ptr, t: float| {
+        tt = t
+        if ease == 1 { tt = 1.0 - (1.0 - t) * (1.0 - t) }
+        lr = lrint(to_f(f_r) + (to_f(t_r) - to_f(f_r)) * tt)
+        lg = lrint(to_f(f_g) + (to_f(t_g) - to_f(f_g)) * tt)
+        lb = lrint(to_f(f_b) + (to_f(t_b) - to_f(f_b)) * tt)
+        c = "rgb(${lr},${lg},${lb})"
+        element.element_set_fill(ae, c)
+    }
+    return 1
+}
+
+to_f(v: int) -> float { return v / 1.0 }
 element_set_stroke(el: ptr, color: string, width: float) {
     element.element_set_stroke(el, color, width)
 }
-element_set_opacity(el: ptr, value: float) { element.element_set_opacity(el, value) }
+element_set_opacity(el: ptr, value: float) {
+    ms = element.element_behavior_op_ms(el)
+    if ms > 0 {
+        bscene = element.element_behavior_scene(el)
+        if bscene != null {
+            if element.element_has_opacity(el) == 1 {
+                from_o = element.element_last_opacity(el)
+                _tw2 = tween_opacity(bscene, el, from_o, value, ms,
+                                     element.element_behavior_ease(el))
+                return
+            }
+        }
+    }
+    element.element_set_opacity(el, value)
+}
+
+tween_opacity(scene: ptr, el: ptr, from: float, to: float, ms: long, ease: int) -> int {
+    mgr = scene_animation_manager(scene)
+    now = scene_last_now(scene)
+    _h2 = animations.add_animation(mgr, el, ms, 0, 0, 0, now) callback |ae: ptr, t: float| {
+        tt = t
+        if ease == 1 { tt = 1.0 - (1.0 - t) * (1.0 - t) }
+        element.element_set_opacity(ae, from + (to - from) * tt)
+    }
+    return 1
+}
 
 // ─── deferred recording + flush (live path) ──────────────────────
 //
@@ -801,6 +884,11 @@ scene_animation_manager(scene: ptr) -> ptr {
     return s.anim_mgr
 }
 
+scene_last_now(scene: ptr) -> long {
+    s = scene as *VgScene
+    return s.last_now
+}
+
 scene_is_animating(scene: ptr) -> int {
     s = scene as *VgScene
     // A scene with an ANIMATED live region renders continuously (a video
@@ -920,6 +1008,7 @@ render_one_draw(scene: ptr, region: ptr, t: float) {
 // ticked.
 scene_advance(scene: ptr, now_ms: long) -> int {
     s = scene as *VgScene
+    s.last_now = now_ms
     if s.anim_mgr == null { return 0 }
     return animations.tick_animations(s.anim_mgr, now_ms)
 }

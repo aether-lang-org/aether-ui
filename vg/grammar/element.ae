@@ -65,6 +65,8 @@ exports (
     element_on_right_click, element_right_click_handler,
 
     // Tooltip, cursor, when, visibility, destroyed
+    element_set_behavior, element_behavior_fill_ms, element_behavior_op_ms,
+    element_behavior_ease, element_behavior_scene,
     element_set_shadow, element_shadow_on, element_shadow_dx,
     element_shadow_dy, element_shadow_sigma, element_shadow_color,
     element_shadow_cache, element_set_shadow_cache,
@@ -154,6 +156,14 @@ struct AevgElement {
     tooltip_str: string
     cursor_str: string
 
+    // Implicit-transition behavior (vg.behavior): tween durations for
+    // fill / opacity changes (0 = none), easing flag (0 linear, 1 ease-out),
+    // and the owning scene (mgr + clock live there).
+    beh_fill_ms: long
+    beh_op_ms: long
+    beh_ease: int
+    beh_scene: ptr
+
     // Drop shadow (vg.shadow modifier): offset, blur sigma, colour.
     // sh_cache is an opaque *ShadowCache owned by render_as_raster.
     sh_on: int
@@ -224,7 +234,7 @@ element_new(underlying: ptr) -> ptr {
     //   1 last_pos_props ptr = 8
     //   shape_type int + 4 geo floats ≈ 40 with pad
     // Sum ≈ 320 with padding. malloc(384) keeps a safe margin.
-    e = malloc(448) as *AevgElement
+    e = malloc(512) as *AevgElement
     e.underlying = underlying
     e.context = null
     e.name_str = ""
@@ -242,6 +252,10 @@ element_new(underlying: ptr) -> ptr {
     e.pos_binding = null
     e.when_predicate = null
     e.tooltip_str = ""
+    e.beh_fill_ms = 0
+    e.beh_op_ms = 0
+    e.beh_ease = 0
+    e.beh_scene = null
     e.sh_on = 0
     e.sh_dx = 0.0
     e.sh_dy = 0.0
@@ -382,6 +396,18 @@ element_right_click_handler(p: ptr) -> ptr {
 }
 
 // ─── Tooltip / cursor / when / visibility / destroyed ────────────
+
+element_set_behavior(p: ptr, prop: string, ms: long, ease: int, scene: ptr) {
+    e = p as *AevgElement
+    e.beh_ease = ease
+    e.beh_scene = scene
+    if string.equals(prop, "fill") == 1 { e.beh_fill_ms = ms }
+    if string.equals(prop, "opacity") == 1 { e.beh_op_ms = ms }
+}
+element_behavior_fill_ms(p: ptr) -> long { e = p as *AevgElement; return e.beh_fill_ms }
+element_behavior_op_ms(p: ptr) -> long   { e = p as *AevgElement; return e.beh_op_ms }
+element_behavior_ease(p: ptr) -> int     { e = p as *AevgElement; return e.beh_ease }
+element_behavior_scene(p: ptr) -> ptr    { e = p as *AevgElement; return e.beh_scene }
 
 element_set_shadow(p: ptr, dx: float, dy: float, sigma: float, color: string) {
     e = p as *AevgElement
