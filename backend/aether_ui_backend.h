@@ -97,6 +97,13 @@ void aether_ui_progressbar_set_fraction(int handle, double fraction);
 int aether_ui_splitview_create(int vertical);
 int aether_ui_split_position_impl(int handle);
 void aether_ui_split_set_position_impl(int handle, int px);
+// weight: proportional main-axis sharing among stack children (Flutter
+// Expanded semantics — unweighted children keep natural size, weighted
+// ones split the leftover). on_layout: cb(w, h) fires after the stack's
+// allocation changes (the GeometryReader). GTK4 only; no-op stubs
+// elsewhere.
+void aether_ui_widget_weight_impl(int handle, int n);
+void aether_ui_on_layout_impl(int handle, void* boxed_closure);
 int aether_ui_zstack_create(void);
 int aether_ui_form_create(void);
 int aether_ui_form_section_create(const char* title);

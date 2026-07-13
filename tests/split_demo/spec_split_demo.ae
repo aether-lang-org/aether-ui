@@ -64,6 +64,17 @@ main() {
             ok = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":320", 20)
             aeocha.assert_true(ok, "splitter back at 320")
         }
+
+        aeocha.it("on_layout fires on window resize (GeometryReader)") callback {
+            // The demo mirrors the root stack's size into the geometry
+            // label from inside on_layout. Initial allocation already
+            // fired it once; a resize must fire it again with new values.
+            ok0 = uidriver.wait_body_contains("/widgets", "geometry: 640x", 20)
+            aeocha.assert_true(ok0, "initial allocation reported")
+            uidriver.resize_window(760, 480)
+            ok1 = uidriver.wait_body_contains("/widgets", "geometry: 760x", 30)
+            aeocha.assert_true(ok1, "resize re-fired on_layout with the new width")
+        }
     }
     aeocha.run_summary(fw)
 }

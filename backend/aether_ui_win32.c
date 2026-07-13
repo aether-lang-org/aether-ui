@@ -1475,6 +1475,12 @@ int aether_ui_split_position_impl(int handle) {
 void aether_ui_split_set_position_impl(int handle, int px) {
     (void)handle; (void)px;
 }
+void aether_ui_widget_weight_impl(int handle, int n) {
+    (void)handle; (void)n;
+}
+void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
+    (void)handle; (void)boxed_closure;
+}
 
 int aether_ui_progressbar_create(double fraction) {
     ensure_win_init();

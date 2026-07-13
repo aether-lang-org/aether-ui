@@ -1,5 +1,9 @@
 // Aether UI layout example (roadmap item 7).
 //
+// ui.on_layout(stack) callback |w, h|: the generalized GeometryReader —
+// fires after the stack's allocation changes; the demo mirrors the root
+// size into a label.
+//
 // ui.splitview("h") { pane1  pane2 }: a native draggable two-pane splitter
 // (GtkPaned). The two panes are ordinary widget trees; the splitter position
 // is script- and driver-settable (split_set_position / POST
@@ -7,16 +11,18 @@
 
 import ui
 import ui (window, vstack, text, btn, divider, splitview,
-    split_position, split_set_position, enable_test_server)
+    split_position, split_set_position, on_layout, enable_test_server)
 import std.os (os_getenv)
 import std.string
 
 extern aether_ui_text_set_string(handle: int, text: string)
 
 main() {
+    geo = 0
     window("split demo", 640, 400) {
-        vstack(6) {
+        root = vstack(6) {
             status = text("position: ?")
+            geo = text("geometry: ?")
             divider()
             sv = splitview("h") {
                 vstack(4) {
@@ -35,6 +41,12 @@ main() {
             _c = btn("Center") callback {
                 split_set_position(sv, 320)
             }
+        }
+        // The GeometryReader: root reports its size whenever it changes
+        // (window resizes included). D2's driver spec resizes the window
+        // and reads this label.
+        on_layout(root) callback |w: int, h: int| {
+            aether_ui_text_set_string(geo, "geometry: ${w}x${h}")
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

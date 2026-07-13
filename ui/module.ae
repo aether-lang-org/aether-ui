@@ -18,7 +18,7 @@ exports (
     _surface_window_factory, _surface_render_factory, _surface_record_factory,
     app_run, app_create, app_start,
     vstack, hstack, scrollview, zstack, form, section, navstack,
-    splitview, split_position, split_set_position,
+    splitview, split_position, split_set_position, on_layout,
     nav_push, nav_pop,
     text, button, btn, spacer, divider,
     textfield, securefield, toggle, toggle_group, slider, picker, picker_add,
@@ -155,6 +155,8 @@ extern aether_ui_progressbar_set_fraction(handle: int, fraction: float)
 extern aether_ui_splitview_create(vertical: int) -> int
 extern aether_ui_split_position_impl(handle: int) -> int
 extern aether_ui_split_set_position_impl(handle: int, px: int)
+extern aether_ui_widget_weight_impl(handle: int, n: int)
+extern aether_ui_on_layout_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_zstack_create() -> int
 extern aether_ui_form_create() -> int
 extern aether_ui_form_section_create(title: string) -> int
@@ -541,6 +543,17 @@ split_position(handle: int) -> int {
 
 split_set_position(handle: int, px: int) {
     aether_ui_split_set_position_impl(handle, px)
+}
+
+// on_layout(stack, cb) — the generalized GeometryReader: cb(w, h) fires
+// after the stack's allocation SETTLES and CHANGES (not per frame; idle
+// stays zero-cost). Safe to build/mutate widgets from inside — that's the
+// point (the hook is deferred off the allocation pass). STACKS ONLY
+// (vstack/hstack) v1; for canvases use canvas_on_resize, which this
+// generalizes but does not replace. GTK4 only for now; no-op elsewhere.
+on_layout(handle: int, cb: fn) {
+    boxed = box_closure(cb)
+    aether_ui_on_layout_impl(handle, boxed)
 }
 
 zstack(_ctx: ptr) {

@@ -769,6 +769,204 @@ int aether_ui_divider_create(void) {
     return aether_ui_register_widget(sep);
 }
 
+// ---------------------------------------------------------------------------
+// AeuiFlexLayout — a custom GtkLayoutManager for stacks (GtkBoxLayout is
+// final, so it can't be subclassed). Two jobs:
+//
+//  1. WEIGHTS (Flutter Expanded semantics): children carrying "aeui-weight"
+//     qdata > 0 split the leftover main-axis space proportionally after
+//     unweighted children take their natural size. Children that expand
+//     along the axis (hexpand in an hstack / vexpand in a vstack) but have
+//     no explicit weight count as weight 1 — that's GtkBox's own extra-
+//     space rule, so spacer() keeps working inside a flex-managed stack.
+//
+//  2. ON_LAYOUT: allocate() is the only event-driven place GTK4 still
+//     reports size changes for arbitrary containers (the size-allocate
+//     signal is gone; tick callbacks keep the frame clock running, which
+//     violates idle-must-cost-zero). Widgets must NOT be mutated during
+//     allocation, so the hook fires from a g_idle_add.
+//
+// Installed lazily — only on stacks where ui.weight/ui.on_layout is used —
+// so every other GtkBox keeps stock GtkBoxLayout behaviour. Spacing is
+// copied from the box at install time. Known v1 simplifications: weighted
+// shares aren't clamped to the child minimum, baselines are ignored.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    GtkLayoutManager parent_instance;
+    GtkOrientation orient;
+    int spacing;
+} AeuiFlexLayout;
+typedef struct { GtkLayoutManagerClass parent_class; } AeuiFlexLayoutClass;
+
+G_DEFINE_TYPE(AeuiFlexLayout, aeui_flex_layout, GTK_TYPE_LAYOUT_MANAGER)
+
+static int aeui_child_weight(GtkWidget* c, GtkOrientation orient) {
+    int w = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(c), "aeui-weight"));
+    if (w > 0) return w;
+    gboolean expands = (orient == GTK_ORIENTATION_HORIZONTAL)
+        ? gtk_widget_get_hexpand(c) : gtk_widget_get_vexpand(c);
+    return expands ? 1 : 0;
+}
+
+static void aeui_flex_layout_measure(GtkLayoutManager* lm, GtkWidget* widget,
+                                     GtkOrientation orientation, int for_size,
+                                     int* minimum, int* natural,
+                                     int* minimum_baseline, int* natural_baseline) {
+    AeuiFlexLayout* self = (AeuiFlexLayout*)lm;
+    (void)for_size;
+    int min_sum = 0, nat_sum = 0, min_max = 0, nat_max = 0, n = 0;
+    for (GtkWidget* c = gtk_widget_get_first_child(widget); c;
+         c = gtk_widget_get_next_sibling(c)) {
+        if (!gtk_widget_should_layout(c)) continue;
+        int cmin = 0, cnat = 0;
+        gtk_widget_measure(c, orientation, -1, &cmin, &cnat, NULL, NULL);
+        min_sum += cmin;
+        nat_sum += cnat;
+        if (cmin > min_max) min_max = cmin;
+        if (cnat > nat_max) nat_max = cnat;
+        n++;
+    }
+    if (orientation == self->orient) {
+        int sp = n > 1 ? (n - 1) * self->spacing : 0;
+        *minimum = min_sum + sp;
+        *natural = nat_sum + sp;
+    } else {
+        *minimum = min_max;
+        *natural = nat_max;
+    }
+    if (minimum_baseline) *minimum_baseline = -1;
+    if (natural_baseline) *natural_baseline = -1;
+}
+
+// on_layout fire, deferred to idle (no widget mutation inside allocate).
+typedef struct { AeClosure* cl; int w; int h; } AeuiLayoutFire;
+static gboolean aeui_layout_fire_idle(gpointer data) {
+    AeuiLayoutFire* lf = (AeuiLayoutFire*)data;
+    if (lf->cl && lf->cl->fn) {
+        ((void(*)(void*, intptr_t, intptr_t))lf->cl->fn)(
+            lf->cl->env, (intptr_t)lf->w, (intptr_t)lf->h);
+    }
+    g_free(lf);
+    return G_SOURCE_REMOVE;
+}
+
+static void aeui_flex_layout_allocate(GtkLayoutManager* lm, GtkWidget* widget,
+                                      int width, int height, int baseline) {
+    AeuiFlexLayout* self = (AeuiFlexLayout*)lm;
+    (void)baseline;
+    int axis_total = (self->orient == GTK_ORIENTATION_HORIZONTAL) ? width : height;
+
+    // Pass 1: total weight + natural size of unweighted children.
+    int total_weight = 0, fixed = 0, n = 0;
+    for (GtkWidget* c = gtk_widget_get_first_child(widget); c;
+         c = gtk_widget_get_next_sibling(c)) {
+        if (!gtk_widget_should_layout(c)) continue;
+        int wgt = aeui_child_weight(c, self->orient);
+        if (wgt > 0) {
+            total_weight += wgt;
+        } else {
+            int cmin = 0, cnat = 0;
+            gtk_widget_measure(c, self->orient, -1, &cmin, &cnat, NULL, NULL);
+            fixed += cnat;
+        }
+        n++;
+    }
+    int leftover = axis_total - fixed - (n > 1 ? (n - 1) * self->spacing : 0);
+    if (leftover < 0) leftover = 0;
+
+    // Pass 2: place sequentially; the LAST weighted child absorbs the
+    // integer-division remainder so the row always fills exactly.
+    int pos = 0, weighted_seen = 0, weighted_used = 0;
+    for (GtkWidget* c = gtk_widget_get_first_child(widget); c;
+         c = gtk_widget_get_next_sibling(c)) {
+        if (!gtk_widget_should_layout(c)) continue;
+        int wgt = aeui_child_weight(c, self->orient);
+        int size;
+        if (wgt > 0) {
+            weighted_seen += wgt;
+            size = (weighted_seen == total_weight)
+                ? leftover - weighted_used
+                : leftover * wgt / total_weight;
+            weighted_used += size;
+        } else {
+            int cmin = 0, cnat = 0;
+            gtk_widget_measure(c, self->orient, -1, &cmin, &cnat, NULL, NULL);
+            size = cnat;
+        }
+        int cw = (self->orient == GTK_ORIENTATION_HORIZONTAL) ? size : width;
+        int ch = (self->orient == GTK_ORIENTATION_HORIZONTAL) ? height : size;
+        float cx = (self->orient == GTK_ORIENTATION_HORIZONTAL) ? (float)pos : 0.0f;
+        float cy = (self->orient == GTK_ORIENTATION_HORIZONTAL) ? 0.0f : (float)pos;
+        GskTransform* t = gsk_transform_translate(NULL,
+            &GRAPHENE_POINT_INIT(cx, cy));
+        gtk_widget_allocate(c, cw, ch, -1, t);
+        pos += size + self->spacing;
+    }
+
+    // on_layout hook — fire on size CHANGE only, via idle.
+    AeClosure* oc = (AeClosure*)g_object_get_data(G_OBJECT(widget),
+                                                  "aeui-onlayout-closure");
+    if (oc) {
+        int lw = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "aeui-onlayout-w"));
+        int lh = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "aeui-onlayout-h"));
+        if (lw != width || lh != height) {
+            g_object_set_data(G_OBJECT(widget), "aeui-onlayout-w", GINT_TO_POINTER(width));
+            g_object_set_data(G_OBJECT(widget), "aeui-onlayout-h", GINT_TO_POINTER(height));
+            AeuiLayoutFire* lf = g_new0(AeuiLayoutFire, 1);
+            lf->cl = oc;
+            lf->w = width;
+            lf->h = height;
+            g_idle_add(aeui_layout_fire_idle, lf);
+        }
+    }
+}
+
+static void aeui_flex_layout_class_init(AeuiFlexLayoutClass* klass) {
+    GtkLayoutManagerClass* lm = GTK_LAYOUT_MANAGER_CLASS(klass);
+    lm->measure = aeui_flex_layout_measure;
+    lm->allocate = aeui_flex_layout_allocate;
+}
+static void aeui_flex_layout_init(AeuiFlexLayout* self) {
+    self->orient = GTK_ORIENTATION_VERTICAL;
+    self->spacing = 0;
+}
+
+// Swap a GtkBox's stock layout manager for the flex one (idempotent).
+// Returns NULL if w isn't a box.
+static AeuiFlexLayout* aeui_ensure_flex_layout(GtkWidget* w) {
+    if (!w || !GTK_IS_BOX(w)) return NULL;
+    GtkLayoutManager* cur = gtk_widget_get_layout_manager(w);
+    if (cur && G_TYPE_CHECK_INSTANCE_TYPE(cur, aeui_flex_layout_get_type())) {
+        return (AeuiFlexLayout*)cur;
+    }
+    AeuiFlexLayout* fl = g_object_new(aeui_flex_layout_get_type(), NULL);
+    fl->orient = gtk_orientable_get_orientation(GTK_ORIENTABLE(w));
+    fl->spacing = gtk_box_get_spacing(GTK_BOX(w));
+    gtk_widget_set_layout_manager(w, GTK_LAYOUT_MANAGER(fl));
+    return fl;
+}
+
+// ui.weight(child, n): proportional main-axis sharing among stack children.
+void aether_ui_widget_weight_impl(int handle, int n) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || n < 1) return;
+    GtkWidget* parent = gtk_widget_get_parent(w);
+    if (aeui_ensure_flex_layout(parent) == NULL) return;
+    g_object_set_data(G_OBJECT(w), "aeui-weight", GINT_TO_POINTER(n));
+    gtk_widget_queue_resize(parent);
+}
+
+// ui.on_layout(handle, cb): cb(w, h) after the stack's allocation changes.
+// Stacks (vstack/hstack) only — for canvases use canvas_on_resize.
+void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    if (aeui_ensure_flex_layout(w) == NULL) return;
+    g_object_set_data(G_OBJECT(w), "aeui-onlayout-closure", boxed_closure);
+    gtk_widget_queue_resize(w);
+}
+
 // splitview — GtkPaned, the native user-draggable two-pane splitter. The
 // first two children attached become the start/end panes (see the
 // GTK_IS_PANED arm in aether_ui_widget_add_child_ctx). Panes resize with
