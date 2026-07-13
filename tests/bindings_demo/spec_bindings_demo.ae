@@ -1,0 +1,94 @@
+// spec_bindings_demo.ae — typed state + property bindings over the driver.
+// Proves item 8 D1+D2: typed cells serve typed JSON (float cells keep the
+// original byte shape); POST /state/{id}/set parses per type and the walk
+// updates every bound property; one bool state drives enabled/enabled-
+// inverted/hidden on three widgets; float bind_text_fmt formats.
+//
+// State handles are creation-ordered in the demo:
+//   1=float(temp) 2=int(count) 3=bool(busy) 4=string(status)
+//
+// Run via ci.sh Phase 5j, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/bindings_demo/bin/bindings_demo &
+//   UI_SPEC=bindings_demo/spec_bindings_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+enabled_of(txt: string) -> int {
+    id = uidriver.widget_id_by_text(txt)
+    b = uidriver.get_body("/widget/${id}")
+    return string.contains(b, "\"enabled\":true")
+}
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "typed state + bindings over AetherUIDriver") {
+        aeocha.it("typed GET routes; float keeps the original shape") callback {
+            b1 = uidriver.get_body("/state/1")
+            aeocha.assert_contains(b1, "\"value\":21.500000", "float cell, original byte shape")
+            found = string.contains(b1, "type")
+            aeocha.assert_eq(found, 0, "float JSON carries no type field")
+            b2 = uidriver.get_body("/state/2")
+            aeocha.assert_contains(b2, "\"type\":\"int\",\"value\":0", "int cell")
+            b3 = uidriver.get_body("/state/3")
+            aeocha.assert_contains(b3, "\"type\":\"bool\",\"value\":false", "bool cell")
+            b4 = uidriver.get_body("/state/4")
+            aeocha.assert_contains(b4, "\"type\":\"string\",\"value\":\"idle\"", "string cell")
+        }
+
+        aeocha.it("initial bindings rendered (fmt + smart int + string)") callback {
+            b = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b, "\"text\":\"21.5\"", "bind_text_fmt decimals=1")
+            aeocha.assert_contains(b, "\"text\":\"idle\"", "string binding")
+            aeocha.assert_eq(enabled_of("Stop"), 0, "Stop ghosted while not busy")
+            aeocha.assert_eq(enabled_of("Run"), 1, "Run live while not busy")
+        }
+
+        aeocha.it("one bool state flips three bound properties") callback {
+            r = uidriver.widget_id_by_text("Run")
+            uidriver.post_ok("/widget/${r}/click", "click Run")
+            ok = uidriver.wait_body_contains("/state/3", "true", 20)
+            aeocha.assert_true(ok, "busy set")
+            oks = uidriver.wait_body_contains("/widgets", "\"text\":\"running\"", 20)
+            aeocha.assert_true(oks, "status label tracked the string state")
+            aeocha.assert_eq(enabled_of("Run"), 0, "Run ghosted (inverted bind)")
+            aeocha.assert_eq(enabled_of("Stop"), 1, "Stop live")
+            il = uidriver.widget_id_by_text("machine is idle")
+            bi = uidriver.get_body("/widget/${il}")
+            aeocha.assert_contains(bi, "\"visible\":false", "idle label hidden while busy")
+        }
+
+        aeocha.it("driver-side typed sets propagate to bound labels") callback {
+            uidriver.post_ok("/state/2/set?v=41", "set int 41")
+            ok2 = uidriver.wait_body_contains("/widgets", "\"text\":\"41\"", 20)
+            aeocha.assert_true(ok2, "int label tracked")
+            uidriver.post_ok("/state/4/set?v=driver-wrote-this", "set string")
+            ok4 = uidriver.wait_body_contains("/widgets", "driver-wrote-this", 20)
+            aeocha.assert_true(ok4, "string label tracked")
+            uidriver.post_ok("/state/1/set?v=36.66", "set float")
+            ok1 = uidriver.wait_body_contains("/widgets", "\"text\":\"36.7\"", 20)
+            aeocha.assert_true(ok1, "float label formatted %.1f")
+        }
+
+        aeocha.it("app-side increment lands in the typed route") callback {
+            p = uidriver.widget_id_by_text("+1")
+            uidriver.post_ok("/widget/${p}/click", "+1")
+            ok = uidriver.wait_body_contains("/state/2", "\"value\":42", 20)
+            aeocha.assert_true(ok, "count is 42")
+        }
+
+        aeocha.it("Stop restores every bound property") callback {
+            s = uidriver.widget_id_by_text("Stop")
+            uidriver.post_ok("/widget/${s}/click", "click Stop")
+            ok = uidriver.wait_body_contains("/state/3", "false", 20)
+            aeocha.assert_true(ok, "busy cleared")
+            aeocha.assert_eq(enabled_of("Run"), 1, "Run live again")
+            il = uidriver.widget_id_by_text("machine is idle")
+            okv = uidriver.wait_body_contains("/widget/${il}", "\"visible\":true", 20)
+            aeocha.assert_true(okv, "idle label visible again")
+        }
+    }
+    aeocha.run_summary(fw)
+}

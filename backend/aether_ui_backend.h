@@ -328,11 +328,30 @@ void aether_ui_button_set_label(int handle, const char* label);
 void aether_ui_context_menu_item_impl(int handle, const char* label,
                                       void* boxed_closure);
 
-// Reactive state
+// Reactive state — typed cells in one handle space (item 8; see
+// docs/design/reactivity-unification.md). The float trio below is the
+// original API, unchanged. aether_ui_state_type: 0=float 1=int 2=bool
+// 3=string, -1=bad handle. Cross-type get/set is a no-op/zero read.
 int aether_ui_state_create(double initial);
 double aether_ui_state_get(int handle);
 void aether_ui_state_set(int handle, double value);
 void aether_ui_state_bind_text(int state_handle, int text_handle,
                                const char* prefix, const char* suffix);
+int aether_ui_state_create_s(const char* initial);
+int aether_ui_state_create_i(int initial);
+int aether_ui_state_create_b(int initial);
+const char* aether_ui_state_get_s(int handle);  // malloc'd
+int aether_ui_state_get_i(int handle);
+int aether_ui_state_get_b(int handle);
+void aether_ui_state_set_s(int handle, const char* value);
+void aether_ui_state_set_i(int handle, int value);
+void aether_ui_state_set_b(int handle, int value);
+int aether_ui_state_type(int handle);
+// Property bindings: state → widget property links, applied on set.
+// decimals: float text formatting, -1 = smart. invert: negate the
+// truthiness before applying (enabled/hidden).
+void aether_ui_bind_text_impl(int state_handle, int widget_handle, int decimals);
+void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert);
+void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert);
 
 #endif

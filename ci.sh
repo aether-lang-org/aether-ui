@@ -37,7 +37,7 @@ cd "$ROOT"
 mkdir -p build
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo)
+EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo bindings_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -417,6 +417,16 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=split_demo/spec_split_demo \
     run_server_test "$(EX_BIN split_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" split_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5j: AetherUIDriver typed-state + bindings spec ==="
+# bindings (item 8): typed /state routes (float byte-compatible), one bool
+# state flipping enabled/enabled-inverted/hidden, driver + app-side sets.
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=bindings_demo/spec_bindings_demo \
+    run_server_test "$(EX_BIN bindings_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" bindings_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

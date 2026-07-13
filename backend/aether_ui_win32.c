@@ -329,77 +329,213 @@ int aether_ui_handle_for_widget(void* widget) {
 // ---------------------------------------------------------------------------
 // Reactive state — ported verbatim from the GTK4 backend (platform-neutral).
 // ---------------------------------------------------------------------------
+enum { AEUI_STATE_FLOAT = 0, AEUI_STATE_INT = 1,
+       AEUI_STATE_BOOL = 2, AEUI_STATE_STRING = 3 };
 typedef struct {
-    int state_handle;
-    int text_handle;
-    char* prefix;
-    char* suffix;
-} TextBinding;
+    int type;
+    double num;   // float/int/bool payload
+    char* str;    // string payload (owned)
+} StateCell;
 
-static double* state_values = NULL;
+enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2 };
+typedef struct {
+    int kind;
+    int state_handle;
+    int widget_handle;
+    char* prefix;   // TEXT only
+    char* suffix;   // TEXT only
+    int decimals;   // TEXT + float cell: -1 = smart (int-valued → "%d")
+    int invert;     // ENABLED/HIDDEN: apply the negation
+} PropBinding;
+
+static StateCell* state_cells = NULL;
 static int state_count = 0;
 static int state_capacity = 0;
 
-static TextBinding* text_bindings = NULL;
-static int text_binding_count = 0;
-static int text_binding_capacity = 0;
+static PropBinding* prop_bindings = NULL;
+static int prop_binding_count = 0;
+static int prop_binding_capacity = 0;
 
-int aether_ui_state_create(double initial) {
+static StateCell* state_cell(int handle) {
+    if (handle < 1 || handle > state_count) return NULL;
+    return &state_cells[handle - 1];
+}
+
+static int state_create_cell(int type, double num, const char* str) {
     if (state_count >= state_capacity) {
         state_capacity = state_capacity == 0 ? 32 : state_capacity * 2;
-        state_values = (double*)realloc(state_values, sizeof(double) * state_capacity);
+        state_cells = realloc(state_cells, sizeof(StateCell) * state_capacity);
     }
-    state_values[state_count++] = initial;
-    return state_count;
+    StateCell* c = &state_cells[state_count];
+    c->type = type;
+    c->num = num;
+    c->str = str ? strdup(str) : NULL;
+    state_count++;
+    return state_count; // 1-based
+}
+
+int aether_ui_state_create(double initial) {
+    return state_create_cell(AEUI_STATE_FLOAT, initial, NULL);
+}
+int aether_ui_state_create_s(const char* initial) {
+    return state_create_cell(AEUI_STATE_STRING, 0.0, initial ? initial : "");
+}
+int aether_ui_state_create_i(int initial) {
+    return state_create_cell(AEUI_STATE_INT, (double)initial, NULL);
+}
+int aether_ui_state_create_b(int initial) {
+    return state_create_cell(AEUI_STATE_BOOL, initial ? 1.0 : 0.0, NULL);
 }
 
 double aether_ui_state_get(int handle) {
-    if (handle < 1 || handle > state_count) return 0.0;
-    return state_values[handle - 1];
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_FLOAT) ? c->num : 0.0;
+}
+// Returned string is malloc'd (Aether externs own their string returns).
+const char* aether_ui_state_get_s(int handle) {
+    StateCell* c = state_cell(handle);
+    return strdup((c && c->type == AEUI_STATE_STRING && c->str) ? c->str : "");
+}
+int aether_ui_state_get_i(int handle) {
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_INT) ? (int)c->num : 0;
+}
+int aether_ui_state_get_b(int handle) {
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_BOOL) ? (c->num != 0.0) : 0;
 }
 
-static void update_text_bindings(int state_handle) {
-    double val = aether_ui_state_get(state_handle);
-    for (int i = 0; i < text_binding_count; i++) {
-        TextBinding* b = &text_bindings[i];
-        if (b->state_handle != state_handle) continue;
-        char buf[256];
-        if (val == (int)val) {
-            snprintf(buf, sizeof(buf), "%s%d%s", b->prefix, (int)val, b->suffix);
-        } else {
-            snprintf(buf, sizeof(buf), "%s%.2f%s", b->prefix, val, b->suffix);
+int aether_ui_state_type(int handle) {
+    StateCell* c = state_cell(handle);
+    return c ? c->type : -1;
+}
+
+// Render a cell's display string (no prefix/suffix) into buf.
+static void state_render_value(StateCell* c, int decimals, char* buf, int n) {
+    if (!c) { buf[0] = '\0'; return; }
+    switch (c->type) {
+        case AEUI_STATE_STRING:
+            snprintf(buf, n, "%s", c->str ? c->str : "");
+            break;
+        case AEUI_STATE_INT:
+            snprintf(buf, n, "%d", (int)c->num);
+            break;
+        case AEUI_STATE_BOOL:
+            snprintf(buf, n, "%s", c->num != 0.0 ? "true" : "false");
+            break;
+        default: // float
+            if (decimals >= 0) {
+                snprintf(buf, n, "%.*f", decimals, c->num);
+            } else if (c->num == (int)c->num) {
+                snprintf(buf, n, "%d", (int)c->num);
+            } else {
+                snprintf(buf, n, "%.2f", c->num);
+            }
+    }
+}
+
+static int state_truthy(StateCell* c) {
+    if (!c) return 0;
+    if (c->type == AEUI_STATE_STRING) return c->str && c->str[0];
+    return c->num != 0.0;
+}
+
+static void apply_prop_binding(PropBinding* b) {
+    StateCell* c = state_cell(b->state_handle);
+    if (!c) return;
+    if (b->kind == AEUI_BIND_TEXT) {
+        char val[256];
+        state_render_value(c, b->decimals, val, sizeof(val));
+        char buf[512];
+        snprintf(buf, sizeof(buf), "%s%s%s", b->prefix, val, b->suffix);
+        aether_ui_text_set_string(b->widget_handle, buf);
+    } else {
+        int on = state_truthy(c);
+        if (b->invert) on = !on;
+        if (b->kind == AEUI_BIND_ENABLED) {
+            aether_ui_set_enabled(b->widget_handle, on);
+        } else { // HIDDEN: state truthy (post-invert) = hidden
+            aether_ui_widget_set_hidden(b->widget_handle, on);
         }
-        aether_ui_text_set_string(b->text_handle, buf);
+    }
+}
+
+static void update_prop_bindings(int state_handle) {
+    for (int i = 0; i < prop_binding_count; i++) {
+        if (prop_bindings[i].state_handle == state_handle) {
+            apply_prop_binding(&prop_bindings[i]);
+        }
     }
 }
 
 void aether_ui_state_set(int handle, double value) {
-    if (handle < 1 || handle > state_count) return;
-    state_values[handle - 1] = value;
-    update_text_bindings(handle);
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_FLOAT) return;
+    c->num = value;
+    update_prop_bindings(handle);
+}
+void aether_ui_state_set_s(int handle, const char* value) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_STRING) return;
+    free(c->str);
+    c->str = strdup(value ? value : "");
+    update_prop_bindings(handle);
+}
+void aether_ui_state_set_i(int handle, int value) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_INT) return;
+    c->num = (double)value;
+    update_prop_bindings(handle);
+}
+void aether_ui_state_set_b(int handle, int value) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_BOOL) return;
+    c->num = value ? 1.0 : 0.0;
+    update_prop_bindings(handle);
 }
 
+static PropBinding* prop_binding_new(int kind, int state_handle, int widget_handle) {
+    if (prop_binding_count >= prop_binding_capacity) {
+        prop_binding_capacity = prop_binding_capacity == 0 ? 32 : prop_binding_capacity * 2;
+        prop_bindings = realloc(prop_bindings,
+                                sizeof(PropBinding) * prop_binding_capacity);
+    }
+    PropBinding* b = &prop_bindings[prop_binding_count++];
+    b->kind = kind;
+    b->state_handle = state_handle;
+    b->widget_handle = widget_handle;
+    b->prefix = strdup("");
+    b->suffix = strdup("");
+    b->decimals = -1;
+    b->invert = 0;
+    return b;
+}
+
+// The original float text binding — now literally a TEXT PropBinding.
 void aether_ui_state_bind_text(int state_handle, int text_handle,
                                const char* prefix, const char* suffix) {
-    if (text_binding_count >= text_binding_capacity) {
-        text_binding_capacity = text_binding_capacity == 0 ? 32 : text_binding_capacity * 2;
-        text_bindings = (TextBinding*)realloc(text_bindings,
-            sizeof(TextBinding) * text_binding_capacity);
-    }
-    TextBinding* b = &text_bindings[text_binding_count++];
-    b->state_handle = state_handle;
-    b->text_handle = text_handle;
-    b->prefix = strdup(prefix ? prefix : "");
-    b->suffix = strdup(suffix ? suffix : "");
+    PropBinding* b = prop_binding_new(AEUI_BIND_TEXT, state_handle, text_handle);
+    free(b->prefix);
+    free(b->suffix);
+    b->prefix = prefix ? strdup(prefix) : strdup("");
+    b->suffix = suffix ? strdup(suffix) : strdup("");
+    apply_prop_binding(b);
+}
 
-    double val = aether_ui_state_get(state_handle);
-    char buf[256];
-    if (val == (int)val) {
-        snprintf(buf, sizeof(buf), "%s%d%s", b->prefix, (int)val, b->suffix);
-    } else {
-        snprintf(buf, sizeof(buf), "%s%.2f%s", b->prefix, val, b->suffix);
-    }
-    aether_ui_text_set_string(text_handle, buf);
+void aether_ui_bind_text_impl(int state_handle, int widget_handle, int decimals) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_TEXT, state_handle, widget_handle);
+    b->decimals = decimals;
+    apply_prop_binding(b);
+}
+void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_ENABLED, state_handle, widget_handle);
+    b->invert = invert;
+    apply_prop_binding(b);
+}
+void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_HIDDEN, state_handle, widget_handle);
+    b->invert = invert;
+    apply_prop_binding(b);
 }
 
 // ---------------------------------------------------------------------------

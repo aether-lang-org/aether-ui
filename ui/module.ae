@@ -24,6 +24,9 @@ exports (
     textfield, securefield, toggle, toggle_group, slider, picker, picker_add,
     textarea, progressbar,
     ui_state, ui_get, ui_set, text_bound,
+    ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
+    ui_state_b, ui_get_b, ui_set_b,
+    bind_text, bind_text_fmt, bind_enabled, bind_hidden,
     set_text, get_text, set_toggle, get_toggle,
     set_button_label, set_hidden, context_menu_item,
     set_slider, get_slider, set_progress,
@@ -120,6 +123,18 @@ extern aether_ui_state_get(handle: int) -> float
 extern aether_ui_state_set(handle: int, value: float)
 extern aether_ui_state_bind_text(state_handle: int, text_handle: int,
                                  prefix: string, suffix: string)
+extern aether_ui_state_create_s(initial: string) -> int
+extern aether_ui_state_create_i(initial: int) -> int
+extern aether_ui_state_create_b(initial: int) -> int
+extern aether_ui_state_get_s(handle: int) -> string
+extern aether_ui_state_get_i(handle: int) -> int
+extern aether_ui_state_get_b(handle: int) -> int
+extern aether_ui_state_set_s(handle: int, value: string)
+extern aether_ui_state_set_i(handle: int, value: int)
+extern aether_ui_state_set_b(handle: int, value: int)
+extern aether_ui_bind_text_impl(state_handle: int, widget_handle: int, decimals: int)
+extern aether_ui_bind_enabled_impl(state_handle: int, widget_handle: int, invert: int)
+extern aether_ui_bind_hidden_impl(state_handle: int, widget_handle: int, invert: int)
 
 // Group 2: Input widgets
 extern aether_ui_textfield_create(placeholder: string, boxed_closure: ptr) -> int
@@ -768,6 +783,69 @@ text_bound(_ctx: ptr, state_handle: int, prefix: string, suffix: string) {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
     return handle
+}
+
+// ── Typed state (item 8; docs/design/reactivity-unification.md) ──────
+// One handle space, tagged cells. ui_state/ui_get/ui_set above are the
+// float facet, unchanged. Cross-type get/set is a no-op/zero read —
+// never a coercion. A set walks that state's bindings immediately
+// (push; call from the main thread like every other ui verb).
+
+ui_state_s(initial: string) {
+    return aether_ui_state_create_s(initial)
+}
+ui_get_s(handle: int) -> string {
+    return aether_ui_state_get_s(handle)
+}
+ui_set_s(handle: int, value: string) -> int {
+    aether_ui_state_set_s(handle, value)
+    return handle
+}
+
+ui_state_i(initial: int) {
+    return aether_ui_state_create_i(initial)
+}
+ui_get_i(handle: int) -> int {
+    return aether_ui_state_get_i(handle)
+}
+ui_set_i(handle: int, value: int) -> int {
+    aether_ui_state_set_i(handle, value)
+    return handle
+}
+
+ui_state_b(initial: int) {
+    return aether_ui_state_create_b(initial)
+}
+ui_get_b(handle: int) -> int {
+    return aether_ui_state_get_b(handle)
+}
+ui_set_b(handle: int, value: int) -> int {
+    aether_ui_state_set_b(handle, value)
+    return handle
+}
+
+// ── Property bindings: state → widget property, no imperative set_*
+// at every write site. Data-carrying links (no closures — fmt is a
+// decimals int). The widget shows the current value immediately.
+//
+//   bind_text(lbl, st)            // smart: int-valued floats → "42"
+//   bind_text_fmt(lbl, st, 1)     // float cells: "%.1f"
+//   bind_enabled(btn, bst, 0)     // sensitive while bst is truthy
+//   bind_enabled(btn, bst, 1)     // inverted: ghosted while truthy
+//   bind_hidden(w, bst, 0)        // hidden while truthy
+//
+// Truthiness: bool/int/float ≠ 0; string non-empty.
+bind_text(widget: int, state_handle: int) {
+    aether_ui_bind_text_impl(state_handle, widget, 0 - 1)
+}
+bind_text_fmt(widget: int, state_handle: int, decimals: int) {
+    aether_ui_bind_text_impl(state_handle, widget, decimals)
+}
+bind_enabled(widget: int, state_handle: int, invert: int) {
+    aether_ui_bind_enabled_impl(state_handle, widget, invert)
+}
+bind_hidden(widget: int, state_handle: int, invert: int) {
+    aether_ui_bind_hidden_impl(state_handle, widget, invert)
 }
 
 // --- Widget accessors ---

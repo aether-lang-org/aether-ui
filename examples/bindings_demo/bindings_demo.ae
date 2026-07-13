@@ -1,0 +1,56 @@
+// Aether UI typed-state + bindings example (roadmap item 8).
+//
+// Four states — float, int, bool, string — each BOUND to widget
+// properties once; every later ui_set_* propagates with no imperative
+// set_text/set_enabled at the write sites. State handles are creation-
+// ordered: 1=float 2=int 3=bool 4=string (the driver spec uses these).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider,
+    ui_state, ui_set, ui_get, ui_state_i, ui_set_i, ui_get_i,
+    ui_state_b, ui_set_b, ui_get_b, ui_state_s, ui_set_s,
+    bind_text, bind_text_fmt, bind_enabled, bind_hidden,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+main() {
+    temp = ui_state(21.5)        // state 1: float
+    count = ui_state_i(0)        // state 2: int
+    busy = ui_state_b(0)         // state 3: bool
+    status = ui_state_s("idle")  // state 4: string
+
+    window("bindings demo", 480, 360) {
+        vstack(8) {
+            t1 = text("")
+            bind_text_fmt(t1, temp, 1)
+            t2 = text("")
+            bind_text(t2, count)
+            t3 = text("")
+            bind_text(t3, status)
+            divider()
+            run_btn = btn("Run") callback {
+                _b1 = ui_set_b(busy, 1)
+                _s1 = ui_set_s(status, "running")
+            }
+            stop_btn = btn("Stop") callback {
+                _b2 = ui_set_b(busy, 0)
+                _s2 = ui_set_s(status, "idle")
+            }
+            idle_lbl = text("machine is idle")
+            // Run ghosts while busy; Stop ghosts while NOT busy; the
+            // idle label hides while busy. One bool, three properties.
+            bind_enabled(run_btn, busy, 1)
+            bind_enabled(stop_btn, busy, 0)
+            bind_hidden(idle_lbl, busy, 0)
+            divider()
+            _inc = btn("+1") callback {
+                _i = ui_set_i(count, ui_get_i(count) + 1)
+            }
+            _warm = btn("+0.7") callback {
+                _f = ui_set(temp, ui_get(temp) + 0.7)
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
