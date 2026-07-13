@@ -1,0 +1,69 @@
+// spec_split_demo.ae — drives the splitview example over the AetherUIDriver.
+// Proves item 7 D1: the splitter and both panes are REAL widgets in
+// /widgets; POST /widget/{id}/split_position moves the splitter and the
+// panes' allocations follow; the app-side split_position/split_set_position
+// round-trip works (Read position / Center buttons).
+//
+// Run via ci.sh Phase 5i, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/split_demo/bin/split_demo &
+//   UI_SPEC=split_demo/spec_split_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+// The pane vstack CONTAINING the label `txt` (labels have the text; panes
+// are their parents).
+pane_of(txt: string) -> int {
+    lbl = uidriver.widget_id_by_text(txt)
+    if lbl == 0 { return 0 }
+    return uidriver.widget_int_field_by_id(lbl, "parent")
+}
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "splitview over AetherUIDriver") {
+        aeocha.it("both panes render as real widgets") callback {
+            lp = pane_of("left pane")
+            rp = pane_of("right pane")
+            aeocha.assert_gt(lp, 0, "left pane found")
+            aeocha.assert_gt(rp, 0, "right pane found")
+            svl = uidriver.widget_int_field_by_id(lp, "parent")
+            svr = uidriver.widget_int_field_by_id(rp, "parent")
+            aeocha.assert_eq(svl, svr, "panes share the splitview parent")
+            b = uidriver.get_body("/widget/${svl}")
+            aeocha.assert_contains(b, "\"type\":\"splitview\"", "parent is a splitview")
+            aeocha.assert_contains(b, "splitPosition", "splitPosition reported")
+        }
+
+        aeocha.it("split_position route moves the splitter, panes follow") callback {
+            lp = pane_of("left pane")
+            sv = uidriver.widget_int_field_by_id(lp, "parent")
+            uidriver.post_ok("/widget/${sv}/split_position?px=150", "drag to 150")
+            ok = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":150", 20)
+            aeocha.assert_true(ok, "splitter at 150")
+            okw = uidriver.wait_body_contains("/widget/${lp}", "\"w\":150", 20)
+            aeocha.assert_true(okw, "left pane reallocated to 150")
+            rw = uidriver.widget_int_field_by_id(pane_of("right pane"), "w")
+            aeocha.assert_gt(rw, 300, "right pane grew")
+        }
+
+        aeocha.it("app-side split_position reads the moved splitter") callback {
+            rb = uidriver.widget_id_by_text("Read position")
+            uidriver.post_ok("/widget/${rb}/click", "read position")
+            ok = uidriver.wait_body_contains("/widgets", "position: 150", 20)
+            aeocha.assert_true(ok, "status shows position: 150")
+        }
+
+        aeocha.it("app-side split_set_position moves it back") callback {
+            cb = uidriver.widget_id_by_text("Center")
+            uidriver.post_ok("/widget/${cb}/click", "center")
+            lp = pane_of("left pane")
+            sv = uidriver.widget_int_field_by_id(lp, "parent")
+            ok = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":320", 20)
+            aeocha.assert_true(ok, "splitter back at 320")
+        }
+    }
+    aeocha.run_summary(fw)
+}

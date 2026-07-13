@@ -1461,6 +1461,21 @@ int aether_ui_scrollview_create(void) {
     return handle;
 }
 
+// splitview stub: a plain stack in the split's orientation (children lay
+// out side by side / stacked; no draggable splitter). A real Win32
+// splitter is follow-up work — this keeps the cross-platform ABI green.
+// NB: splitview("h") means panes side-by-side = a HORIZONTAL stack.
+int aether_ui_splitview_create(int vertical) {
+    return create_stack(vertical, 0);
+}
+int aether_ui_split_position_impl(int handle) {
+    (void)handle;
+    return -1;
+}
+void aether_ui_split_set_position_impl(int handle, int px) {
+    (void)handle; (void)px;
+}
+
 int aether_ui_progressbar_create(double fraction) {
     ensure_win_init();
     HWND h = CreateWindowExW(0, PROGRESS_CLASSW, L"",

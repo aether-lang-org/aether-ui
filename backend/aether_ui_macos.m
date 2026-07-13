@@ -497,6 +497,21 @@ int aether_ui_vstack_create(int spacing) {
     return register_widget_typed((__bridge void*)stack, AUI_VSTACK);
 }
 
+// splitview stub: a plain stack in the split's orientation (no draggable
+// divider yet). NSSplitView wiring is follow-up work — this keeps the
+// cross-platform ABI + builds green. splitview("h") = panes side-by-side
+// = a horizontal stack.
+int aether_ui_splitview_create(int vertical) {
+    return vertical ? aether_ui_vstack_create(0) : aether_ui_hstack_create(0);
+}
+int aether_ui_split_position_impl(int handle) {
+    (void)handle;
+    return -1;
+}
+void aether_ui_split_set_position_impl(int handle, int px) {
+    (void)handle; (void)px;
+}
+
 int aether_ui_hstack_create(int spacing) {
     NSStackView* stack = [[NSStackView alloc] init];
     [stack setOrientation:NSUserInterfaceLayoutOrientationHorizontal];

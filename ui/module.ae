@@ -18,6 +18,7 @@ exports (
     _surface_window_factory, _surface_render_factory, _surface_record_factory,
     app_run, app_create, app_start,
     vstack, hstack, scrollview, zstack, form, section, navstack,
+    splitview, split_position, split_set_position,
     nav_push, nav_pop,
     text, button, btn, spacer, divider,
     textfield, securefield, toggle, toggle_group, slider, picker, picker_add,
@@ -151,6 +152,9 @@ extern aether_ui_progressbar_create(fraction: float) -> int
 extern aether_ui_progressbar_set_fraction(handle: int, fraction: float)
 
 // Group 3: Layout containers
+extern aether_ui_splitview_create(vertical: int) -> int
+extern aether_ui_split_position_impl(handle: int) -> int
+extern aether_ui_split_set_position_impl(handle: int, px: int)
 extern aether_ui_zstack_create() -> int
 extern aether_ui_form_create() -> int
 extern aether_ui_form_section_create(title: string) -> int
@@ -509,6 +513,34 @@ scrollview(_ctx: ptr) {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
     return handle
+}
+
+// splitview(orient) { pane1  pane2 } — a native user-draggable two-pane
+// splitter (GtkPaned on Linux). orient "h" = panes side by side (the
+// divider is vertical), "v" = panes stacked. EXACTLY TWO children: the
+// first two widgets declared in the block become the panes; any further
+// attach is silently dropped. Splitter position: split_position /
+// split_set_position (px from the left/top edge), and the driver route
+// POST /widget/{id}/split_position?px= so specs can drag it.
+// win32/macOS: renders as a plain stack for now (no draggable divider).
+splitview(_ctx: ptr, orient: string) {
+    vertical = 0
+    if orient == "v" { vertical = 1 }
+    handle = aether_ui_splitview_create(vertical)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    return handle
+}
+
+// Splitter position in px from the start edge; -1 if handle isn't a
+// splitview (or on backends without a real splitter).
+split_position(handle: int) -> int {
+    return aether_ui_split_position_impl(handle)
+}
+
+split_set_position(handle: int, px: int) {
+    aether_ui_split_set_position_impl(handle, px)
 }
 
 zstack(_ctx: ptr) {

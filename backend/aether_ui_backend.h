@@ -92,6 +92,11 @@ int aether_ui_progressbar_create(double fraction);
 void aether_ui_progressbar_set_fraction(int handle, double fraction);
 
 // Layout containers (Group 3)
+// splitview: native two-pane draggable splitter (GtkPaned / NSSplitView /
+// win32 stub). Position get/set in px from the start edge; -1 = not a split.
+int aether_ui_splitview_create(int vertical);
+int aether_ui_split_position_impl(int handle);
+void aether_ui_split_set_position_impl(int handle, int px);
 int aether_ui_zstack_create(void);
 int aether_ui_form_create(void);
 int aether_ui_form_section_create(const char* title);

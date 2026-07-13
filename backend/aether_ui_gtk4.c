@@ -769,6 +769,32 @@ int aether_ui_divider_create(void) {
     return aether_ui_register_widget(sep);
 }
 
+// splitview — GtkPaned, the native user-draggable two-pane splitter. The
+// first two children attached become the start/end panes (see the
+// GTK_IS_PANED arm in aether_ui_widget_add_child_ctx). Panes resize with
+// the window and don't shrink below their minimum.
+int aether_ui_splitview_create(int vertical) {
+    ensure_gtk_init();
+    GtkWidget* paned = gtk_paned_new(vertical ? GTK_ORIENTATION_VERTICAL
+                                              : GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_hexpand(paned, TRUE);
+    gtk_widget_set_vexpand(paned, TRUE);
+    return aether_ui_register_widget(paned);
+}
+
+// Splitter position in px from the start edge; -1 if not a splitview.
+int aether_ui_split_position_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_PANED(w)) return -1;
+    return gtk_paned_get_position(GTK_PANED(w));
+}
+
+void aether_ui_split_set_position_impl(int handle, int px) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_PANED(w)) return;
+    gtk_paned_set_position(GTK_PANED(w), px);
+}
+
 // ---------------------------------------------------------------------------
 // Input widgets (Group 2)
 // ---------------------------------------------------------------------------
@@ -3157,6 +3183,7 @@ static const char* widget_type_name(GtkWidget* w) {
     if (GTK_IS_PROGRESS_BAR(w)) return "progressbar";
     if (GTK_IS_SEPARATOR(w)) return "divider";
     if (GTK_IS_SCROLLED_WINDOW(w)) return "scrollview";
+    if (GTK_IS_PANED(w)) return "splitview";
     if (GTK_IS_OVERLAY(w)) return "zstack";
     if (GTK_IS_DRAWING_AREA(w)) return "canvas";
     if (GTK_IS_IMAGE(w)) return "image";
@@ -3290,6 +3317,9 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
         // Picker selection (both surfaces) — "selected" for spec round-trips.
         n += snprintf(buf + n, bufsize - n, ",\"selected\":%d",
                       aether_ui_picker_get_selected(handle));
+    } else if (GTK_IS_PANED(w)) {
+        n += snprintf(buf + n, bufsize - n, ",\"splitPosition\":%d",
+                      gtk_paned_get_position(GTK_PANED(w)));
     }
 
     // CSS classes set via ui.add_css_class — specs assert selection visuals
@@ -3344,7 +3374,7 @@ static const char* extract_query_param(const char* path, const char* key) {
 // Data passed to the GTK idle callback for thread-safe widget interaction.
 typedef struct {
     int action;  // 0=click 1=set_text 2=toggle 3=set_value 4=set_state
-                 // 5=ctx_open 6=ctx_activate
+                 // 5=ctx_open 6=ctx_activate 7=split_position
     int handle;
     double dval;
     int ival;    // ctx item index (action 6)
@@ -3414,6 +3444,13 @@ static gboolean test_action_idle(gpointer data) {
             break;
         case 6: // ctx_activate — fire item[ival]'s closure
             ta->retval = aeui_ctx_menu_activate(ta->handle, ta->ival);
+            break;
+        case 7: // split_position — move the splitter (px ignored if < 0)
+            if (GTK_IS_PANED(w) && ta->ival >= 0) {
+                gtk_paned_set_position(GTK_PANED(w), ta->ival);
+            }
+            ta->retval = GTK_IS_PANED(w)
+                ? gtk_paned_get_position(GTK_PANED(w)) : -1;
             break;
     }
     ta->result = 0;
@@ -4030,6 +4067,11 @@ static void handle_test_request(int client_fd) {
                 ta.action = 3;
                 const char* v = extract_query_param(path, "v");
                 if (v) ta.dval = atof(v);
+            } else if (strncmp(action_part, "/split_position", 15) == 0) {
+                // POST /widget/{id}/split_position?px=N — drag the splitter.
+                ta.action = 7;
+                const char* v = extract_query_param(path, "px");
+                ta.ival = v ? atoi(v) : -1;
             } else {
                 send_response(client_fd, 400, "Bad Request", "application/json",
                               "{\"error\":\"unknown action\"}");
@@ -4337,6 +4379,18 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
             gtk_overlay_set_child(GTK_OVERLAY(parent), child);
         } else {
             gtk_overlay_add_overlay(GTK_OVERLAY(parent), child);
+        }
+    } else if (GTK_IS_PANED(parent)) {
+        // splitview: exactly two panes, in declaration order. A third
+        // attach is silently dropped (documented in ui.splitview).
+        if (gtk_paned_get_start_child(GTK_PANED(parent)) == NULL) {
+            gtk_paned_set_start_child(GTK_PANED(parent), child);
+            gtk_paned_set_resize_start_child(GTK_PANED(parent), TRUE);
+            gtk_paned_set_shrink_start_child(GTK_PANED(parent), FALSE);
+        } else if (gtk_paned_get_end_child(GTK_PANED(parent)) == NULL) {
+            gtk_paned_set_end_child(GTK_PANED(parent), child);
+            gtk_paned_set_resize_end_child(GTK_PANED(parent), TRUE);
+            gtk_paned_set_shrink_end_child(GTK_PANED(parent), FALSE);
         }
     }
 }
