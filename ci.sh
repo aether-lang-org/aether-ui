@@ -37,7 +37,7 @@ cd "$ROOT"
 mkdir -p build
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo)
+EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -372,6 +372,17 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=each_demo/spec_each_demo \
     run_server_test "$(EX_BIN each_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" each_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5f: AetherUIDriver listbox spec ==="
+# listbox (item 4 D1): rows are real widgets; the driver clicks a ROW (click
+# falls back to gesture handlers on non-buttons), selection reads back via
+# the tracked "classes" JSON field; 200-row updates stay driver-visible.
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=listbox_demo/spec_listbox_demo \
+    run_server_test "$(EX_BIN listbox_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" listbox_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

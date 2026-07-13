@@ -19,7 +19,7 @@ exports (
     click, click_widget, toggle_widget, key, move_to, resize_window,
     set_state, state_value_int,
     widget_id_by_text, widget_id_of, widget_text_by_id, widget_bool_by_text,
-    widget_int_field_by_id,
+    widget_int_field_by_id, field_str, field_int,
     canvas_w, canvas_h, canvas_widget_id,
     wait_server, wait_body_contains
 )

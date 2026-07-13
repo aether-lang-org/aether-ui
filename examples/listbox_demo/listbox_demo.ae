@@ -1,0 +1,87 @@
+// Aether UI listbox example — rows over a list with selection (item 4 D1).
+//
+// A listbox renders one row (an hstack the template fills) per item, wires
+// row-click → selection (.aui-row-selected) → on_select, and resets selection
+// on update (clear+rebuild; no row identity until track-by lands). Rows are
+// REAL widgets: the driver clicks one via POST /widget/{row}/click and reads
+// selection from the row JSON's "classes" field.
+//
+//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, scrollview,
+    listbox, listbox_update, listbox_select, listbox_selected, listbox_count,
+    on_select, enable_test_server, fill_height)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern aether_ui_text_set_string(handle: int, text: string)
+extern malloc(size: int) -> ptr
+
+struct Person { name: string, size: string }
+
+mk_person(n: int) -> ptr {
+    p = malloc(24) as *Person
+    p.name = string.concat("person ", string.from_int(n))
+    p.size = string.concat(string.from_int(n * 7), " KB")
+    return p as ptr
+}
+
+main() {
+    items = list.new()
+    next_n = 0
+
+    window("listbox demo", 520, 480) {
+        vstack(8) {
+            status = text("status: idle")
+            counter = text("rows: 0")
+            divider()
+
+            people = listbox(2) callback |item: ptr, i: int, row: int| {
+                p = item as *Person
+                _t1 = text(row, p.name)
+                _t2 = text(row, p.size)
+            }
+            on_select(people) callback |i: int| {
+                aether_ui_text_set_string(status,
+                    string.concat("selected index ", string.from_int(i)))
+            }
+            divider()
+
+            hstack(10) {
+                _a = btn("Add") callback {
+                    next_n = next_n + 1
+                    list.add(items, mk_person(next_n))
+                    listbox_update(people, items)
+                    aether_ui_text_set_string(counter,
+                        string.concat("rows: ", string.from_int(listbox_count(people))))
+                }
+                _s2 = btn("Select #2") callback {
+                    listbox_select(people, 1)
+                }
+                _rm = btn("Remove last") callback {
+                    n = list.size(items)
+                    if n > 0 {
+                        list.remove(items, n - 1)
+                        listbox_update(people, items)
+                    }
+                    aether_ui_text_set_string(counter,
+                        string.concat("rows: ", string.from_int(listbox_count(people))))
+                }
+                _big = btn("Add 200") callback {
+                    k = 0
+                    while k < 200 {
+                        next_n = next_n + 1
+                        list.add(items, mk_person(next_n))
+                        k = k + 1
+                    }
+                    listbox_update(people, items)
+                    aether_ui_text_set_string(counter,
+                        string.concat("rows: ", string.from_int(listbox_count(people))))
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

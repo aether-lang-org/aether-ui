@@ -39,6 +39,8 @@ exports (
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast,
     vg_tooltip_show, vg_tooltip_hide, vg_tooltip_drawn,
     each, each_update, each_count, each_parent,
+    listbox, listbox_update, listbox_select, listbox_selected, listbox_count,
+    on_select, add_css_class, remove_css_class,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_size,
     canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -59,6 +61,8 @@ exports (
 
 import std.string   // overlay_anchor_code parses the anchor string
 import std.list     // each_update walks the items list
+import std.intarr   // listbox row-handle tracking
+import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
 
 extern malloc(size: int) -> ptr   // EachGroup allocation (house pattern, vg/module.ae:84)
 
@@ -209,6 +213,8 @@ extern aether_ui_overlay_is_live_impl(overlay_handle: int) -> int
 extern aether_ui_overlay_count_impl() -> int
 extern aether_ui_overlay_is_modal_impl(overlay_handle: int) -> int
 extern aether_ui_toast_impl(win_handle: int, text: string, ms: int) -> int
+extern aether_ui_widget_add_css_class_impl(handle: int, cls: string)
+extern aether_ui_widget_remove_css_class_impl(handle: int, cls: string)
 // Drawn tooltip for vg scenes (a styled overlay near the pointer, replacing
 // the native GtkTooltip that sommelier can't display).
 extern aether_ui_vg_tooltip_show_impl(canvas_id: int, text: string, cx: float, cy: float) -> int
@@ -1087,6 +1093,126 @@ each_count(ep: ptr) -> int {
 each_parent(ep: ptr) -> int {
     e = ep as *EachGroup
     return e.container
+}
+
+// ---------------------------------------------------------------------------
+// listbox — rows over a list, selection synced, driver-visible (item 4 D1).
+//
+// An `each`-backed column of real row widgets inside whatever container the
+// verb appears in (put it in a scrollview for long lists). Each row is an
+// hstack the USER's render template fills; the listbox wires row-click →
+// selection (.aui-row-selected CSS) → the on_select callback. Rows are real
+// widgets: the driver clicks a row via POST /widget/{row}/click (the click
+// action falls back to gesture handlers on non-buttons) and specs assert
+// selection via the row JSON's "classes" field. Data flow matches each:
+// explicit listbox_update(lb, items); selection RESETS on update (v1 —
+// clear+rebuild has no row identity to preserve; track-by is the later fix).
+//
+//   people = listbox(4) callback |item: ptr, i: int, row: int| {
+//       p = item as *Person
+//       _t = text(row, p.name)
+//   }
+//   on_select(people) callback |i: int| { ... }
+//   ...
+//   listbox_update(people, people_list)
+// ---------------------------------------------------------------------------
+
+struct ListBox {
+    group: ptr,        // the underlying each
+    rows: ptr,         // intarr of row handles for the CURRENT render, or null
+    selected: int,     // selected row index, -1 = none
+    on_sel: ptr,       // boxed |i: int| callback, or null
+    user_render: ptr   // boxed |item, i, row| row template
+}
+
+_listbox_invoke_render(cb: fn, item: ptr, i: int, row: int) {
+    cb(item, i, row)
+}
+
+_listbox_invoke_sel(cb: fn, i: int) {
+    cb(i)
+}
+
+_listbox_apply_selection(lb: *ListBox, i: int) {
+    if lb.rows == null { return }
+    if lb.selected >= 0 {
+        oldh = intarr_get_raw(lb.rows, lb.selected)
+        if oldh > 0 { aether_ui_widget_remove_css_class_impl(oldh, "aui-row-selected") }
+    }
+    lb.selected = i
+    if i >= 0 {
+        newh = intarr_get_raw(lb.rows, i)
+        if newh > 0 { aether_ui_widget_add_css_class_impl(newh, "aui-row-selected") }
+    }
+}
+
+_listbox_row_clicked(lbp: ptr, i: int) {
+    lb = lbp as *ListBox
+    _listbox_apply_selection(lb, i)
+    if lb.on_sel != null {
+        cb = unbox_closure(lb.on_sel)
+        _listbox_invoke_sel(cb, i)
+    }
+}
+
+// listbox(spacing, render) -> listbox-handle. render = |item, i, row|.
+listbox(_ctx: ptr, spacing: int, render: fn) -> ptr {
+    lb = malloc(40) as *ListBox
+    lb.rows = null
+    lb.selected = 0 - 1
+    lb.on_sel = null
+    lb.user_render = box_closure(render)
+    lbp = lb as ptr
+    lb.group = each(_ctx, "v", spacing) callback |item: ptr, i: int, parent: int| {
+        row = hstack(parent, 8)
+        intarr_set_raw(lb.rows, i, row)
+        ur = unbox_closure(lb.user_render)
+        _listbox_invoke_render(ur, item, i, row)
+        _oc = on_click(row) callback { _listbox_row_clicked(lbp, i) }
+    }
+    return lbp
+}
+
+// listbox_update(lb, items) — re-render the rows; selection resets.
+listbox_update(lbp: ptr, items: ptr) {
+    lb = lbp as *ListBox
+    if lb.rows != null { intarr_free(lb.rows) }
+    n = list.size(items)
+    sz = n
+    if sz < 1 { sz = 1 }
+    lb.rows = intarr_new_raw(sz)
+    lb.selected = 0 - 1
+    each_update(lb.group, items)
+}
+
+// Programmatic selection (same path as a row click, incl. the callback).
+listbox_select(lbp: ptr, i: int) {
+    _listbox_row_clicked(lbp, i)
+}
+
+listbox_selected(lbp: ptr) -> int {
+    lb = lbp as *ListBox
+    return lb.selected
+}
+
+listbox_count(lbp: ptr) -> int {
+    lb = lbp as *ListBox
+    return each_count(lb.group)
+}
+
+// on_select(lb) callback |i: int| { … } — fires on click AND listbox_select.
+on_select(lbp: ptr, cb: fn) {
+    lb = lbp as *ListBox
+    lb.on_sel = box_closure(cb)
+}
+
+// Generic CSS-class styling (the selection-visual primitive, exported for
+// apps too; GTK-only — no-op stubs elsewhere).
+add_css_class(handle: int, cls: string) {
+    aether_ui_widget_add_css_class_impl(handle, cls)
+}
+remove_css_class(handle: int, cls: string) {
+    aether_ui_widget_remove_css_class_impl(handle, cls)
 }
 
 // Modal sheet

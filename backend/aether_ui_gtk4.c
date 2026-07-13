@@ -1669,6 +1669,10 @@ static void aeui_overlay_css_once(void) {
         "  background-color: @theme_bg_color;"
         "  border: 1px solid alpha(currentColor, 0.2); border-radius: 10px;"
         "  padding: 20px;"
+        "}"
+        ".aui-row-selected {"
+        "  background-color: alpha(@theme_selected_bg_color, 0.85);"
+        "  border-radius: 4px;"
         "}", -1);
     gtk_style_context_add_provider_for_display(
         display, GTK_STYLE_PROVIDER(prov),
@@ -2880,6 +2884,59 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     g_signal_connect(gesture, "released",
         G_CALLBACK(on_button_clicked), boxed_closure);
     gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
+    // Remember the closure so the AetherUIDriver's /widget/{id}/click can
+    // fire gesture-based handlers on NON-buttons (listbox rows are plain
+    // containers). Same philosophy as emitting "clicked" on a GtkButton:
+    // invoke the handler the user's click would run, not a fake input event.
+    g_object_set_data(G_OBJECT(w), "aeui-click-closure", boxed_closure);
+}
+
+// CSS class add/remove — the selection-visual primitive (listbox rows toggle
+// .aui-row-selected). Chrome CSS installs on first use (idempotent).
+//
+// A space-joined copy of the classes set THROUGH THIS API is mirrored into
+// gobject data ("aeui-classes") so widget_to_json can report them WITHOUT
+// calling gtk_widget_get_css_classes: the test server serializes widgets on
+// its own thread, and the CSS-class getter walks/allocates in GTK's css-node
+// machinery — off-thread that corrupts the global parent cache and GTK
+// aborts at teardown (gtkcssnode.c:321 "node->cache == NULL", reproduced by
+// spec-driven /widgets polling). The mirror is a plain strdup'd string — the
+// same read-only-racy-but-inert class as the other JSON fields.
+static void aeui_track_class(GtkWidget* w, const char* cls, int add) {
+    const char* cur = (const char*)g_object_get_data(G_OBJECT(w), "aeui-classes");
+    GString* out = g_string_new("");
+    if (cur && cur[0]) {
+        char** parts = g_strsplit(cur, " ", -1);
+        for (int i = 0; parts[i]; i++) {
+            if (!parts[i][0]) continue;
+            if (strcmp(parts[i], cls) == 0) continue;   // drop; re-added below if add
+            if (out->len) g_string_append_c(out, ' ');
+            g_string_append(out, parts[i]);
+        }
+        g_strfreev(parts);
+    }
+    if (add) {
+        if (out->len) g_string_append_c(out, ' ');
+        g_string_append(out, cls);
+    }
+    g_object_set_data_full(G_OBJECT(w), "aeui-classes",
+                           g_strdup(out->str), g_free);
+    g_string_free(out, TRUE);
+}
+
+void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !cls || !cls[0]) return;
+    aeui_overlay_css_once();
+    gtk_widget_add_css_class(w, cls);
+    aeui_track_class(w, cls, 1);
+}
+
+void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !cls || !cls[0]) return;
+    gtk_widget_remove_css_class(w, cls);
+    aeui_track_class(w, cls, 0);
 }
 
 // Animation — opacity and position
@@ -3149,6 +3206,17 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
                       aether_ui_picker_get_selected(handle));
     }
 
+    // CSS classes set via ui.add_css_class — specs assert selection visuals
+    // (.aui-row-selected) from the tracked mirror. NEVER call
+    // gtk_widget_get_css_classes here: this runs on the test-server thread
+    // and that getter touches GTK css-node internals (see aeui_track_class).
+    {
+        const char* cls = (const char*)g_object_get_data(G_OBJECT(w), "aeui-classes");
+        if (cls && cls[0]) {
+            n += snprintf(buf + n, bufsize - n, ",\"classes\":\"%s\"", cls);
+        }
+    }
+
     n += snprintf(buf + n, bufsize - n, "}");
     return n;
 }
@@ -3217,11 +3285,19 @@ static gboolean test_action_idle(gpointer data) {
     if (is_widget_sealed(ta->handle)) { ta->result = 1; ta->done = 1; return G_SOURCE_REMOVE; }
 
     switch (ta->action) {
-        case 0: // click
+        case 0: { // click
             if (GTK_IS_BUTTON(w)) {
                 g_signal_emit_by_name(w, "clicked");
+            } else {
+                // Non-buttons with an on_click gesture (listbox rows, any
+                // container): invoke the registered closure directly — the
+                // handler a real click would run (see aeui-click-closure).
+                AeClosure* cc = (AeClosure*)g_object_get_data(G_OBJECT(w),
+                                                              "aeui-click-closure");
+                if (cc && cc->fn) ((void(*)(void*))cc->fn)(cc->env);
             }
             break;
+        }
         case 1: // set_text
             if (GTK_IS_LABEL(w)) {
                 gtk_label_set_text(GTK_LABEL(w), ta->sval);
@@ -3365,6 +3441,21 @@ static gboolean window_resize_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+// write(2) may PARTIALLY write on a socket (loopback send buffer is ~64KB):
+// a 200-row /widgets body (>100KB) silently truncated mid-payload and the
+// client saw a Content-Length mismatch. Loop until drained.
+static void write_all(int fd, const char* buf, int len) {
+    int off = 0;
+    while (off < len) {
+        int n = (int)write(fd, buf + off, (size_t)(len - off));
+        if (n <= 0) {
+            if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+            return;   // peer gone; nothing useful to do
+        }
+        off += n;
+    }
+}
+
 static void send_response(int fd, int status, const char* status_text,
                            const char* content_type, const char* body) {
     char header[512];
@@ -3377,8 +3468,8 @@ static void send_response(int fd, int status, const char* status_text,
         "Connection: close\r\n"
         "\r\n",
         status, status_text, content_type, bodylen);
-    write(fd, header, hlen);
-    if (body && bodylen > 0) write(fd, body, bodylen);
+    write_all(fd, header, hlen);
+    if (body && bodylen > 0) write_all(fd, body, bodylen);
 }
 
 // Screenshot result — shared between server thread and GTK idle callback.
