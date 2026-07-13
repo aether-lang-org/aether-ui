@@ -236,9 +236,24 @@ expensive one and only matters once overlays (item 1) exist.
 like the recording cache. **Depends on:** nothing (pairs beautifully
 with 1).
 
-### 6. Implicit transitions — QML `Behavior`, not SwiftUI `withAnimation`
+### 6. Implicit transitions — QML `Behavior`, not SwiftUI `withAnimation` ✅ DONE (2026-07-13)
 
-**Hand-off brief: `briefs/transitions.md`** (2026-07-12, ready for execution).
+**Shipped** (commit e427da6): ui.transition(handle, prop, ms, easing) —
+declare once, subsequent style changes tween; rides GTK4's own CSS
+transition engine through the accumulating apply_css provider (zero
+timers on our side; style_opacity re-routed via CSS so the engine sees
+it). vg.behavior(el, "fill"|"opacity", ms, easing) — the module's
+element_set_* wrappers become tweens driven by the EXISTING
+grammar.animations manager (scene now records last_now for one-shot
+start times); colors lerp in RGB. Toast/scrim/modal-card fade-ins via
+pure CSS @keyframes. gp Stop/Rescan ghosting + scheme radio flips fade
+(150ms "all"). Determinism: AETHER_UI_NO_ANIMATION=1 no-ops everything;
+ci exports it for all driver phases, and the new Phase 5h runs
+animations ON, proving a real tween by screenshot byte-compare
+(mid-flight ≠ settled ≠ opaque). test_behavior drives a manual clock:
+t=0.5 linear fill is exactly rgb(128,128,128). Not done: enter/exit
+transitions on overlay ENTRIES beyond the chrome fade-ins (backlog).
+Detail below is the original proposal, kept for the reasoning.
 
 **Borrowed from:** QML's `Behavior on opacity { NumberAnimation {} }` —
 declare once on a property, every subsequent setter animates. The most
@@ -365,7 +380,7 @@ format: comparisons, verdict, phased ci-gated migration).
 | 3 | `each` ✅ | M | DONE 2026-07-13 (7216239/a552550 + aether PRs #1125/#1127) — verb + spec + gp crumb pool retired |
 | 4 | Table/list ✅ | L | DONE 2026-07-13 (345a916/04f9daf/4b5762c) — listbox + table + gp left pane migrated; virtualization/delegate cells deferred |
 | 5 | Shadows + group opacity ✅ | S–M | DONE 2026-07-13 (2ebec4a) — vg.shadow cached + true group opacity + chrome shadows; backdrop blur deferred |
-| 6 | Implicit transitions | S–M | Perceived quality; machinery exists in vg |
+| 6 | Implicit transitions ✅ | S–M | DONE 2026-07-13 (e427da6) — ui.transition (GTK CSS engine) + vg.behavior (existing anim manager) + chrome fade-ins; Phase 5h tween proof; NO_ANIMATION ci discipline |
 | 7 | Flex/split/on_layout | M | Unblocks real multi-pane apps |
 | 8 | Bindings + typed state | M | Unify ui/vg reactivity |
 | 9 | Focus/shortcuts | M | Polish + testability |
