@@ -19,14 +19,14 @@ import std.list
 import std.string
 import std.math
 import std.fs
-import ui (set_button_label, set_hidden, set_toggle)
+import ui (set_button_label, set_hidden, set_toggle, each_update)
 import gp_model
 import gp_model (FileEntry, TypeStat, to_float, clip_name, ext_label, fmt_size,
     pct_of_parent, dbg_on)
 import gp_layout
 import gp_layout (LayoutCtx, layout_treemap, RECT_BUDGET)
 import gp_state
-import gp_state (AppState, crumb_handle)
+import gp_state (AppState)
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
@@ -96,24 +96,21 @@ crumb_base(s: *AppState) -> int {
 }
 
 update_crumbs(s: *AppState) {
-    if s.crumb0 == 0 { return }          // window not built yet
+    if s.crumbs == null { return }       // window not built yet
+    // Render the VISIBLE slice of the drill stack (last CRUMBS() entries —
+    // the same sliding window the pool had; deeper paths show "…" first).
+    // The render closure (grand_perspective.ae) labels + wires each button.
     n = list.size(s.stack)
     base = crumb_base(s)
-    i = 0
-    while i < gp_model.CRUMBS() {
-        h = crumb_handle(s, i)
-        idx = base + i
-        if idx < n {
-            it, _ = list.get(s.stack, idx); e = it as *FileEntry
-            nm = clip_name(e.name)
-            if i == 0 { if base > 0 { nm = "…" } }
-            _ = set_button_label(h, nm)
-            _ = set_hidden(h, 0)
-        } else {
-            _ = set_hidden(h, 1)
-        }
-        i = i + 1
+    vis = list.new()
+    idx = base
+    while idx < n {
+        it, _ = list.get(s.stack, idx)
+        _ = list.add(vis, it)
+        idx = idx + 1
     }
+    each_update(s.crumbs, vis)
+    list.free(vis)                       // spine only; entries stay owned by s.stack
 }
 
 // Click a breadcrumb segment: jump straight to that ancestor (truncate the

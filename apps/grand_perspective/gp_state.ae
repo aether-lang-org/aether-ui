@@ -8,7 +8,7 @@
 // indexing). Mutations that ripple across panes (navigation, scan, file ops)
 // live in gp_nav / gp_scan / gp_fileops.
 
-exports ( AppState, mk_state, crumb_handle, op_target, hit )
+exports ( AppState, mk_state, op_target, hit )
 
 import std.list
 import std.os
@@ -34,17 +34,11 @@ struct AppState {
     scheme: int
     total: long
     status: int      // handle of the hover status-line label (bottom)
-    // Breadcrumb NAV: a fixed pool of segment buttons, relabelled/hidden as
-    // the drill stack changes (CRUMBS() of them; widgets can't be created
-    // dynamically post-build, so the pool is unrolled at window build).
-    crumb0: int
-    crumb1: int
-    crumb2: int
-    crumb3: int
-    crumb4: int
-    crumb5: int
-    crumb6: int
-    crumb7: int
+    // Breadcrumb NAV: a ui.each group — one real button per visible drill
+    // segment, rebuilt by update_crumbs when the stack changes. (The old
+    // fixed pool of 8, and its "widgets can't be created post-build" belief,
+    // died with ui.each — roadmap item 3.)
+    crumbs: ptr      // each-handle (ui.each), or null before the window builds
     selected: *FileEntry   // clicked tile (file OR dir, any depth), or null
     watch: ptr       // fs.watch handle on current.path, or null
     pending: ptr     // list of *FileEntry dirs awaiting expansion
@@ -100,18 +94,6 @@ struct AppState {
     scheme_btn2: int
 }
 
-crumb_handle(s: *AppState, i: int) -> int {
-    if i == 0 { return s.crumb0 }
-    if i == 1 { return s.crumb1 }
-    if i == 2 { return s.crumb2 }
-    if i == 3 { return s.crumb3 }
-    if i == 4 { return s.crumb4 }
-    if i == 5 { return s.crumb5 }
-    if i == 6 { return s.crumb6 }
-    if i == 7 { return s.crumb7 }
-    return 0
-}
-
 // Fresh state over a root node. NOTE: no layout and no fs.watch here — the
 // caller (main) runs gp_nav.relayout + gp_nav.retarget_watch right after,
 // keeping this module free of upward dependencies.
@@ -125,8 +107,7 @@ mk_state(root: *FileEntry) -> *AppState {
     s.scheme = 2
     s.total = root.total_size
     s.status = 0
-    s.crumb0 = 0; s.crumb1 = 0; s.crumb2 = 0; s.crumb3 = 0
-    s.crumb4 = 0; s.crumb5 = 0; s.crumb6 = 0; s.crumb7 = 0
+    s.crumbs = null
     s.selected = null as *FileEntry
     s.watch = null
     s.pending = list.new()

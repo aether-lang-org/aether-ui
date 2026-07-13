@@ -77,7 +77,7 @@
 import ui
 import ui (window, vstack, hstack, btn, text, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_key, timer,
-    toggle, toggle_group,
+    toggle, toggle_group, each, each_parent,
     context_menu_item, clipboard_write, margin_of)
 import vg.live (vg, canvas_region, vg_flush_live, region_set_animated)
 import vg
@@ -89,12 +89,12 @@ import std.os (os_getenv, aether_args_count, aether_args_get)
 import std.fs
 import gp_model
 import gp_model (FileEntry, mk_entry, root_label, to_float, fmt_size,
-    pct_of_parent, dbg_on)
+    pct_of_parent, dbg_on, clip_name)
 import gp_layout
 import gp_state
-import gp_state (AppState, mk_state, crumb_handle, op_target, hit)
+import gp_state (AppState, mk_state, op_target, hit)
 import gp_nav
-import gp_nav (relayout, retarget_watch, update_crumbs, jump_to, drill_up,
+import gp_nav (relayout, retarget_watch, update_crumbs, jump_to, crumb_base, drill_up,
     drill_deep, list_click, legend_click, handle_nav_key, select_entry,
     set_scheme, scheme_buttons)
 import gp_render
@@ -189,20 +189,24 @@ main() {
         scan_buttons(st)
         scheme_buttons(st)
 
-        // Breadcrumb NAV: the drill path as clickable segments (a fixed pool,
-        // relabelled/hidden by update_crumbs as the stack changes).
-        hstack(2) {
-            st.crumb0 = btn("root") callback { jump_to(st, 0) }
-            st.crumb1 = btn("") callback { jump_to(st, 1) }
-            st.crumb2 = btn("") callback { jump_to(st, 2) }
-            st.crumb3 = btn("") callback { jump_to(st, 3) }
-            st.crumb4 = btn("") callback { jump_to(st, 4) }
-            st.crumb5 = btn("") callback { jump_to(st, 5) }
-            st.crumb6 = btn("") callback { jump_to(st, 6) }
-            st.crumb7 = btn("") callback { jump_to(st, 7) }
+        // Breadcrumb NAV: the drill path as clickable segments — a ui.each
+        // group, one real button per visible segment, rebuilt by
+        // update_crumbs (gp_nav) whenever the stack changes. The render
+        // closure labels each segment (ellipsis when the path is deeper
+        // than the visible cap), wires jump-to-ancestor, and attaches the
+        // per-segment "Copy path" context menu as the button is built.
+        st.crumbs = each("h", 2) callback |item: ptr, i: int, parent: int| {
+            e = item as *FileEntry
+            nm = clip_name(e.name)
+            if i == 0 { if crumb_base(st) > 0 { nm = "…" } }
+            seg = btn(parent, nm) callback { jump_to(st, i) }
+            context_menu_item(seg, "Copy path") callback {
+                clipboard_write(st.current.path)
+                aether_ui_text_set_string(st.status, string.concat("Copied: ", st.current.path))
+            }
         }
-        // The leftmost segment sits 10px further in than the row above.
-        _ = margin_of(st.crumb0, 0, 0, 0, 10)
+        // The crumb row sits 10px further in than the row above.
+        _ = margin_of(each_parent(st.crumbs), 0, 0, 0, 10)
 
         vg(view_box(0, 0, 1356, 600), 1356, 600) {
             // A BARE shape verb gets _ctx injected; derive the vg root from it.
@@ -333,17 +337,7 @@ main() {
         // Hover status line at the BOTTOM.
         st.status = text("Hover a tile for its name and size")
       }
-      // Right-click any breadcrumb segment → "Copy path": the CURRENT
-      // directory's path onto the clipboard, echoed in the status line.
-      ci = 0
-      while ci < gp_model.CRUMBS() {
-          context_menu_item(crumb_handle(st, ci), "Copy path") callback {
-              clipboard_write(st.current.path)
-              aether_ui_text_set_string(st.status, string.concat("Copied: ", st.current.path))
-          }
-          ci = ci + 1
-      }
-      update_crumbs(st)   // initial labels/visibility (only the root shows)
+      update_crumbs(st)   // initial crumbs (only the root shows)
       // The heartbeat: scan pump + watch poll + dirty-flag repaint, 30Hz.
       _hb = timer(33) callback { tick(st) }
       // AetherUIDriver: arm the HTTP test server when AETHER_UI_TEST_PORT is set.
