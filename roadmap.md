@@ -273,9 +273,29 @@ Enter/exit transitions for overlay entries (ties into item 1).
 driver deterministic (specs can assert the END state; add a
 `settle`/no-animation env for CI like GSK_RENDERER=cairo).
 
-### 7. Layout: flex weights, wrap, split panes, `on_layout`
+### 7. Layout: flex weights, wrap, split panes, `on_layout` ✅ DONE (2026-07-13)
 
-**Hand-off brief: `briefs/layout.md`** (2026-07-12, ready for execution).
+**Shipped** (d842744/e96b52e/679ed33/45420e9): ui.splitview("h"|"v")
+{ p1 p2 } — native GtkPaned, position get/set + POST
+/widget/{id}/split_position?px= driver route, splitPosition in widget
+JSON. ui.on_layout(stack) cb(w,h) — the GeometryReader, fires via
+g_idle on allocation CHANGE (idle stays zero; safe to mutate widgets
+from inside). ui.weight(child, n) — Flutter Expanded semantics stated
+honestly: unweighted children keep natural size, weighted split the
+LEFTOVER n:m, axis-expand children count as weight 1 (spacer works).
+ui.wrap { } — GtkFlowBox. on_layout/weight ride AeuiFlexLayout, a
+custom GtkLayoutManager (GtkBoxLayout is final) installed lazily ONLY
+on stacks that opt in; it honours the full size-negotiation contract
+(get_request_mode + for_size) and box-orientation reads go through a
+flex-aware helper (GtkBox delegates GtkOrientable to the layout it no
+longer has). win32/macOS: ABI stubs (plain stacks, no divider).
+tests/split_demo spec = ci Phase 5i, 7/7. HARD-WON: GTK4 on a cold
+Xvfb sometimes maps windows at NATURAL size ignoring default size
+(proven with a stock-GtkBox reproducer) — specs asserting geometry
+must PIN the window via /window/resize first (split + gp specs do;
+run_server_test now also refuses a squatted driver port). Not done:
+real win32/macOS splitters, weight-share min-clamping, RTL. Detail
+below is the original proposal, kept for the reasoning.
 
 **Borrowed from:** Flutter `Expanded(flex:)`/`Flexible` (the constraints-
 down-sizes-up model's user face); SwiftUI `layoutPriority` +
@@ -381,6 +401,6 @@ format: comparisons, verdict, phased ci-gated migration).
 | 4 | Table/list ✅ | L | DONE 2026-07-13 (345a916/04f9daf/4b5762c) — listbox + table + gp left pane migrated; virtualization/delegate cells deferred |
 | 5 | Shadows + group opacity ✅ | S–M | DONE 2026-07-13 (2ebec4a) — vg.shadow cached + true group opacity + chrome shadows; backdrop blur deferred |
 | 6 | Implicit transitions ✅ | S–M | DONE 2026-07-13 (e427da6) — ui.transition (GTK CSS engine) + vg.behavior (existing anim manager) + chrome fade-ins; Phase 5h tween proof; NO_ANIMATION ci discipline |
-| 7 | Flex/split/on_layout | M | Unblocks real multi-pane apps |
+| 7 | Flex/split/on_layout ✅ | M | DONE 2026-07-13 (d842744/e96b52e/679ed33/45420e9) — splitview + on_layout + weight + wrap; AeuiFlexLayout opt-in manager; cold-Xvfb window-pin discipline for geometry specs |
 | 8 | Bindings + typed state | M | Unify ui/vg reactivity |
 | 9 | Focus/shortcuts | M | Polish + testability |
