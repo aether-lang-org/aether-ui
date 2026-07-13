@@ -479,6 +479,14 @@ fill(_ctx: ptr, color: string) {
 // shadow(dx, dy, blur_sigma, color) — drop shadow under this shape (rects
 // and circles v1; the blurred mask is cached per element and re-used until
 // geometry/sigma/colour/scale change). Drawn at flush, before the shape.
+//
+// NB this is the WIDGET-SCENE shadow, distinct from the SVG-mapped filter
+// path: <filter><feGaussianBlur> (defs.ae, via render_as_raster) blurs the
+// element ITSELF, driven by SVG markup — the document-rendering feature the
+// old AeVG carried. This modifier draws a separate offset mask UNDER the
+// shape for interactive apps. They share the blur kernel + raster dispatch
+// and nothing else; an eventual SVG <feDropShadow> would be implemented ON
+// TOP of render_shadow, not by conflating the two.
 shadow(_ctx: ptr, dx: float, dy: float, blur: float, color: string) {
     el = node_payload(_ctx)
     if el != null {
