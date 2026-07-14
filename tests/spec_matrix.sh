@@ -175,9 +175,16 @@ for gp in "${GP_SPECS[@]}"; do
     head -c 400000 /dev/urandom > "$fix/big.bin"
     head -c 250000 /dev/urandom > "$fix/mid.bin"
     head -c 200000 /dev/urandom > "$fix/sub/inner.bin"
+    # The app and the spec are NATIVE binaries — hand them a native path,
+    # not an MSYS one (/c/Users/... opens as no-such-dir in the Windows CRT
+    # and gp scans nothing).
+    fix_app="$fix"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) fix_app="$(cygpath -m "$fix")" ;;
+    esac
 
     log="$(mktemp)"
-    env AETHER_UI_TEST_PORT=$PORT AEVG_DIR="$fix" GP_FIXTURE="$fix" \
+    env AETHER_UI_TEST_PORT=$PORT AEVG_DIR="$fix_app" GP_FIXTURE="$fix_app" \
         "$GP_BIN" >"$log" 2>&1 &
     pid=$!
     ready=0
@@ -193,7 +200,7 @@ for gp in "${GP_SPECS[@]}"; do
         continue
     fi
 
-    out="$(AEVG_DIR="$fix" GP_FIXTURE="$fix" UI_SPEC="grand_perspective/spec_${gp}" \
+    out="$(AEVG_DIR="$fix_app" GP_FIXTURE="$fix_app" UI_SPEC="grand_perspective/spec_${gp}" \
            tests/run_spec.sh 2>&1)"
     teardown "$pid"
     rm -rf "$fix" "$log"
