@@ -82,8 +82,21 @@ for row in "${SUITES[@]}"; do
     want_suite "$name" || continue
 
     bin="target/build/$appdir/bin/$(basename "$appdir")"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            # aeb's fan-out can't build UI apps on MSYS yet (the
+            # _orchestrator.c generation bug) — build.sh into build/ is
+            # the Windows path, building on demand.
+            bin="build/$(basename "$appdir").exe"
+            if [ ! -x "$bin" ]; then
+                ./build.sh "$appdir/$(basename "$appdir").ae" \
+                    "$(basename "$appdir")" > "/tmp/smx_$(basename "$appdir").log" 2>&1 \
+                    || true
+            fi
+            ;;
+    esac
     if [ ! -x "$bin" ]; then
-        printf "%-14s %6s %6s   %s\n" "$name" - - "NO BINARY ($bin) — run: aeb .all.ae"
+        printf "%-14s %6s %6s   %s\n" "$name" - - "NO BINARY ($bin) — run: aeb .all.ae (or see /tmp/smx_*.log on Windows)"
         SUITES_RED=$((SUITES_RED + 1))
         continue
     fi
@@ -139,6 +152,15 @@ done
 
 # --- grand_perspective (the real vg app: canvas hit-testing, resize, fileops) --
 GP_BIN="target/build/apps/grand_perspective/bin/grand_perspective"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        GP_BIN="build/grand_perspective.exe"
+        if [ ! -x "$GP_BIN" ]; then
+            ./build.sh apps/grand_perspective/grand_perspective.ae \
+                grand_perspective > /tmp/smx_gp.log 2>&1 || true
+        fi
+        ;;
+esac
 for gp in "${GP_SPECS[@]}"; do
     want_suite "gp_$gp" || continue
     if [ ! -x "$GP_BIN" ]; then
