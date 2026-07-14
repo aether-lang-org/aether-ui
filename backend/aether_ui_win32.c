@@ -1358,7 +1358,11 @@ void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure) {
 
 static int create_stack(int orientation, int spacing) {
     ensure_win_init();
-    HWND h = CreateWindowExW(0, STACK_CLASS, L"",
+    // WS_EX_CONTROLPARENT: the dialog tab-walk (GetNextDlgTabItem /
+    // IsDialogMessage) recurses INTO this container instead of treating
+    // it as a leaf — without it, Tab from a nested control resolves to
+    // the wrong widget.
+    HWND h = CreateWindowExW(WS_EX_CONTROLPARENT, STACK_CLASS, L"",
         WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
@@ -3250,8 +3254,13 @@ static void hook_widget_text_into(int handle, char* buf, int bufsize) {
 }
 
 static int hook_widget_visible(int handle) {
+    // The widget's OWN visibility flag — parity with GTK's
+    // gtk_widget_get_visible. NOT IsWindowVisible: that requires the
+    // whole ancestor chain shown, and under an ssh service session the
+    // top-level window never is, which zeroed "visible" app-wide.
     Widget* w = widget_at(handle);
-    return (w && IsWindowVisible(w->hwnd)) ? 1 : 0;
+    if (!w || !IsWindow(w->hwnd)) return 0;
+    return (GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_VISIBLE) ? 1 : 0;
 }
 
 static int hook_widget_parent(int handle) {
@@ -3527,7 +3536,12 @@ static const AetherDriverHooks win32_driver_hooks = {
     .screenshot_png       = hook_screenshot_png,
 };
 
+static int test_server_started = 0;
 void aether_ui_enable_test_server_impl(int port, int root_handle) {
+    // Idempotent — the env auto-start and an explicit app call must not
+    // stack a second banner (seen as duplicate "Under Remote Control").
+    if (test_server_started) return;
+    test_server_started = 1;
     // Create a "Under Remote Control" banner, style it red+bold, seal it,
     // and hoist it to the top of the root stack.
     int banner = aether_ui_text_create("Under Remote Control");
