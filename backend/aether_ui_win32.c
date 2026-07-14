@@ -3299,12 +3299,21 @@ static int hook_widget_rect(int handle, int* x, int* y, int* wd, int* hgt) {
 }
 
 static void hook_widget_classes_into(int handle, char* buf, int bufsize) {
+    // Registry slots outlive destroyed HWNDs (append-only): a dead row
+    // must not keep reporting .aui-row-selected to specs.
     Widget* w = widget_at(handle);
-    snprintf(buf, bufsize, "%s", (w && w->classes) ? w->classes : "");
+    if (!w || !IsWindow(w->hwnd)) { buf[0] = '\0'; return; }
+    snprintf(buf, bufsize, "%s", w->classes ? w->classes : "");
 }
 
 static int hook_focused_widget(void) {
-    return handle_for_hwnd(GetFocus());
+    // GetFocus() is PER-THREAD (the HTTP thread's queue never has focus)
+    // — query the UI thread's focus via GetGUIThreadInfo.
+    if (app_count < 1 || !apps[0].hwnd) return 0;
+    GUITHREADINFO gti = { sizeof(GUITHREADINFO) };
+    DWORD tid = GetWindowThreadProcessId(apps[0].hwnd, NULL);
+    if (!GetGUIThreadInfo(tid, &gti)) return 0;
+    return handle_for_hwnd(gti.hwndFocus);
 }
 
 // dispatch_action: sends the ctx to the UI thread via AE_WM_DRIVER and
