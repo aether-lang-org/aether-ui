@@ -23,4 +23,8 @@ if [ ! -f "$AEOCHA_DIR/aeocha.ae" ]; then
     exit 1
 fi
 cd "$TESTS_DIR/$(dirname "$SPEC")"
-exec env AETHER_LIB_DIR="$AEOCHA_DIR:$TESTS_DIR/lib" ae run "$(basename "$SPEC").ae"
+# AETHER_LIB_DIR is multi-entry with the PLATFORM path separator — ";" on
+# Windows (MSYS), ":" elsewhere (aether #413).
+SEP=":"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";" ;; esac
+exec env AETHER_LIB_DIR="${AEOCHA_DIR}${SEP}${TESTS_DIR}/lib" ae run "$(basename "$SPEC").ae"
