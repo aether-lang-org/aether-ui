@@ -88,51 +88,20 @@ honestly answers -1), **overlay layer**, **shortcuts** (`/window/key`
 answers `fired:false` honestly), **text metrics** (GDI), **weight /
 on_layout / wrap**, canvas `on_click`/`on_key` (only `on_move` is wired).
 
-**Windows spec-matrix baseline (2026-07-14, winbaz):** calculator 9/9,
-each 6/6, listbox 6/6, table 4/4, bindings 6/6. Red: testable (shortcuts
-unwired; Tab is Windows dialog order), split + overlay (stub features).
-NB this baseline PREDATES the shared-server route additions above — it is
-worth re-running, since several of those reds were the server missing the
-route rather than the backend missing the feature.
-
-**Re-running the matrix:** `./tests/spec_matrix.sh [suite...]` — committed
-now, and portable across all three backends. (The Windows equivalent lived
-in a session scratchpad and was never committed, which is why this note
-used to say "see session scratchpad / memory".)
-
-## 1b. Bugs the macOS pass turned up that were NOT macOS bugs
-
-Three of these are real defects that Linux/gcc was simply kind enough to
-hide. They are fixed, and they are worth knowing about.
-
-- **`aeb` timed builds died on any BSD `date`** (`tools/aeb-driver.ae`).
-  `date +%s%3N 2>/dev/null || date +%s000` reads like a fallback but isn't:
-  BSD `date` does not understand `%N`, yet it *succeeds* and prints a
-  literal `"1784014092N"`. Exit status 0, so the `||` branch never runs,
-  and `$((_e-_s))` then dies with *"value too great for base"* — failing
-  the make target with error 127 on every timed node. Now validates the
-  OUTPUT, not the exit code. (Fixed in the `aeb` repo, not this one.)
-
-- **A real heap-buffer-overflow in `vg/test/test_live_region.ae`.**
-  `struct Rec { int, float, int }` is 24 bytes (the `int` at offset 16),
-  but was allocated with `malloc(16)`. glibc rounds a 16-byte request up
-  to a 32-byte bin, so the overflow lands in slack and nothing complains;
-  macOS's allocator uses a 16-byte bin, the write corrupts the free list,
-  and the process aborts several statements later. ASan named it in one
-  run. **The bug was always there — only one libc was hiding it.**
-
-- **`string_char_at` sign-extends binary bytes.** libaether's header
-  declares it returning `char`, but codegen prototypes it as `int`. On
-  x86-64 only `AL` is defined for a `char` return: gcc happens to
-  zero-extend (Linux reads 255), Apple clang sign-extends (macOS read -1).
-  Any Aether code reading image/base64 bytes ≥128 through it is silently
-  wrong. The two affected tests now mask to 0..255. **The real fix belongs
-  in libaether** — either make the declaration honest or add an unsigned
-  `string.byte_at`. Worth raising upstream.
-
-- **Apple clang makes `-Wint-conversion` an ERROR** where gcc warns, so a
-  latent type bug in `apps/analog_clock_png` (a variable reused for both a
-  string error-slot and an int) failed the build outright on macOS.
+**Windows spec-matrix baseline (2026-07-14 evening, winbaz, post
+macOS-parity pull + timer fix):** `AEOCHA_DIR=... ./tests/spec_matrix.sh`
+→ 44 passing / 81 failing over 17 suites. GREEN: calculator 9, each 6,
+listbox 6, table 4, bindings 6. Every red maps to a NAMED win32 gap in
+the table above, none to harness artifacts: text_metrics (stub),
+testable 3 (shortcuts unwired ×2, Tab order is Windows-native),
+context_menu (driver ctx actions unwired), overlay+vg_tooltip+picker
+(overlay host stub), split (splitview stub + on_layout no-op),
+gp suites (canvas click/key unwired, shortcuts, gio absent on
+Windows). Fixed to get here: build.sh fallback + cygpath fixture paths
+in spec_matrix.sh, and a REAL long-standing win32 bug — timers created
+before app_run ran as thread timers whose system-assigned id never
+matched ours, so ui.timer closures never fired (gp's scan pump was
+dead on Windows, likely forever).
 
 ## 2. Deferred from the ranked items (recorded at each closeout)
 
