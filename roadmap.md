@@ -1,388 +1,69 @@
-# Roadmap: what to engineer next
+# Roadmap: what remains
 
-**Status: PROPOSAL.** 2026-07-12. Successor to the re-namespace plan
-(executed and deleted; see commits 3c4583a..a36647d for the plan and the
-Swing/Flutter/SwiftUI namespace comparisons): that settled where things
-live; this is what to build there next, pulling from SwiftUI, Flutter,
-QML, and Swing.
+**Status: PARED DOWN.** 2026-07-14. The nine-item ranked roadmap of
+2026-07-12 (overlay layer, typography, `each`, table/list, effects,
+transitions, layout, bindings, focus) was executed in full on
+2026-07-12/13 — see git history for the original document with its
+per-item DONE blocks, evidence tables, and commit trails (last full
+version at 1ade88b; the wound-driven method writeup lives there too).
+This document now lists ONLY what is not done, in three buckets:
+platform parity, deferred follow-ups, and the backlog/strategic fork.
 
-## Method: the stress test already ran
+## 1. Platform parity — macOS and Win32 catch-up (the big one)
 
-grand_perspective (and fight_flash_fraud, and the month's platform work)
-was a de-facto audit of the toolkit. Every place an app hand-rolled
-something is a missing feature with evidence attached:
+Everything below is GREEN on GTK4/Linux and stubbed-but-compiling on
+the other two backends. The stubs were deliberate (ABI-first, so apps
+and specs are portable on day one); paying them down is now the largest
+coherent block of work. Both boxes are reachable: winbaz over ssh
+(build.sh + tests/test_driver.sh is the proven loop), the Mac mini via
+the run_on=host aeb-agent.
 
-| Wound (what we hand-rolled / suffered)                      | Missing feature |
-|--------------------------------------------------------------|-----------------|
-| Breadcrumbs = fixed pool of 8 buttons, relabelled/hidden      | dynamic children (`each`) |
-| List pane hand-drawn in canvas: rows, hit-test, "+N more…"    | table/list widget |
-| GTK popovers never display on sommelier; picker unusable there| in-window overlay layer |
-| Text draws ~17px above requested baseline; 3 bugs, every call site compensates | typography layer |
-| Tile depth faked with a 5-rect bevel                          | shadow effect |
-| Stop/Rescan ghosting and radio flips snap instantly           | implicit transitions |
-| Three panes fixed-width inside one canvas                     | split panes / flex weights |
-| Imperative `set_text` everywhere; state is doubles-only       | declarative bindings, typed state |
-| Focus grabbed ad hoc; keyboard nav wired per-app              | focus & shortcut system |
-| Open/Reveal shell out to xdg-open; no save/open dialog        | file dialogs |
+| Feature | GTK4 | win32 / macOS today | Real implementation needed |
+|---|---|---|---|
+| Text metrics (`vg.text_extent` etc.) | cairo | stubbed → 0 | GDI / CoreText metrics |
+| splitview | GtkPaned | plain stack, no divider | Win32 splitter / NSSplitView |
+| weight / on_layout / wrap | AeuiFlexLayout, GtkFlowBox | no-op / plain hstack | per-backend layout pass |
+| shortcut / focus / /window/key | GtkShortcutController GLOBAL | no-op | accelerator tables / NSEvent monitors + focus APIs |
+| Overlay layer (toast/modal/tooltip/dropdown) | GtkOverlay host | stubs | per-backend overlay host |
+| Menu accelerator display | drawn ctx-menu items | inherits (shared path) | native menu accel columns when real menus land |
+| GET /focus + /window/key routes | embedded GTK server | absent from shared test server | port routes to aether_ui_test_server.c |
 
-The ranking below is by (foundation-ness × evidence), not by shininess.
+Notes for whoever picks this up:
+- The **shared test server** (`backend/aether_ui_test_server.c`) is the
+  win32/macOS driver path — route additions on GTK4's embedded server
+  must be mirrored there (the typed /state routes already were; the
+  focus/key routes were not).
+- **State/bindings are already at parity** (typed cells + PropBindings
+  transplanted verbatim into all three backends, proven live on winbaz).
+- macOS has had one full bring-up pass (AppKit backend green, driver
+  17/17, all examples build) — parity work is incremental from there,
+  not a bring-up.
 
-## The ranked items
+## 2. Deferred from the ranked items (recorded at each closeout)
 
-### 1. In-window overlay layer — the Swing z-layer, aimed at our sorest wound ✅ DONE (2026-07-12)
+- **Typography:** multi-line wrap (`text_wrapped`), text-anchor
+  middle/end.
+- **Table/list:** virtualization (the GtkColumnView / recycled-cell vs
+  handle-registry question), delegate cells (%-bars, chips), row
+  double-click, multi-select, **tree mode**.
+- **Effects:** shadows on paths/text (rect+circle only today),
+  **backdrop blur** / materials (frosted scrim).
+- **Transitions:** enter/exit transitions on overlay ENTRIES (the
+  chrome fade-ins exist; per-entry slide/fade doesn't).
+- **Layout:** weight-share min-clamping (weighted children can be
+  squeezed below their minimum), RTL.
+- **Bindings:** list-typed state (`each_bind`/`table_bind` — an update
+  to a list state drives today's explicit `each_update`/`table_update`
+  internally), two-way binding (textfield ⇄ string state), computed/
+  derived state. Design notes in docs/design/reactivity-unification.md §5.
+- **Focus/shortcuts:** per-widget/conditional shortcut scopes, chorded
+  shortcuts, auto menu↔shortcut binding (accel display exists; wiring
+  is two lines by hand today).
+- **Menus:** GTK4 native menu wiring (GMenu/GActionGroup) is still the
+  recorded stub — menu items don't fire on GTK4; the drawn context menu
+  is the working surface.
 
-**Shipped** (commits 526bd6a host + toast + modal scrim, 27ad331 drawn
-tooltip, a9d73dc drawn dropdown): the full overlay layer + all three D3
-consumers. A GtkOverlay is interposed lazily between window and root
-(zero change when no overlay is open); `ui.overlay`/`overlay_modal`/
-`dismiss_overlay`/`toast` DSL; a full-window modal scrim (glass pane)
-that eats clicks (proven by a real-hit-test `GET /window/pick` resolving
-the scrim ahead of the button beneath it); a drawn tooltip for vg scenes
-(`vg_tooltip_*`, wired into the vg live hover path, gated
-`$AETHER_UI_TOOLTIP=drawn`); a drawn dropdown picker (a button trigger +
-overlay list behind the same picker ABI, gated `$AETHER_UI_PICKER=drawn`,
-ABI parity with the native GtkDropDown proven by a surface-agnostic
-spec). `GET /overlays` + `GET /window/pick` driver routes; examples
-overlay_demo / vg_tooltip and the picker example, specs at ci.sh Phases
-5b/5c/5d (6+4+3 checks). win32/macOS stubs. Full ci.sh green. Because
-everything draws in-window (no xdg_popup), it works on sommelier by
-construction (design fact, not machine-verifiable on this box). Detail
-below is the original proposal, kept for the reasoning.
-
-**Borrowed from:** Swing `JLayeredPane` (POPUP_LAYER / MODAL_LAYER / glass
-pane) — its menus worked everywhere *because they were drawn in-window*,
-not compositor popups. Flutter `Overlay` + `OverlayEntry` is the modern
-restatement: a dropdown is just paint. SwiftUI `.overlay`/`.popover`.
-
-**Evidence:** the context-menu saga. GTK4 popovers (xdg_popup) report
-mapped=1 but never display under sommelier (ChromeOS); `picker`
-(GtkDropDown) is unusable there for the same reason; we shipped a
-window-fallback hack gated on `$SOMMELIER_VERSION`. An overlay stack
-converts our worst platform liability into a non-issue by construction.
-
-**Shape:** a per-window z-ordered stack of vg scenes above the widget
-tree (vg.region already has per-region z — the compositing primitive
-exists). DSL: `ui.overlay { … vg or widgets … }`, `ui.dismiss_overlay()`,
-plus the three consumers that prove it: a drawn dropdown (replaces
-picker on hostile compositors), tooltips, toasts. Modal scrim = a
-full-window overlay that eats clicks (Swing's glass pane, literally).
-
-**Effort:** M (1–2 weeks incl. the drawn dropdown + driver routes + specs).
-**Risk:** low — no new compositor surface is the whole point. Input
-routing (overlay eats clicks first) needs care with the canvas legacy
-controllers. **Depends on:** nothing. **Unlocks:** menus/dropdowns/
-tooltips/toasts portable across GTK4/sommelier/Win32/AppKit.
-
-### 2. Typography layer — metrics, measurement, wrap ✅ DONE (2026-07-12)
-
-**Shipped** (commits 9e55d0c Phase A, 12c32cc Phase B baseline fix,
-aa78062 Phase C metrics API, f299b06 Phase D sweep): the text
-double-correction is fixed (SVG conformance rose 195→196 good), and there
-is now a real measurement surface — `vg.text_extent(size,s) -> (w, height,
-ascent)`, `vg.text_width`, `vg.font_ascent/descent/height`, `vg.ellipsize`
-(cairo-backed on GTK4; win32/macOS stubbed → 0). A GET /text_extent driver
-route + Aeocha spec (5/5) and a 16-check unit test cover it. gp's every
-`+17` compensation is gone, re-derived from real metrics (row_baseline
-helper). Stretch goals NOT done (own follow-up if wanted): multi-line
-wrap (`text_wrapped`) and text-anchor middle/end; win32/macOS real GDI/
-CoreText metrics (deferred to those boxes). Detail below is the original
-proposal, kept for the reasoning.
-
-**Borrowed from:** Flutter's layering lesson: the paragraph/painting
-layer shipped *before* the widget layer because everything sits on it.
-SwiftUI `Text` metrics; QML `TextMetrics`/`FontMetrics`.
-
-**Evidence:** the renderer draws text at a fixed ~17px above the
-requested baseline. Three separate visual bugs this month (clipped list
-header, legend labels floating a line above their chips, the ".." row
-missing its own click zone) — and every call site now carries a hand-
-tuned `+17`. There is no way to measure a string, so labels clip by
-character count (`clip_name`), not by width.
-
-**Shape:** real font metrics in the vg text path (ascent/descent/line
-height per size), `vg.text_extent(size, s) -> (w, h, baseline)`,
-ellipsize-to-width, multi-line wrap with alignment. Then a one-time
-sweep deleting every `+17` compensation (they're all commented).
-
-**Effort:** M (renderer work + call-site sweep + conformance re-run —
-the ~86% librsvg parity number guards against regressions here).
-**Risk:** medium — touching the text path can move the SVG conformance
-needle; the compare harness is the gate. **Depends on:** nothing.
-**Unlocks:** items 4 and 9; honest labels everywhere.
-
-### 3. Dynamic children — `each` (smaller than a QML Repeater) ✅ DONE (2026-07-13)
-
-**Shipped** (commits 7216239 verb+demo+spec, a552550 gp crumbs; plus the
-compiler work it forced: aether PR #1125 fixed closure-in-closure capture
-[filed by us], and aether PR #1127 — AUTHORED by us — made closure envs
-retain captured heap strings; both released, toolchain on v0.390).
-`ui.each(orientation, spacing) callback |item, i, parent| {…}` +
-`each_update(e, items)` — an owned group container, clear+rebuild
-reconcile, ng-repeat-without-track-by semantics; explicit update (item 8
-adds the binding overload later). examples/each_demo + 6/6 Aeocha spec
-(ci.sh Phase 5e) prove add/remove/reset and — the assertion that was
-GARBAGE before v0.390 — that each per-item closure fires with ITS item's
-computed label. Proving consumer: gp's breadcrumb pool of 8 (and its
-stale "widgets can't be created post-build" belief) replaced by real
-dynamic crumbs; all 5 gp specs green unchanged. Item 4 (table/list) is
-now un-gated. Detail below is the original proposal, kept for the
-reasoning.
-
-**Borrowed from:** QML's `Repeater`/model-delegate split — but Aether
-needs LESS than QML did, on two counts verified 2026-07-12:
-
-1. **The construction half already exists in the language.** Trailing
-   blocks are *immediate* (inline code with the builder-context stack
-   active), so first-class `while`/`for`/`if` inside a `window {}` block
-   IS a build-time Repeater — grand_perspective already wires its crumb
-   context-menus in a `while` loop inside the window block. QML needed
-   `Repeater` because QML isn't an imperative language; Aether's DSL is
-   ("DSL with scope" — see aether's closures-and-builder-dsl.md).
-2. **Runtime creation + attach WORKS** (probed on GTK4): capture
-   `here = builder_context()` inside the immediate block, and a later
-   callback can do `aether_ui_text_create(...)` +
-   `aether_ui_widget_add_child_ctx(here, h)` — the new widget appears in
-   the live window and the driver's widget tree. The long-held "widgets
-   can't be created post-build" belief (which forced the breadcrumb
-   *pool* of 8 pre-made buttons) is STALE — probably true pre-ae-0.252,
-   never retested.
-
-**What's actually missing:** (a) child REMOVE/INSERT-AT in the backends
-(append exists; removal doesn't), (b) a small reconciler that re-runs a
-per-item `callback |item|` when a list state changes (identity by index
-first; track-by later — vg.grammar.bind has `bind_trackby` as in-repo
-prior art), and (c) an ergonomic `with_ctx(parent) { … }` wrapper so the
-item closure builds children declaratively instead of calling externs.
-
-**Effort:** M, downgraded from L (the two hard-looking halves turned out
-to exist). **Risk:** low-medium — removal must release closures/handles
-correctly (the widget registry is append-only today). **Depends on:**
-nothing. **Unlocks:** item 4, real breadcrumbs, dynamic forms.
-
-### 4. Table / list / tree widgets ✅ DONE (2026-07-13) — tree mode later
-
-**Shipped** (commits 345a916 listbox, 04f9daf table, 4b5762c gp
-migration): `ui.listbox` (each-backed real-widget rows, click +
-programmatic selection via .aui-row-selected, on_select, reset-on-update,
-200-row scale) and `ui.table` (column spec, header buttons firing
-on_sort(col) — the app sorts and updates, the widget never owns data —
-sized text cells from a |item,col|->string template). Proving consumer:
-gp's whole hand-drawn left pane (draw_list + list_click, ~100 lines +
-hit-testing + the "+N more…" fold) became a header block + ".." button +
-table in a scrollview; canvas shifted left 280px; all 5 gp specs green
-with clicks rewritten from canvas coords to widget rows. Driver-first
-throughout: generic /widget/{id}/click now fires gesture handlers on
-non-buttons, widget JSON gained "classes" (tracked, never read off-thread)
-and window-local x/y. Two deep infrastructure fixes forced en route:
-send_response write-all (>64KB bodies truncated on loopback), and ALL
-widget-JSON GET routes serialized through g_idle_add (off-thread tree
-walks trip GTK's css-node cache once rows churn — gtkcssnode.c:321
-abort). NOT done (later, own items): virtualization/GtkColumnView (the
-recycled-cell/handle-registry question stands), delegate cells (%-bars,
-chips), row double-click, multi-select, tree mode. Detail below is the
-original proposal, kept for the reasoning.
-
-**Borrowed from:** Swing's genuinely great contribution — `JTable`/
-`JTree` with the renderer/editor split and sortable columns. QML
-`ListView` + delegates for the declarative shape; SwiftUI `List`/`Table`.
-
-**Evidence:** grand_perspective's entire left pane — rows, chips,
-selection outline, %-bars, hit-testing, and a "+N more…" fold instead of
-scrolling — is ~300 lines of app code that should have been
-`ui.table(columns…, rows_state)`.
-
-**Shape:** virtualized rows over a list state, column spec with widths/
-alignment, row selection synced to state, sort hooks, and delegate-style
-cell content (a callback per cell, QML-style). Driver: rows and cells
-visible in `/widgets` JSON, `select_row` route, uidriver helpers +
-Aeocha matchers on day one.
-
-**Effort:** L–XL (the flagship widget; virtualization + 3 backends).
-GTK4 first via GtkColumnView; a vg-drawn fallback is plan B where native
-tables fight us. **Risk:** medium. **Depends on:** 3 (models), 2 (cell
-text measurement).
-
-### 5. Effects: shadow, opacity groups, (later) backdrop blur ✅ DONE (2026-07-13) — backdrop blur later
-
-**Shipped** (commit 2ebec4a): vg.shadow(dx,dy,sigma,color) on rects/
-circles — silhouette → the existing gaussian blur → tinted raster drawn
-under the shape, CACHED per element (position moves reuse the mask; idle
-zero); vg.group_begin(alpha)/group_end — TRUE group opacity via cairo
-push/pop group (overlaps composite once; proven at the PIXEL level by the
-new canvas_read_pixel + GET /canvas/{id}/pixel primitives); ui.style_shadow
-(CSS box-shadow via a new public apply-css ABI); toast + overlay-card
-chrome shadowed. test_effects (12 asserts) + test_group_pixels in ci.sh;
-SVG conformance unchanged (198/8/2). gp tiles deliberately NOT shadowed:
-per-frame draw-region elements defeat the cache (documented; bevel
-stays). Not done: paths/text shadows, backdrop blur (backlog). Detail
-below is the original proposal, kept for the reasoning.
-
-**Borrowed from:** SwiftUI `.shadow(radius:x:y:)`; Flutter `BoxShadow`/
-`elevation`; QML GraphicalEffects (`DropShadow`, `FastBlur`); QML's
-layer.enabled for group opacity.
-
-**Evidence:** render_shaded's 5-rect bevel fakes depth on every tile;
-vg already has gaussian blur (`vg/raster/blur.ae`) — a drop shadow is
-blur + offset + tint of an alpha mask, mostly plumbing. No way to fade a
-subtree (highlight-dim in gp re-colours every tile instead).
-
-**Shape:** `vg.shadow(el, dx, dy, blur, color)` modifier; `ui`-side via
-GTK CSS `box-shadow` for native widgets; `vg.group_opacity(g, a)`.
-Backdrop blur (frosted overlay scrim) explicitly LAST — it's the
-expensive one and only matters once overlays (item 1) exist.
-
-**Effort:** S–M for shadow + group opacity; backdrop blur separate/later.
-**Risk:** low; perf on big scenes → cache the blurred mask per element
-like the recording cache. **Depends on:** nothing (pairs beautifully
-with 1).
-
-### 6. Implicit transitions — QML `Behavior`, not SwiftUI `withAnimation` ✅ DONE (2026-07-13)
-
-**Shipped** (commit e427da6): ui.transition(handle, prop, ms, easing) —
-declare once, subsequent style changes tween; rides GTK4's own CSS
-transition engine through the accumulating apply_css provider (zero
-timers on our side; style_opacity re-routed via CSS so the engine sees
-it). vg.behavior(el, "fill"|"opacity", ms, easing) — the module's
-element_set_* wrappers become tweens driven by the EXISTING
-grammar.animations manager (scene now records last_now for one-shot
-start times); colors lerp in RGB. Toast/scrim/modal-card fade-ins via
-pure CSS @keyframes. gp Stop/Rescan ghosting + scheme radio flips fade
-(150ms "all"). Determinism: AETHER_UI_NO_ANIMATION=1 no-ops everything;
-ci exports it for all driver phases, and the new Phase 5h runs
-animations ON, proving a real tween by screenshot byte-compare
-(mid-flight ≠ settled ≠ opaque). test_behavior drives a manual clock:
-t=0.5 linear fill is exactly rgb(128,128,128). Not done: enter/exit
-transitions on overlay ENTRIES beyond the chrome fade-ins (backlog).
-Detail below is the original proposal, kept for the reasoning.
-
-**Borrowed from:** QML's `Behavior on opacity { NumberAnimation {} }` —
-declare once on a property, every subsequent setter animates. The most
-markup-centric of the three designs (SwiftUI's `withAnimation` is a
-call-site wrapper; Flutter's Animated* is a widget zoo).
-
-**Evidence:** Stop/Rescan ghosting, radio flips, selection outlines —
-all snap. The animation machinery (easing curves, the 60fps loop,
-`scene_advance`) already exists in vg and idles at zero cost.
-
-**Shape:** `ui.transition(handle, "opacity", 150ms, ease_out)` — then
-`set_hidden`/`style_opacity`/enable changes tween instead of snap.
-vg-side: `vg.behavior(el, "fill", 200ms)` reusing grammar.animations.
-Enter/exit transitions for overlay entries (ties into item 1).
-
-**Effort:** S–M. **Risk:** low — additive; per-property opt-in keeps the
-driver deterministic (specs can assert the END state; add a
-`settle`/no-animation env for CI like GSK_RENDERER=cairo).
-
-### 7. Layout: flex weights, wrap, split panes, `on_layout` ✅ DONE (2026-07-13)
-
-**Shipped** (d842744/e96b52e/679ed33/45420e9): ui.splitview("h"|"v")
-{ p1 p2 } — native GtkPaned, position get/set + POST
-/widget/{id}/split_position?px= driver route, splitPosition in widget
-JSON. ui.on_layout(stack) cb(w,h) — the GeometryReader, fires via
-g_idle on allocation CHANGE (idle stays zero; safe to mutate widgets
-from inside). ui.weight(child, n) — Flutter Expanded semantics stated
-honestly: unweighted children keep natural size, weighted split the
-LEFTOVER n:m, axis-expand children count as weight 1 (spacer works).
-ui.wrap { } — GtkFlowBox. on_layout/weight ride AeuiFlexLayout, a
-custom GtkLayoutManager (GtkBoxLayout is final) installed lazily ONLY
-on stacks that opt in; it honours the full size-negotiation contract
-(get_request_mode + for_size) and box-orientation reads go through a
-flex-aware helper (GtkBox delegates GtkOrientable to the layout it no
-longer has). win32/macOS: ABI stubs (plain stacks, no divider).
-tests/split_demo spec = ci Phase 5i, 7/7. HARD-WON: GTK4 on a cold
-Xvfb sometimes maps windows at NATURAL size ignoring default size
-(proven with a stock-GtkBox reproducer) — specs asserting geometry
-must PIN the window via /window/resize first (split + gp specs do;
-run_server_test now also refuses a squatted driver port). Not done:
-real win32/macOS splitters, weight-share min-clamping, RTL. Detail
-below is the original proposal, kept for the reasoning.
-
-**Borrowed from:** Flutter `Expanded(flex:)`/`Flexible` (the constraints-
-down-sizes-up model's user face); SwiftUI `layoutPriority` +
-`GeometryReader`; QML anchors; every desktop toolkit's splitter
-(GtkPaned exists and is unwrapped).
-
-**Evidence:** gp's three panes are fixed-width in one canvas — no
-splitters; `spacer()` is the only flex tool; the canvas resize hook we
-built for the viewBox remap is a bespoke `GeometryReader` begging to be
-generalized.
-
-**Shape:** `weight(2)` modifier on stack children; `ui.splitview(h/v)`
-wrapping GtkPaned/NSSplitView/Win32 splitter; `ui.wrap {}` flow
-container; `on_layout(handle) callback |w,h|` (generalizing the canvas
-resize hook). **Effort:** M. **Risk:** low. **Depends on:** nothing.
-
-### 8. Declarative bindings + typed state ✅ DONE (2026-07-13)
-
-**Shipped** (43efb7f memo, b71bba4 D1+D2, d22b84a gp, 0d4372f
-win32/macOS routes): docs/design/reactivity-unification.md is the
-decision record — push for widgets, pull for scenes, ONE bind_*
-vocabulary; vg untouched. Typed state = one handle space of tagged
-cells; ui_state_s/i/b + get/set alongside the untouched float facet
-(byte-compatible /state JSON for float cells; typed shapes additive;
-both driver servers). bind_text / bind_text_fmt(decimals) /
-bind_enabled(invert) / bind_hidden — data-carrying PropBindings, no
-stored closures; text_bound is now a TEXT PropBinding. Proving
-consumers: bindings_demo (ci Phase 5j, 6/6 — one bool flips three
-properties both directions) and gp, whose Stop/Rescan ghosting pair
-collapsed to one bound bool. Recorded for later: list-typed state
-(each_bind/table_bind), two-way, computed. The calculator already
-rendered 42 — the wound predated the smart int-valued-float default.
-Detail below is the original proposal, kept for the reasoning.
-
-**Borrowed from:** SwiftUI `@State`/`@Binding`; QML property bindings
-(the whole language is bindings); our own vg.grammar.bind
-(`bind_fill/bind_text/bind_pos`) — the pattern is already in-repo.
-
-**Evidence:** `ui_state` is doubles-only (the calculator display reads
-`42.000000`); everything else is imperative `set_text` from callbacks;
-vg and ui have two different reactivity stories.
-
-**Shape:** typed state (string/int/bool alongside float), `bind_text
-(handle, state)`/`bind_enabled(handle, state)` on the ui side delegating
-to the same refresh machinery vg uses; driver `/state` grows typed
-routes. **Effort:** M. **Risk:** low-medium (unifying two reactivity
-systems is the design work, not the code).
-
-### 9. Focus, tab order, shortcuts ✅ DONE (2026-07-13) — the ranked roadmap is COMPLETE
-
-**Shipped** (9f3d0d3 D1-D3, 16c3874 D4): ui.shortcut("Ctrl+R") callback
-— window-scoped GLOBAL GtkShortcutController (Swing InputMap
-WHEN_IN_FOCUSED_WINDOW): fires with an entry focused, plain keys don't;
-pre-window registrations queue and attach at activate. ui.focus(handle)
-explicit grab; Tab order = the build order (GTK's default focus chain
-verified across mixed stacks — the default IS the feature, no
-focus_group API). Driver: GET /focus (GTK-thread-idled, walks up from
-GTK-internal focus children), POST /widget/{id}/focus, POST
-/window/key?combo= — activates the SAME closures the controller runs
-(no fake input, no seat/keymap; Tab/Shift+Tab move real focus).
-context_menu_item_accel displays combos. Escape dismisses the topmost
-overlay (the overlay brief's stretch item, retired) and propagates when
-none is open — gp's canvas Escape keeps working. Consumers: gp Ctrl+R
-rescan + Delete arms the two-click trash flow from anywhere in the
-window; specs in testable (7/7), overlay_demo (7/7),
-gp scan_and_list (4/4). win32/macOS stubs. Not done: per-widget scopes,
-chords, auto menu↔shortcut binding. Detail below is the original
-proposal, kept for the reasoning.
-
-With this, all nine ranked items are DONE — what remains of this
-document is the backlog and the strategic-fork sections.
-
-**Borrowed from:** Swing's second great contribution: `InputMap`/
-`ActionMap` (declarative keystroke→action, per focus scope). SwiftUI
-`.keyboardShortcut`; QML `Shortcut`.
-
-**Evidence:** the canvas grabs focus with a bespoke map-signal dance +
-a re-grab on click; gp's keyboard nav is wired per-app; the sommelier
-focus-click gesture never fires (legacy-controller lesson). No
-accelerators (menu items show no Ctrl+…).
-
-**Shape:** `ui.shortcut("Ctrl+R") callback {}` per window (InputMap,
-essentially), sane default tab order from build order + `focus_group`,
-driver route to query/set focus so specs can assert it. **Effort:** M.
-**Risk:** low.
-
-### Backlog (real, smaller, or gated)
+## 3. Backlog (real, smaller, or gated)
 
 - **File dialogs** (`ui.open_file`/`save_file` → GtkFileDialog/NSPanel/
   IFileDialog) — gp shells out to xdg-open today. S, do opportunistically.
@@ -392,10 +73,9 @@ driver route to query/set focus so specs can assert it. **Effort:** M.
   single-window by design). M, needs a driver story (window ids in
   `/widgets`). Defer until an app needs it.
 - **Accessibility** — native widgets get GTK/AppKit a11y free; anything
-  vg-DRAWN (item 1's dropdown, item 4's plan-B table) needs a semantics
-  bridge eventually — this is the real cost of the drawn path, and why
-  Flutter maintains a semantics tree. Track it; don't block on it.
-- **Backdrop blur / materials** — after 1 + 5.
+  vg-DRAWN (the dropdown, a plan-B table) needs a semantics bridge
+  eventually — this is the real cost of the drawn path, and why Flutter
+  maintains a semantics tree. Track it; don't block on it.
 
 ## The strategic fork (not scheduled): vg-drawn controls
 
@@ -407,12 +87,13 @@ you take on a11y (semantics tree), IME/text input (brutal), and
 a three-backend toolkit: **native text inputs, drawn chrome** — draw
 what natives do worst across our platforms (menus, dropdowns, overlays,
 maybe tables), keep native what they do best (entries, IME, a11y).
-Items 1, 2, and 5 are deliberately the foundations of that hybrid, so
-this fork stays open without being committed to. If/when it's serious,
-it gets its own comparison-doc treatment first (the re-namespace plan's
-format: comparisons, verdict, phased ci-gated migration).
+The overlay, typography, and effects layers were deliberately built as
+the foundations of that hybrid, so this fork stays open without being
+committed to. If/when it's serious, it gets its own comparison-doc
+treatment first (the re-namespace plan's format: comparisons, verdict,
+phased ci-gated migration).
 
-## House rules (carry-overs from this month, now policy)
+## House rules (policy, carried forward)
 
 1. **Driver-first widgets:** every new widget/effect ships with its
    `/widgets` JSON representation, driver routes, uidriver helpers, and
@@ -424,17 +105,8 @@ format: comparisons, verdict, phased ci-gated migration).
    (region_set_animated lesson) applies to transitions and overlays too.
 4. **Headless parity:** everything renderable must render via
    canvas_write_png so specs can screenshot it (the /screenshot path).
-
-## Suggested sequence
-
-| Order | Item | Size | Why this order |
-|-------|------|------|----------------|
-| 1 | Overlay layer ✅ | M | DONE 2026-07-12 (526bd6a/27ad331/a9d73dc) — host + toast + modal scrim + drawn tooltip + drawn dropdown; sommelier-proof by construction |
-| 2 | Typography ✅ | M | DONE 2026-07-12 (9e55d0c/12c32cc/aa78062/f299b06) — +17 debt gone, metrics API + driver route shipped |
-| 3 | `each` ✅ | M | DONE 2026-07-13 (7216239/a552550 + aether PRs #1125/#1127) — verb + spec + gp crumb pool retired |
-| 4 | Table/list ✅ | L | DONE 2026-07-13 (345a916/04f9daf/4b5762c) — listbox + table + gp left pane migrated; virtualization/delegate cells deferred |
-| 5 | Shadows + group opacity ✅ | S–M | DONE 2026-07-13 (2ebec4a) — vg.shadow cached + true group opacity + chrome shadows; backdrop blur deferred |
-| 6 | Implicit transitions ✅ | S–M | DONE 2026-07-13 (e427da6) — ui.transition (GTK CSS engine) + vg.behavior (existing anim manager) + chrome fade-ins; Phase 5h tween proof; NO_ANIMATION ci discipline |
-| 7 | Flex/split/on_layout ✅ | M | DONE 2026-07-13 (d842744/e96b52e/679ed33/45420e9) — splitview + on_layout + weight + wrap; AeuiFlexLayout opt-in manager; cold-Xvfb window-pin discipline for geometry specs |
-| 8 | Bindings + typed state ✅ | M | DONE 2026-07-13 (43efb7f/b71bba4/d22b84a/0d4372f) — memo + tagged cells + PropBindings; gp ghosting = one bound bool |
-| 9 | Focus/shortcuts ✅ | M | DONE 2026-07-13 (9f3d0d3/16c3874) — ui.shortcut GLOBAL controller + focus routes + /window/key; gp Ctrl+R/Delete; overlay Escape. RANKED ROADMAP COMPLETE |
+5. **Both-servers rule** (item 8's lesson): driver route changes land in
+   the GTK4 embedded server AND backend/aether_ui_test_server.c.
+6. **Geometry specs pin the window** (item 7's lesson): GTK4 on a cold
+   Xvfb can map windows at natural size — /window/resize first, then
+   assert.
