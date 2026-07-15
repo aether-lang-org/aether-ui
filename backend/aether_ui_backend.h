@@ -97,6 +97,17 @@ void aether_ui_progressbar_set_fraction(int handle, double fraction);
 int aether_ui_splitview_create(int vertical);
 int aether_ui_split_position_impl(int handle);
 void aether_ui_split_set_position_impl(int handle, int px);
+// tabs: native tab strip over a page stack (GtkStackSwitcher+GtkStack /
+// NSTabView / win32 stub). tabs_create takes the boxed on_change closure
+// (fired with the new index); tab_add returns the page's inner container
+// handle so its DSL block's children attach inside. selected/count are
+// -1/0 when the handle isn't a tabs composite.
+int aether_ui_tabs_create(void* boxed_closure);
+int aether_ui_tab_add(int tabs_handle, const char* title);
+int aether_ui_tabs_selected(int tabs_handle);
+int aether_ui_tabs_count(int tabs_handle);
+void aether_ui_tabs_select(int tabs_handle, int index);
+void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure);
 // weight: proportional main-axis sharing among stack children (Flutter
 // Expanded semantics — unweighted children keep natural size, weighted
 // ones split the leftover). on_layout: cb(w, h) fires after the stack's

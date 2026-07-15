@@ -1236,6 +1236,28 @@ int aether_ui_wrap_create(void) {
     return register_widget_typed((__bridge void*)wv, AUI_WRAP);
 }
 
+// tabs stub: a vertical stack; each tab() appends its page (no NSTabView
+// switching yet). Keeps the ABI + build green and the pages walkable; the
+// real AppKit NSTabView wiring is follow-up parity work on the Mac.
+int aether_ui_tabs_create(void* boxed_closure) {
+    (void)boxed_closure;
+    return aether_ui_vstack_create(0);
+}
+int aether_ui_tab_add(int tabs_handle, const char* title) {
+    (void)title;
+    int page = aether_ui_vstack_create(0);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)tabs_handle, page);
+    return page;
+}
+int aether_ui_tabs_selected(int tabs_handle) { (void)tabs_handle; return -1; }
+int aether_ui_tabs_count(int tabs_handle)    { (void)tabs_handle; return 0; }
+void aether_ui_tabs_select(int tabs_handle, int index) {
+    (void)tabs_handle; (void)index;
+}
+void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
+    (void)tabs_handle; (void)boxed_closure;
+}
+
 int aether_ui_hstack_create(int spacing) {
     NSStackView* stack = [[NSStackView alloc] init];
     [stack setOrientation:NSUserInterfaceLayoutOrientationHorizontal];
@@ -4014,6 +4036,13 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_SPLIT_POS: {
             if (ctx->ival >= 0) aether_ui_split_set_position_impl(ctx->handle, ctx->ival);
             ctx->retval = aether_ui_split_position_impl(ctx->handle);
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_TAB_SELECT: {
+            // macOS tabs is still a stub stack; tabs_selected answers -1.
+            aether_ui_tabs_select(ctx->handle, ctx->ival);
+            ctx->retval = aether_ui_tabs_selected(ctx->handle);
             ctx->result = 0;
             return;
         }

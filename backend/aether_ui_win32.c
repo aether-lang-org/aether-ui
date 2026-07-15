@@ -1653,6 +1653,31 @@ int aether_ui_wrap_create(void) {
     return create_stack(0, 6);
 }
 
+// tabs stub: a vertical stack; each tab() appends its page. No tab strip,
+// no page switching yet (real Win32 = SysTabControl32 / a header of
+// buttons over a WK_ZSTACK) — pages just stack. Keeps the ABI + build
+// green; the composite is walkable so specs see the pages.
+int aether_ui_tabs_create(void* boxed_closure) {
+    (void)boxed_closure;
+    return create_stack(1, 0);  // vertical
+}
+int aether_ui_tab_add(int tabs_handle, const char* title) {
+    (void)title;
+    // Return an inner vstack parented into the tabs stack, so the DSL
+    // block's children attach inside the page (matches the GTK contract).
+    int page = create_stack(1, 0);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)tabs_handle, page);
+    return page;
+}
+int aether_ui_tabs_selected(int tabs_handle) { (void)tabs_handle; return -1; }
+int aether_ui_tabs_count(int tabs_handle)    { (void)tabs_handle; return 0; }
+void aether_ui_tabs_select(int tabs_handle, int index) {
+    (void)tabs_handle; (void)index;
+}
+void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
+    (void)tabs_handle; (void)boxed_closure;
+}
+
 int aether_ui_progressbar_create(double fraction) {
     ensure_win_init();
     HWND h = CreateWindowExW(0, PROGRESS_CLASSW, L"",
@@ -3410,6 +3435,15 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             // "the divider happens to sit at zero".
             if (ctx->ival >= 0) aether_ui_split_set_position_impl(ctx->handle, ctx->ival);
             ctx->retval = aether_ui_split_position_impl(ctx->handle);
+            ctx->result = 0;
+            ctx->done = 1;
+            return 0;
+        }
+        if (ctx->action == AETHER_DRV_TAB_SELECT) {
+            // Win32 tabs is still a plain stack (no switching), so
+            // tabs_selected answers -1 — the honest "unwired" signal.
+            aether_ui_tabs_select(ctx->handle, ctx->ival);
+            ctx->retval = aether_ui_tabs_selected(ctx->handle);
             ctx->result = 0;
             ctx->done = 1;
             return 0;

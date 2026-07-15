@@ -1,0 +1,53 @@
+// Aether UI tabs example (roadmap follow-up: ui.tabs).
+//
+// ui.tabs(on_change) { tab("A") {…} tab("B") {…} }: a native tab strip over
+// a page stack (GtkStackSwitcher + GtkStack). Each tab() adds a titled page;
+// its block children lay out inside that page. The on_change closure fires
+// with the new index; tab_select/tab_selected drive and read it, and the
+// driver route POST /widget/{id}/tab_select?i=N switches programmatically.
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, tabs, tab,
+    on_tab_change, tab_select, tab_selected, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    status = 0
+    tv = 0
+    window("tabs demo", 460, 320) {
+        vstack(8) {
+            status = text("active: 0")
+            divider()
+            tv = tabs() {
+                tab("Home") {
+                    _h1 = text("HOME PAGE")
+                    _h2 = text("welcome")
+                }
+                tab("Search") {
+                    _s1 = text("SEARCH PAGE")
+                    _s2 = text("find things")
+                }
+                tab("Library") {
+                    _l1 = text("LIBRARY PAGE")
+                    _l2 = text("your saved items")
+                }
+            }
+            // Change callback registered AFTER the block (like on_layout).
+            on_tab_change(tv) callback |i: int| {
+                aether_ui_text_set_string(status, "active: ${i}")
+            }
+            divider()
+            // Programmatic switching — proves tab_select drives the same
+            // path a strip click does (on_change fires, status updates).
+            hstack(6) {
+                _b0 = btn("Go Home")    callback { tab_select(tv, 0) }
+                _b1 = btn("Go Search")  callback { tab_select(tv, 1) }
+                _b2 = btn("Go Library") callback { tab_select(tv, 2) }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

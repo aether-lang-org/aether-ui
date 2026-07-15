@@ -1646,6 +1646,126 @@ int aether_ui_form_section_create(const char* title) {
     return frame_handle;
 }
 
+// ---------------------------------------------------------------------------
+// Tabs — GtkStackSwitcher (the clickable strip) over a GtkStack (the page
+// bodies), packed in a vertical box. tabs() returns the box handle; tab()
+// adds a titled page and returns its inner container. Native, themed,
+// keyboard-navigable — no reinvention. The select callback is a boxed
+// closure fired with the new index, exactly like picker's on_change.
+// ---------------------------------------------------------------------------
+typedef struct {
+    GtkWidget* stack;       // the GtkStack holding page bodies (weak)
+    GtkStackSwitcher* strip; // the switcher (weak)
+    int page_count;
+    int last_index;         // to fire on_change only on real changes
+    AeClosure* on_change;   // boxed, owned by Aether side
+} TabsState;
+
+static TabsState* tabs_state_of(GtkWidget* box) {
+    if (!box || !GTK_IS_BOX(box)) return NULL;
+    return (TabsState*)g_object_get_data(G_OBJECT(box), "aeui-tabs");
+}
+
+static void on_tabs_page_changed(GObject* stack, GParamSpec* pspec, gpointer data) {
+    (void)pspec;
+    TabsState* ts = (TabsState*)data;
+    if (!ts) return;
+    // Resolve the visible page's index from its stored name ("page_N").
+    GtkWidget* vis = gtk_stack_get_visible_child(GTK_STACK(stack));
+    if (!vis) return;
+    GtkStackPage* pg = gtk_stack_get_page(GTK_STACK(stack), vis);
+    const char* name = gtk_stack_page_get_name(pg);
+    int idx = (name && strncmp(name, "page_", 5) == 0) ? atoi(name + 5) : 0;
+    if (idx == ts->last_index) return;
+    ts->last_index = idx;
+    if (ts->on_change && ts->on_change->fn) {
+        ((void(*)(void*, intptr_t))ts->on_change->fn)(ts->on_change->env,
+                                                      (intptr_t)idx);
+    }
+}
+
+int aether_ui_tabs_create(void* boxed_closure) {
+    ensure_gtk_init();
+    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget* stack = gtk_stack_new();
+    gtk_stack_set_transition_type(GTK_STACK(stack),
+                                  GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+    gtk_stack_set_transition_duration(GTK_STACK(stack), 150);
+    gtk_widget_set_vexpand(stack, TRUE);
+    gtk_widget_set_hexpand(stack, TRUE);
+
+    GtkWidget* switcher = gtk_stack_switcher_new();
+    gtk_stack_switcher_set_stack(GTK_STACK_SWITCHER(switcher), GTK_STACK(stack));
+
+    gtk_box_append(GTK_BOX(box), switcher);
+    gtk_box_append(GTK_BOX(box), stack);
+    gtk_widget_set_vexpand(box, TRUE);
+    gtk_widget_set_hexpand(box, TRUE);
+
+    TabsState* ts = g_new0(TabsState, 1);
+    ts->stack = stack;
+    ts->strip = GTK_STACK_SWITCHER(switcher);
+    ts->page_count = 0;
+    ts->last_index = 0;
+    ts->on_change = (AeClosure*)boxed_closure;
+    g_object_set_data_full(G_OBJECT(box), "aeui-tabs", ts, g_free);
+    g_signal_connect(stack, "notify::visible-child",
+                     G_CALLBACK(on_tabs_page_changed), ts);
+    return aether_ui_register_widget(box);
+}
+
+// tab(title): add a titled page, return its inner container handle so the
+// DSL block's children attach INSIDE the page. Returns 0 if `tabs_handle`
+// isn't a tabs box.
+int aether_ui_tab_add(int tabs_handle, const char* title) {
+    GtkWidget* box = aether_ui_get_widget(tabs_handle);
+    TabsState* ts = tabs_state_of(box);
+    if (!ts) return 0;
+    GtkWidget* page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_vexpand(page, TRUE);
+    gtk_widget_set_hexpand(page, TRUE);
+    char name[32];
+    snprintf(name, sizeof(name), "page_%d", ts->page_count);
+    GtkStackPage* pg = gtk_stack_add_titled(GTK_STACK(ts->stack), page,
+                                            name, title ? title : "");
+    (void)pg;
+    ts->page_count++;
+    return aether_ui_register_widget(page);
+}
+
+int aether_ui_tabs_selected(int tabs_handle) {
+    GtkWidget* box = aether_ui_get_widget(tabs_handle);
+    TabsState* ts = tabs_state_of(box);
+    if (!ts) return -1;
+    GtkWidget* vis = gtk_stack_get_visible_child(GTK_STACK(ts->stack));
+    if (!vis) return -1;
+    GtkStackPage* pg = gtk_stack_get_page(GTK_STACK(ts->stack), vis);
+    const char* name = gtk_stack_page_get_name(pg);
+    return (name && strncmp(name, "page_", 5) == 0) ? atoi(name + 5) : 0;
+}
+
+int aether_ui_tabs_count(int tabs_handle) {
+    GtkWidget* box = aether_ui_get_widget(tabs_handle);
+    TabsState* ts = tabs_state_of(box);
+    return ts ? ts->page_count : 0;
+}
+
+void aether_ui_tabs_select(int tabs_handle, int index) {
+    GtkWidget* box = aether_ui_get_widget(tabs_handle);
+    TabsState* ts = tabs_state_of(box);
+    if (!ts || index < 0 || index >= ts->page_count) return;
+    char name[32];
+    snprintf(name, sizeof(name), "page_%d", index);
+    GtkWidget* page = gtk_stack_get_child_by_name(GTK_STACK(ts->stack), name);
+    if (page) gtk_stack_set_visible_child(GTK_STACK(ts->stack), page);
+}
+
+void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
+    GtkWidget* box = aether_ui_get_widget(tabs_handle);
+    TabsState* ts = tabs_state_of(box);
+    if (ts) ts->on_change = (AeClosure*)boxed_closure;
+}
+
 // NavStack — page stack with slide transitions.
 static int navstack_page_counts[64] = {0};
 
@@ -3730,12 +3850,21 @@ static int handle_for_widget(GtkWidget* w) {
     return 0;
 }
 
-// Find parent handle for a widget by walking the GTK widget tree.
+// Find parent handle for a widget by walking the GTK widget tree. Skips
+// GTK-internal wrapper widgets the app never created (GtkStack inside a
+// tabs composite, GtkViewport inside a scrollview, etc.) so a tab page's
+// parent resolves to the registered tabs box, not to an unregistered
+// intermediary that would report 0 and orphan the subtree.
 static int parent_handle_for(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return 0;
     GtkWidget* parent = gtk_widget_get_parent(w);
-    return handle_for_widget(parent);
+    while (parent) {
+        int h = handle_for_widget(parent);
+        if (h) return h;
+        parent = gtk_widget_get_parent(parent);
+    }
+    return 0;
 }
 
 // Banner widget handle — protected from the test API.
@@ -3758,6 +3887,9 @@ static const char* widget_type_name(GtkWidget* w) {
     if (GTK_IS_PANED(w)) return "splitview";
     if (GTK_IS_FLOW_BOX(w)) return "wrap";
     if (GTK_IS_FLOW_BOX_CHILD(w)) return "wrapitem";
+    // A tabs composite is a GtkBox carrying our aeui-tabs state — check
+    // before the generic GTK_IS_BOX vstack/hstack fallback below.
+    if (GTK_IS_BOX(w) && g_object_get_data(G_OBJECT(w), "aeui-tabs")) return "tabs";
     if (GTK_IS_OVERLAY(w)) return "zstack";
     if (GTK_IS_DRAWING_AREA(w)) return "canvas";
     if (GTK_IS_IMAGE(w)) return "image";
@@ -3918,6 +4050,11 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
     } else if (GTK_IS_PANED(w)) {
         n += snprintf(buf + n, bufsize - n, ",\"splitPosition\":%d",
                       gtk_paned_get_position(GTK_PANED(w)));
+    } else if (GTK_IS_BOX(w) && g_object_get_data(G_OBJECT(w), "aeui-tabs")) {
+        n += snprintf(buf + n, bufsize - n,
+                      ",\"tabSelected\":%d,\"tabCount\":%d",
+                      aether_ui_tabs_selected(handle),
+                      aether_ui_tabs_count(handle));
     }
 
     // CSS classes set via ui.add_css_class — specs assert selection visuals
@@ -3972,7 +4109,8 @@ static const char* extract_query_param(const char* path, const char* key) {
 // Data passed to the GTK idle callback for thread-safe widget interaction.
 typedef struct {
     int action;  // 0=click 1=set_text 2=toggle 3=set_value 4=set_state
-                 // 5=ctx_open 6=ctx_activate 7=split_position
+                 // 5=ctx_open 6=ctx_activate 7=split_position 8=focus
+                 // 9=window_key 10=tab_select
     int handle;
     double dval;
     int ival;    // ctx item index (action 6)
@@ -4069,6 +4207,10 @@ static gboolean test_action_idle(gpointer data) {
             break;
         case 8: // focus — grab keyboard focus
             ta->retval = gtk_widget_grab_focus(w) ? 1 : 0;
+            break;
+        case 10: // tab_select — activate tab[ival], report the resulting index
+            aether_ui_tabs_select(ta->handle, ta->ival);
+            ta->retval = aether_ui_tabs_selected(ta->handle);
             break;
     }
     ta->result = 0;
@@ -4764,6 +4906,11 @@ static void handle_test_request(int client_fd) {
             } else if (strncmp(action_part, "/focus", 6) == 0) {
                 // POST /widget/{id}/focus — grab keyboard focus.
                 ta.action = 8;
+            } else if (strncmp(action_part, "/tab_select", 11) == 0) {
+                // POST /widget/{id}/tab_select?i=N — switch the active tab.
+                ta.action = 10;
+                const char* v = extract_query_param(path, "i");
+                ta.ival = v ? atoi(v) : -1;
             } else {
                 send_response(client_fd, 400, "Bad Request", "application/json",
                               "{\"error\":\"unknown action\"}");

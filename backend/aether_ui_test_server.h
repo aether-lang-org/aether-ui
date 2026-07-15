@@ -42,6 +42,7 @@ typedef enum {
     AETHER_DRV_SHUTDOWN     = 13,  // close the top-level; app exits via the user-close path
     AETHER_DRV_CTX_MENU     = 14,  // handle=widget → retval=1 if it has a menu
     AETHER_DRV_CTX_ACTIVATE = 15,  // handle=widget, ival=item index → retval=1 if fired
+    AETHER_DRV_TAB_SELECT   = 16,  // handle=tabs, ival=index → retval=resulting index
 } AetherDriverActionKind;
 
 typedef struct {

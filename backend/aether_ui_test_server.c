@@ -68,6 +68,9 @@ extern int    aether_ui_overlay_is_modal_impl(int overlay_handle);
 extern void   aether_ui_overlay_close_impl(int overlay_handle);
 extern int    aether_ui_split_position_impl(int handle);
 extern int    aether_ui_picker_get_selected(int handle);
+extern int    aether_ui_tabs_selected(int handle);
+extern int    aether_ui_tabs_count(int handle);
+extern void   aether_ui_tabs_select(int handle, int index);
 
 // ---------------------------------------------------------------------------
 // Sealed widget list + banner handle.
@@ -270,6 +273,11 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         // red on win32 and macOS regardless of how good the backend was.
         n += snprintf(buf + n, bufsize - n, ",\"splitPosition\":%d",
                       aether_ui_split_position_impl(handle));
+    } else if (strcmp(type, "tabs") == 0) {
+        n += snprintf(buf + n, bufsize - n,
+                      ",\"tabSelected\":%d,\"tabCount\":%d",
+                      aether_ui_tabs_selected(handle),
+                      aether_ui_tabs_count(handle));
     }
     n += snprintf(buf + n, bufsize - n, "}");
     return n;
@@ -505,6 +513,21 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         h->dispatch_action(&ctx);
         char body[64];
         snprintf(body, sizeof(body), "{\"ok\":true,\"position\":%d}", ctx.retval);
+        send_http(client_fd, 200, "OK", "application/json", body);
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/tab_select")) {
+        // POST /widget/{id}/tab_select?i=N — switch the active tab. Marshaled
+        // to the UI thread (GtkStack/NSTabView aren't thread-safe). On a stub
+        // backend tabs_selected stays -1, which is how a spec learns the tab
+        // strip is unwired.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_TAB_SELECT;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        const char* i = extract_query_param(path, "i");
+        ctx.ival = i ? atoi(i) : -1;
+        h->dispatch_action(&ctx);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"ok\":true,\"tabSelected\":%d}", ctx.retval);
         send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 0 && strncmp(path, "/focus", 6) == 0) {
         // GET /focus — who has keyboard focus (parity with the GTK server).

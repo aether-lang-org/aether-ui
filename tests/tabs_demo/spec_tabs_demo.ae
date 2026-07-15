@@ -1,0 +1,67 @@
+// spec_tabs_demo.ae — drives the tabs example over the AetherUIDriver.
+// Proves ui.tabs: the composite reports type "tabs" with tabSelected +
+// tabCount; each tab() built its page children; POST
+// /widget/{id}/tab_select?i=N switches the active page and fires
+// on_tab_change (status label follows); app-side tab_select (the Go X
+// buttons) takes the same path.
+//
+// Run via ci.sh Phase 5k, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/tabs_demo/bin/tabs_demo &
+//   UI_SPEC=tabs_demo/spec_tabs_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+// The tabs composite (the only "tabs"-typed widget in the tree).
+tabs_handle() -> int {
+    return uidriver.widget_id_of("tabs", "")
+}
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "tabs over AetherUIDriver") {
+        aeocha.it("the composite is a tabs with 3 pages, page bodies built") callback {
+            tv = tabs_handle()
+            aeocha.assert_gt(tv, 0, "tabs composite found")
+            b = uidriver.get_body("/widget/${tv}")
+            aeocha.assert_contains(b, "\"type\":\"tabs\"", "reports type tabs")
+            aeocha.assert_contains(b, "\"tabCount\":3", "three tabs")
+            aeocha.assert_contains(b, "\"tabSelected\":0", "first tab active initially")
+            all = uidriver.get_body("/widgets")
+            aeocha.assert_contains(all, "HOME PAGE", "home page body built")
+            aeocha.assert_contains(all, "SEARCH PAGE", "search page body built")
+            aeocha.assert_contains(all, "LIBRARY PAGE", "library page body built")
+        }
+
+        aeocha.it("tab_select route switches the page and fires on_tab_change") callback {
+            tv = tabs_handle()
+            uidriver.post_ok("/widget/${tv}/tab_select?i=2", "select tab 2")
+            ok = uidriver.wait_body_contains("/widget/${tv}", "\"tabSelected\":2", 20)
+            aeocha.assert_true(ok, "tab 2 is active")
+            oks = uidriver.wait_body_contains("/widgets", "active: 2", 20)
+            aeocha.assert_true(oks, "on_tab_change fired — status label reads active: 2")
+        }
+
+        aeocha.it("app-side tab_select (Go Search) takes the same path") callback {
+            gs = uidriver.widget_id_by_text("Go Search")
+            aeocha.assert_gt(gs, 0, "Go Search button found")
+            uidriver.post_ok("/widget/${gs}/click", "click Go Search")
+            tv = tabs_handle()
+            ok = uidriver.wait_body_contains("/widget/${tv}", "\"tabSelected\":1", 20)
+            aeocha.assert_true(ok, "tab 1 active after the button")
+            oks = uidriver.wait_body_contains("/widgets", "active: 1", 20)
+            aeocha.assert_true(oks, "on_tab_change fired again — active: 1")
+        }
+
+        aeocha.it("switching back to tab 0 works") callback {
+            gh = uidriver.widget_id_by_text("Go Home")
+            uidriver.post_ok("/widget/${gh}/click", "click Go Home")
+            tv = tabs_handle()
+            ok = uidriver.wait_body_contains("/widget/${tv}", "\"tabSelected\":0", 20)
+            aeocha.assert_true(ok, "back on tab 0")
+        }
+    }
+    aeocha.run_summary(fw)
+}
