@@ -1024,6 +1024,11 @@ static void init_dpi_awareness(void) {
 // container by aether_ui_widget_add_child_ctx / aether_ui_app_set_body.
 static HWND widget_holder = NULL;
 
+// Canvas keyboard-focus helpers (defined with the canvas globals below;
+// used by the app-run/show path above them).
+static void aeui_focus_pending_key_canvas(void);
+static int  aeui_hwnd_is_key_canvas(HWND hwnd);
+
 static int init_done = 0;
 static void ensure_win_init(void) {
     if (init_done) return;
@@ -1160,6 +1165,12 @@ void aether_ui_app_run_raw(int app_handle) {
     ShowWindow(e->hwnd, show_mode);
     if (show_mode == SW_SHOW) UpdateWindow(e->hwnd);
 
+    // A canvas that registered on_key wants the initial keyboard focus so
+    // arrow keys work before the user clicks anything (gp/falling_blocks).
+    // Now that the window is shown and the canvas is reparented into it,
+    // the focus sticks. (Defined below with the canvas globals.)
+    aeui_focus_pending_key_canvas();
+
     // Check AETHER_UI_TEST_PORT and launch test server if set.
     const char* test_port_env = getenv("AETHER_UI_TEST_PORT");
     if (test_port_env) {
@@ -1177,9 +1188,18 @@ void aether_ui_app_run_raw(int app_handle) {
     // controls (no focus traversal at all).
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        // When a key-registered canvas has focus, route keystrokes straight
+        // to it — IsDialogMessage would otherwise eat Return (default button)
+        // and Escape (cancel) before the canvas's WM_KEYDOWN sees them, and
+        // gp/falling_blocks navigate with exactly those. (The driver's
+        // /canvas/key path bypasses this loop entirely, so specs are
+        // unaffected either way — this is for real keyboard input.)
+        int canvas_has_focus =
+            (msg.message == WM_KEYDOWN || msg.message == WM_CHAR) &&
+            aeui_hwnd_is_key_canvas(msg.hwnd);
         // Only the top-level app window participates in dialog nav; child
         // popups created via aether_ui_window_create are independent.
-        if (!IsDialogMessageW(e->hwnd, &msg)) {
+        if (canvas_has_focus || !IsDialogMessageW(e->hwnd, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -2598,12 +2618,31 @@ typedef struct {
     int cmd_count;
     int cmd_cap;
     float cur_x, cur_y;
-    AeClosure* on_move;   // pointer-move hook (canvas-local x,y); null = none
+    AeClosure* on_move;    // pointer-move hook (canvas-local x,y); null = none
+    AeClosure* on_click;   // pointer-press hook (canvas-local x,y)
+    AeClosure* on_release; // pointer-release hook (canvas-local x,y)
+    AeClosure* on_key;     // key-press hook (GDK key name string)
 } Canvas;
 
 static Canvas* canvases = NULL;
 static int canvas_count = 0;
 static int canvas_cap = 0;
+
+// The most recently key-registered canvas, focused after the window shows
+// (registration-time focus can't stick — the canvas is still on the hidden
+// holder then; mirrors GTK's "focus on map").
+static int pending_key_canvas = 0;
+
+static void aeui_focus_pending_key_canvas(void) {
+    if (pending_key_canvas >= 1 && pending_key_canvas <= canvas_count) {
+        SetFocus(canvases[pending_key_canvas - 1].hwnd);
+    }
+}
+
+static int aeui_hwnd_is_key_canvas(HWND hwnd) {
+    return pending_key_canvas >= 1 && pending_key_canvas <= canvas_count &&
+           hwnd == canvases[pending_key_canvas - 1].hwnd;
+}
 
 static void canvas_free_text(int canvas_id);  // fwd; frees FILL_TEXT strings
 
@@ -2643,6 +2682,9 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cv->cmd_cap = 0;
     cv->cur_x = cv->cur_y = 0;
     cv->on_move = NULL;
+    cv->on_click = NULL;
+    cv->on_release = NULL;
+    cv->on_key = NULL;
     int widget_handle = register_widget_typed(h, WK_CANVAS);
     Widget* ww = widget_at(widget_handle);
     if (ww) {
@@ -2665,8 +2707,12 @@ void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
     (void)canvas_id; (void)boxed_closure;
 }
 
+// Pointer-press on a canvas: WM_LBUTTONDOWN → (x,y) into the closure, and
+// the driver's POST /canvas/{id}/click drives the same hook. Mirrors the
+// GTK4 GtkGestureClick "pressed" path.
 void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
-    (void)canvas_id; (void)boxed_closure;
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    canvases[canvas_id - 1].on_click = (AeClosure*)boxed_closure;
 }
 
 void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
@@ -2674,17 +2720,28 @@ void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     canvases[canvas_id - 1].on_move = (AeClosure*)boxed_closure;
 }
 
-// Keyboard input on a canvas. No-op stub for now — the Win32 bridge would
-// route WM_KEYDOWN → key-name string into the closure (mirrors the GTK4
-// GtkEventControllerKey path). The Linux backend is the reference impl.
+// Keyboard input on a canvas: WM_KEYDOWN → GDK-style key name string into
+// the closure (mirrors the GTK4 GtkEventControllerKey path — the app-side
+// key handlers compare against GDK names like "Left"/"Return"/"Escape").
+// The canvas is made a tab stop so real keystrokes reach it once focused;
+// the driver's POST /canvas/{id}/key drives the same hook without focus.
 void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
-    (void)canvas_id; (void)boxed_closure;
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    Canvas* cv = &canvases[canvas_id - 1];
+    cv->on_key = (AeClosure*)boxed_closure;
+    LONG_PTR st = GetWindowLongPtrW(cv->hwnd, GWL_STYLE);
+    SetWindowLongPtrW(cv->hwnd, GWL_STYLE, st | WS_TABSTOP);
+    // Focus is deferred to app-show: at registration the canvas is still
+    // parented to the hidden holder, so SetFocus wouldn't stick (mirrors the
+    // GTK "focus on map" lesson). The window-show path grabs it once the
+    // window is up; clicking the canvas also focuses it (WM_LBUTTONDOWN).
+    pending_key_canvas = canvas_id;
 }
 
-// Pointer-release on a canvas. No-op stub — the Win32 bridge would route
-// WM_LBUTTONUP → (x,y) into the closure. The Linux backend is the reference.
+// Pointer-release on a canvas: WM_LBUTTONUP → (x,y) into the closure.
 void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
-    (void)canvas_id; (void)boxed_closure;
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    canvases[canvas_id - 1].on_release = (AeClosure*)boxed_closure;
 }
 
 // begin_path starts a fresh command stream — drop any previously-recorded
@@ -3090,6 +3147,37 @@ static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {
     DeleteDC(mem);
 }
 
+// Map a Win32 virtual-key code to the GDK key name the app-side handlers
+// expect (gp/falling_blocks compare against GDK's "Left"/"Return"/"space"…).
+// Returns a static string; writes single letters/digits into `buf`.
+static const char* vk_to_gdk_name(WPARAM vk, char* buf, int buflen) {
+    switch (vk) {
+        case VK_LEFT:   return "Left";
+        case VK_RIGHT:  return "Right";
+        case VK_UP:     return "Up";
+        case VK_DOWN:   return "Down";
+        case VK_RETURN: return "Return";
+        case VK_ESCAPE: return "Escape";
+        case VK_DELETE: return "Delete";
+        case VK_BACK:   return "BackSpace";
+        case VK_TAB:    return "Tab";
+        case VK_SPACE:  return "space";
+        case VK_HOME:   return "Home";
+        case VK_END:    return "End";
+        case VK_PRIOR:  return "Page_Up";
+        case VK_NEXT:   return "Page_Down";
+        default: break;
+    }
+    // Letters (A-Z) and digits (0-9): GDK reports the lowercase char.
+    if ((vk >= 'A' && vk <= 'Z')) {
+        if (buflen >= 2) { buf[0] = (char)(vk + 32); buf[1] = '\0'; return buf; }
+    }
+    if ((vk >= '0' && vk <= '9')) {
+        if (buflen >= 2) { buf[0] = (char)vk; buf[1] = '\0'; return buf; }
+    }
+    return "";
+}
+
 static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_PAINT: {
@@ -3115,6 +3203,75 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                     int y = (int)(short)HIWORD(lp);
                     ((void(*)(void*, double, double))cv->on_move->fn)(
                         cv->on_move->env, (double)x, (double)y);
+                }
+            }
+            return 0;
+        }
+        case WM_LBUTTONDOWN: {
+            // Pointer press → on_click(x, y). Also grab focus so subsequent
+            // keys reach the canvas (mirrors the GTK focus-on-click path).
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1) {
+                Canvas* cv = &canvases[cid - 1];
+                SetFocus(hwnd);
+                if (cv->on_click && cv->on_click->fn) {
+                    int x = (int)(short)LOWORD(lp);
+                    int y = (int)(short)HIWORD(lp);
+                    ((void(*)(void*, double, double))cv->on_click->fn)(
+                        cv->on_click->env, (double)x, (double)y);
+                }
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1) {
+                Canvas* cv = &canvases[cid - 1];
+                if (cv->on_release && cv->on_release->fn) {
+                    int x = (int)(short)LOWORD(lp);
+                    int y = (int)(short)HIWORD(lp);
+                    ((void(*)(void*, double, double))cv->on_release->fn)(
+                        cv->on_release->env, (double)x, (double)y);
+                }
+            }
+            return 0;
+        }
+        case WM_LBUTTONDBLCLK: {
+            // A double-click delivers DOWN, UP, DBLCLK, UP. Apps that treat a
+            // fast second click as a "drill" (gp) rely on the second press
+            // arriving — synthesize it as another on_click so the double-tap
+            // path fires the handler twice, matching GTK's n_press semantics
+            // where the app counts its own presses.
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1) {
+                Canvas* cv = &canvases[cid - 1];
+                if (cv->on_click && cv->on_click->fn) {
+                    int x = (int)(short)LOWORD(lp);
+                    int y = (int)(short)HIWORD(lp);
+                    ((void(*)(void*, double, double))cv->on_click->fn)(
+                        cv->on_click->env, (double)x, (double)y);
+                }
+            }
+            return 0;
+        }
+        case WM_GETDLGCODE:
+            // Claim arrow keys and character keys so they arrive as WM_KEYDOWN
+            // here (canvas nav) instead of being eaten by dialog navigation.
+            // NOT Tab — Tab must still move focus between the app's widgets.
+            // (Return/Escape reach WM_KEYDOWN via the message loop, which only
+            // special-cases Tab for IsDialogMessage.)
+            return DLGC_WANTARROWS | DLGC_WANTCHARS;
+        case WM_KEYDOWN: {
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1) {
+                Canvas* cv = &canvases[cid - 1];
+                if (cv->on_key && cv->on_key->fn) {
+                    char buf[8];
+                    const char* name = vk_to_gdk_name(wp, buf, sizeof(buf));
+                    if (name[0]) {
+                        ((void(*)(void*, const char*))cv->on_key->fn)(
+                            cv->on_key->env, name);
+                    }
                 }
             }
             return 0;
@@ -3466,16 +3623,31 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
         if (ctx->action == AETHER_DRV_CANVAS_CLICK
             || ctx->action == AETHER_DRV_CANVAS_MOVE
             || ctx->action == AETHER_DRV_CANVAS_KEY) {
-            // Only on_move is wired on this backend (canvas_on_click/on_key
-            // are still stubs) — the others answer 404 honestly.
+            // Drive the canvas hit-test hooks directly, exactly as a real
+            // WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_KEYDOWN would (result 3 =
+            // "no such handler wired", so a spec can tell a missed click
+            // from an unwired canvas).
             ctx->result = 3;
-            if (ctx->action == AETHER_DRV_CANVAS_MOVE
-                && ctx->handle >= 1 && ctx->handle <= canvas_count) {
+            if (ctx->handle >= 1 && ctx->handle <= canvas_count) {
                 Canvas* cv = &canvases[ctx->handle - 1];
-                if (cv->on_move && cv->on_move->fn) {
-                    ((void(*)(void*, double, double))cv->on_move->fn)(
-                        cv->on_move->env, ctx->dval, ctx->dval2);
-                    ctx->result = 0;
+                if (ctx->action == AETHER_DRV_CANVAS_MOVE) {
+                    if (cv->on_move && cv->on_move->fn) {
+                        ((void(*)(void*, double, double))cv->on_move->fn)(
+                            cv->on_move->env, ctx->dval, ctx->dval2);
+                        ctx->result = 0;
+                    }
+                } else if (ctx->action == AETHER_DRV_CANVAS_CLICK) {
+                    if (cv->on_click && cv->on_click->fn) {
+                        ((void(*)(void*, double, double))cv->on_click->fn)(
+                            cv->on_click->env, ctx->dval, ctx->dval2);
+                        ctx->result = 0;
+                    }
+                } else { // AETHER_DRV_CANVAS_KEY
+                    if (cv->on_key && cv->on_key->fn) {
+                        ((void(*)(void*, const char*))cv->on_key->fn)(
+                            cv->on_key->env, ctx->sval);
+                        ctx->result = 0;
+                    }
                 }
             }
             ctx->done = 1;
