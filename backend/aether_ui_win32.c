@@ -147,6 +147,7 @@ typedef enum {
     WK_WINDOW,
     WK_SHEET,
     WK_GRID,
+    WK_SCRIM,     // overlay modal scrim (full-client click-eater)
 } WidgetKind;
 
 typedef struct {
@@ -823,6 +824,8 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
 static const wchar_t* APP_CLASS = L"AetherUIAppWindow";
 static const wchar_t* DIVIDER_CLASS = L"AetherUIDivider";
 static const wchar_t* SPACER_CLASS = L"AetherUISpacer";
+static const wchar_t* SCRIM_CLASS = L"AetherUIScrim";
+static LRESULT CALLBACK scrim_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 static const wchar_t* CANVAS_CLASS = L"AetherUICanvas";
 static int win_classes_registered = 0;
 static int gdiplus_started = 0;
@@ -992,6 +995,15 @@ static void register_window_classes(HINSTANCE inst) {
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = GRID_CLASS;
+    RegisterClassExW(&wc);
+
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.lpfnWndProc = scrim_wnd_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    wc.lpszClassName = SCRIM_CLASS;
     RegisterClassExW(&wc);
 
     win_classes_registered = 1;
@@ -1586,7 +1598,15 @@ int aether_ui_picker_create(void* boxed_closure) {
 
 void aether_ui_picker_add_item(int handle, const char* item) {
     Widget* w = widget_at(handle);
-    if (w) SendMessageW(w->hwnd, CB_ADDSTRING, 0, (LPARAM)utf8_to_wide(item));
+    if (!w) return;
+    SendMessageW(w->hwnd, CB_ADDSTRING, 0, (LPARAM)utf8_to_wide(item));
+    // GtkDropDown parity: the first item becomes the selection (CB_SETCURSEL
+    // does not fire CBN_SELCHANGE, so on_change stays quiet — GTK's default
+    // selection is silent too). Without this, CB_GETCURSEL answers -1 and
+    // the label is empty until the user picks.
+    if (SendMessageW(w->hwnd, CB_GETCURSEL, 0, 0) == CB_ERR) {
+        SendMessageW(w->hwnd, CB_SETCURSEL, 0, 0);
+    }
 }
 
 void aether_ui_picker_set_selected(int handle, int index) {
@@ -2183,24 +2203,233 @@ void aether_ui_window_set_body_impl(int win_handle, int root_handle) {
                  SWP_NOZORDER | SWP_SHOWWINDOW);
 }
 
-// In-window overlay layer — no-op stubs on Win32 (real z-layer lands next
-// time on winbaz; house pattern, same as canvas_on_move). The DSL links and
-// runs; overlays simply don't display here.
+// ---------------------------------------------------------------------------
+// In-window overlay layer (roadmap item 1, win32 parity) — toast / modal /
+// tooltip, drawn INSIDE the app window as raised child HWNDs, never as a
+// popup. Mirrors the AppKit translation (aether_ui_macos.m): the overlay
+// table is append-only, handles 1-based and monotonic, closing flips `live`
+// to 0 without removing the entry — GET /overlays must show a toast as
+// observably DEAD, not merely absent.
+//
+// The "host" is simply the app window's client area: child windows z-order
+// over siblings, so a raised scrim + content IS the overlay stack. The
+// scrim is a WS_EX_LAYERED child (uniform alpha works for child windows
+// since Win8) that swallows clicks; a scrim click is the ONLY path that
+// fires on_dismiss (GTK/macOS behave the same).
+// ---------------------------------------------------------------------------
+typedef struct {
+    HWND content;        // reparented into the app window while live
+    HWND scrim;          // NULL when non-modal
+    AeClosure* on_dismiss;
+    int modal;
+    int live;
+} Win32OverlayEntry;
+
+static Win32OverlayEntry* w32_overlays = NULL;
+static int w32_overlay_count = 0;
+static int w32_overlay_capacity = 0;
+
+static Win32OverlayEntry* w32_overlay_at(int handle) {
+    if (handle < 1 || handle > w32_overlay_count) return NULL;
+    return &w32_overlays[handle - 1];
+}
+
+// Natural size of a (possibly detached) widget subtree. measure_widget
+// answers leaves (text extent, pref sizes); stacks sum/max their children —
+// a detached modal card has never been laid out, so its own rect is 0x0
+// and only recursion gives an honest size.
+static void measure_subtree(HWND hwnd, int* out_w, int* out_h) {
+    int handle = handle_for_hwnd(hwnd);
+    Widget* w = handle ? widget_at(handle) : NULL;
+    if (!w) { *out_w = 0; *out_h = 0; return; }
+    if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK) {
+        int total_w = 0, total_h = 0, n = 0;
+        for (HWND c = GetWindow(hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+            int cw = 0, ch = 0;
+            measure_subtree(c, &cw, &ch);
+            if (w->kind == WK_VSTACK) {
+                if (cw > total_w) total_w = cw;
+                total_h += ch;
+            } else if (w->kind == WK_HSTACK) {
+                total_w += cw;
+                if (ch > total_h) total_h = ch;
+            } else {
+                if (cw > total_w) total_w = cw;
+                if (ch > total_h) total_h = ch;
+            }
+            n++;
+        }
+        int sp = (n > 1) ? (n - 1) * w->stack.spacing : 0;
+        if (w->kind == WK_VSTACK) total_h += sp;
+        if (w->kind == WK_HSTACK) total_w += sp;
+        // Stack margins apply during parent layout; include our own padding.
+        *out_w = total_w + w->margin_left + w->margin_right + 16;
+        *out_h = total_h + w->margin_top + w->margin_bottom + 16;
+        return;
+    }
+    measure_widget(w, out_w, out_h);
+    // Leaves get breathing room the win32 text extent doesn't include.
+    *out_w += 12;
+    *out_h += 8;
+}
+
+static LRESULT CALLBACK scrim_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_LBUTTONDOWN) {
+        // Find the overlay owning this scrim; fire on_dismiss then close.
+        for (int i = 0; i < w32_overlay_count; i++) {
+            Win32OverlayEntry* e = &w32_overlays[i];
+            if (e->live && e->scrim == hwnd) {
+                if (e->on_dismiss && e->on_dismiss->fn) {
+                    ((void(*)(void*))e->on_dismiss->fn)(e->on_dismiss->env);
+                }
+                aether_ui_overlay_close_impl(i + 1);
+                return 0;
+            }
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 int aether_ui_overlay_open_impl(int win_handle, int content_handle,
                                 int anchor, int dx, int dy, int modal) {
-    (void)win_handle; (void)content_handle; (void)anchor;
-    (void)dx; (void)dy; (void)modal;
+    (void)win_handle;   // single-window today; overlays land on the primary
+    ensure_win_init();
+    Widget* content = widget_at(content_handle);
+    if (!content || app_count < 1 || !apps[0].hwnd) return 0;
+    HWND host = apps[0].hwnd;
+
+    if (w32_overlay_count >= w32_overlay_capacity) {
+        w32_overlay_capacity = w32_overlay_capacity == 0 ? 8 : w32_overlay_capacity * 2;
+        w32_overlays = (Win32OverlayEntry*)realloc(
+            w32_overlays, sizeof(Win32OverlayEntry) * w32_overlay_capacity);
+        if (!w32_overlays) { w32_overlay_count = 0; w32_overlay_capacity = 0; return 0; }
+    }
+    int handle = w32_overlay_count + 1;
+    Win32OverlayEntry* e = &w32_overlays[w32_overlay_count];
+    memset(e, 0, sizeof(*e));
+    e->modal = modal ? 1 : 0;
+    e->live = 1;
+
+    RECT cr;
+    GetClientRect(host, &cr);
+    int W = cr.right - cr.left, H = cr.bottom - cr.top;
+
+    // Scrim first so it sits BELOW the content in z-order.
+    if (modal) {
+        HWND scrim = CreateWindowExW(WS_EX_LAYERED, SCRIM_CLASS, L"",
+            WS_CHILD | WS_VISIBLE, 0, 0, W, H,
+            host, NULL, GetModuleHandleW(NULL), NULL);
+        SetLayeredWindowAttributes(scrim, 0, 115, LWA_ALPHA);  // ~45% black
+        register_widget_typed(scrim, WK_SCRIM);
+        SetWindowPos(scrim, HWND_TOP, 0, 0, W, H, SWP_SHOWWINDOW);
+        e->scrim = scrim;
+    }
+
+    // Reparent the content into the window, size it naturally, place by
+    // anchor. anchor packs halign in bits 0-1 (0=start 1=center 2=end) and
+    // valign in bits 2-3: code = h + v*4; dx/dy are SIGNED insets (positive
+    // from start/top, negative from end/bottom).
+    int cw = 0, ch = 0;
+    measure_subtree(content->hwnd, &cw, &ch);
+    if (cw < 40) cw = 40;
+    if (ch < 24) ch = 24;
+    if (cw > W) cw = W;
+    if (ch > H) ch = H;
+    int h = anchor & 3, v = (anchor >> 2) & 3;
+    int x, y;
+    if (h == 0)      x = dx > 0 ? dx : 0;
+    else if (h == 2) x = W - cw + (dx < 0 ? dx : 0);
+    else             x = (W - cw) / 2 + dx;
+    if (v == 0)      y = dy > 0 ? dy : 0;
+    else if (v == 2) y = H - ch + (dy < 0 ? dy : 0);
+    else             y = (H - ch) / 2 + dy;
+
+    SetParent(content->hwnd, host);
+    SetWindowPos(content->hwnd, HWND_TOP, x, y, cw, ch, SWP_SHOWWINDOW);
+    e->content = content->hwnd;
+    w32_overlay_count++;
+    return handle;
+}
+
+void aether_ui_overlay_close_impl(int overlay_handle) {
+    Win32OverlayEntry* e = w32_overlay_at(overlay_handle);
+    if (!e || !e->live) return;   // idempotent
+    e->live = 0;
+    if (e->scrim) { DestroyWindow(e->scrim); e->scrim = NULL; }
+    if (e->content) {
+        // Back to the hidden holder — the widget stays registered (and
+        // reusable), it just leaves the window like GTK's overlay child.
+        ShowWindow(e->content, SW_HIDE);
+        SetParent(e->content, widget_holder);
+        e->content = NULL;
+    }
+}
+
+void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure) {
+    Win32OverlayEntry* e = w32_overlay_at(overlay_handle);
+    if (e) e->on_dismiss = (AeClosure*)boxed_closure;
+}
+
+int aether_ui_overlay_is_live_impl(int overlay_handle) {
+    Win32OverlayEntry* e = w32_overlay_at(overlay_handle);
+    return e ? e->live : 0;
+}
+
+int aether_ui_overlay_count_impl(void) { return w32_overlay_count; }
+
+int aether_ui_overlay_is_modal_impl(int overlay_handle) {
+    Win32OverlayEntry* e = w32_overlay_at(overlay_handle);
+    return e ? e->modal : 0;
+}
+
+// Escape closes the TOPMOST live overlay; returns 1 if one was closed so
+// the caller can let Escape propagate when nothing is open.
+static int w32_escape_overlays(void) {
+    for (int i = w32_overlay_count - 1; i >= 0; i--) {
+        if (w32_overlays[i].live) {
+            aether_ui_overlay_close_impl(i + 1);
+            return 1;
+        }
+    }
     return 0;
 }
-void aether_ui_overlay_close_impl(int overlay_handle) { (void)overlay_handle; }
-void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure) {
-    (void)overlay_handle; (void)boxed_closure;
+
+// Toast auto-dismiss: sys-timer-id → overlay handle (thread timers get a
+// SYSTEM-assigned id — the ui.timer lesson).
+typedef struct { UINT_PTR sys_id; int overlay; } ToastTimer;
+static ToastTimer toast_timers[16];
+
+static void CALLBACK toast_timer_proc(HWND hwnd, UINT msg, UINT_PTR id, DWORD now) {
+    (void)hwnd; (void)msg; (void)now;
+    for (int i = 0; i < 16; i++) {
+        if (toast_timers[i].sys_id == id && toast_timers[i].overlay) {
+            KillTimer(NULL, id);
+            aether_ui_overlay_close_impl(toast_timers[i].overlay);
+            toast_timers[i].sys_id = 0;
+            toast_timers[i].overlay = 0;
+            return;
+        }
+    }
+    KillTimer(NULL, id);
 }
-int aether_ui_overlay_is_live_impl(int overlay_handle) { (void)overlay_handle; return 0; }
-int aether_ui_overlay_count_impl(void) { return 0; }
-int aether_ui_overlay_is_modal_impl(int overlay_handle) { (void)overlay_handle; return 0; }
+
 int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
-    (void)win_handle; (void)text; (void)ms; return 0;
+    // A real registered text widget, opened bottom-center, non-modal,
+    // lifted 24px off the edge (anchor 9 = h:1 center, v:2 bottom).
+    int content = aether_ui_text_create(text ? text : "");
+    int handle = aether_ui_overlay_open_impl(win_handle, content, 9, 0, -24, 0);
+    if (handle > 0 && ms > 0) {
+        UINT_PTR sid = SetTimer(NULL, 0, (UINT)ms, toast_timer_proc);
+        for (int i = 0; i < 16; i++) {
+            if (toast_timers[i].sys_id == 0) {
+                toast_timers[i].sys_id = sid;
+                toast_timers[i].overlay = handle;
+                break;
+            }
+        }
+    }
+    return handle;
 }
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
     (void)handle; (void)property_css;
@@ -2240,12 +2469,58 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
     (void)canvas_id; (void)px; (void)py; (void)width; (void)height;
     return -1;
 }
+// Drawn vg tooltip — one overlay per SHOW (a hide flips it dead; the next
+// hover opens a fresh one, matching the macOS/GTK observable contract:
+// specs assert live:1 on hover, live:0 after moving off, live:1 again).
+static int w32_tooltip_overlay = 0;
+static int w32_tooltip_label = 0;
+
 int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text,
                                    double cx, double cy) {
-    (void)canvas_id; (void)text; (void)cx; (void)cy; return 0;
+    if (!text || !text[0]) { aether_ui_vg_tooltip_hide_impl(); return 0; }
+    int cwidget = aether_ui_canvas_get_widget(canvas_id);
+    Widget* cw = widget_at(cwidget);
+    if (!cw || app_count < 1 || !apps[0].hwnd) return 0;
+
+    // Canvas-local → app-window client coords; sit below-right of the
+    // pointer like a native tip.
+    POINT p = { (int)cx + 12, (int)cy + 18 };
+    MapWindowPoints(cw->hwnd, apps[0].hwnd, &p, 1);
+
+    if (w32_tooltip_overlay
+        && aether_ui_overlay_is_live_impl(w32_tooltip_overlay)
+        && w32_tooltip_label) {
+        // Live: retext + reposition the existing overlay content.
+        Widget* lbl = widget_at(w32_tooltip_label);
+        if (lbl) {
+            aether_ui_text_set_string(w32_tooltip_label, text);
+            int tw = 0, th = 0;
+            measure_widget(lbl, &tw, &th);
+            SetWindowPos(lbl->hwnd, HWND_TOP, p.x, p.y, tw + 12, th + 8,
+                         SWP_SHOWWINDOW);
+        }
+        return w32_tooltip_overlay;
+    }
+    w32_tooltip_label = aether_ui_text_create(text);
+    // anchor 0 = top-start; dx/dy are the absolute client position.
+    w32_tooltip_overlay = aether_ui_overlay_open_impl(0, w32_tooltip_label,
+                                                      0, p.x, p.y, 0);
+    return w32_tooltip_overlay;
 }
-void aether_ui_vg_tooltip_hide_impl(void) { }
-int aether_ui_vg_tooltip_drawn_impl(void) { return 0; }
+
+void aether_ui_vg_tooltip_hide_impl(void) {
+    if (w32_tooltip_overlay
+        && aether_ui_overlay_is_live_impl(w32_tooltip_overlay)) {
+        aether_ui_overlay_close_impl(w32_tooltip_overlay);
+    }
+}
+
+// The drawn tooltip path is opt-in via $AETHER_UI_TOOLTIP=drawn (the same
+// switch GTK honors; win32 has no native vg-shape tooltip to prefer).
+int aether_ui_vg_tooltip_drawn_impl(void) {
+    const char* v = getenv("AETHER_UI_TOOLTIP");
+    return v && strcmp(v, "drawn") == 0;
+}
 
 void aether_ui_window_show_impl(int win_handle) {
     Widget* w = widget_at(win_handle);
@@ -3403,6 +3678,7 @@ static const char* widget_kind_name(WidgetKind k) {
         case WK_CANVAS: return "canvas";
         case WK_WINDOW: return "window";
         case WK_SHEET: return "sheet";
+        case WK_SCRIM: return "scrim";
         default: return "widget";
     }
 }
@@ -3557,6 +3833,14 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             // does). Combos report fired:false — win32 has no accelerator
             // wiring yet, and a fake green here would lie about it.
             ctx->retval = 0;
+            if (strcmp(ctx->sval, "Escape") == 0) {
+                // Escape dismisses the topmost live overlay (the same
+                // wiring GTK/macOS give it); unhandled when none is open.
+                ctx->retval = w32_escape_overlays();
+                ctx->result = 0;
+                ctx->done = 1;
+                return 0;
+            }
             if (app_count > 0 && apps[0].hwnd) {
                 if (strcmp(ctx->sval, "Tab") == 0 ||
                     strcmp(ctx->sval, "Shift+Tab") == 0) {
@@ -3606,15 +3890,30 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             return 0;
         }
         if (ctx->action == AETHER_DRV_PICK) {
-            // Real hit-test against the client area. Win32 has no overlay
-            // layer yet, so nothing can be ON a scrim — on_scrim stays 0.
+            // Real hit-test against the client area, descending to the
+            // DEEPEST child at the point (ChildWindowFromPointEx only looks
+            // one level down — stopping there resolved the root vstack, not
+            // the button under the pointer). With a modal open, the raised
+            // scrim is the topmost child at every uncovered point, so the
+            // pick honestly reports the glass pane eating the click.
             POINT pt = { ctx->ival, ctx->ival2 };  // read y BEFORE ival2 becomes the out-param
             ctx->retval = 0;
             ctx->ival2 = 0;
             if (app_count > 0 && apps[0].hwnd) {
-                HWND hit = ChildWindowFromPointEx(apps[0].hwnd, pt,
-                    CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
-                if (hit && hit != apps[0].hwnd) ctx->retval = handle_for_hwnd(hit);
+                HWND cur = apps[0].hwnd;
+                for (;;) {
+                    HWND hit = ChildWindowFromPointEx(cur, pt,
+                        CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+                    if (!hit || hit == cur) break;
+                    MapWindowPoints(cur, hit, &pt, 1);
+                    cur = hit;
+                }
+                if (cur != apps[0].hwnd) {
+                    int hh = handle_for_hwnd(cur);
+                    ctx->retval = hh;
+                    Widget* hw = hh ? widget_at(hh) : NULL;
+                    if (hw && hw->kind == WK_SCRIM) ctx->ival2 = 1;
+                }
             }
             ctx->result = 0;
             ctx->done = 1;
@@ -3693,6 +3992,17 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     aether_ui_slider_set_value(ctx->handle, ctx->dval);
                 else if (w->kind == WK_PROGRESSBAR)
                     aether_ui_progressbar_set_fraction(ctx->handle, ctx->dval);
+                else if (w->kind == WK_PICKER) {
+                    // Driver selects a picker index via set_value (the
+                    // surface-agnostic path the drawn/native picker share);
+                    // route it and fire on_change so the round-trip matches
+                    // GtkDropDown's notify::selected.
+                    aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
+                    if (w->on_change && w->on_change->fn) {
+                        ((void(*)(void*, intptr_t))w->on_change->fn)(
+                            w->on_change->env, (intptr_t)(int)ctx->dval);
+                    }
+                }
                 break;
             default: break;
         }
