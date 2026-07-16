@@ -25,21 +25,32 @@ import uidriver
 
 fixture_path() -> string { return os_getenv("GP_FIXTURE") }
 
-// The ~-abbreviated label the root breadcrumb carries (the app's
-// root_label() of the fixture path).
+// The label the root breadcrumb carries AS RENDERED: the app's
+// root_label() of the fixture path (~-abbreviated when under $HOME),
+// then the same clip gp_model.clip_name applies to every crumb button.
+// The clip matters on Windows: the fixture is a NATIVE path
+// (C:/Users/paul/.gp-…) that never ~-abbreviates (MSYS $HOME is
+// /c/Users/…) and is long enough to truncate — without mirroring the
+// clip, widget_id_by_text finds no exact match and every crumb assert
+// fails. On Linux ~/.gp-ci-XXXXXX is 16 chars and passes unclipped.
 root_crumb_label() -> string {
     p = fixture_path()
     home = os_getenv("HOME")
+    lbl = p
     if home != null {
         if string.length(home) > 0 {
-            if string.equals(p, home) == 1 { return "~" }
+            if string.equals(p, home) == 1 { lbl = "~" }
             if string.starts_with(p, string.concat(home, "/")) == 1 {
                 rest = string.substring(p, string.length(home) + 1, string.length(p))
-                return string.concat("~/", rest)
+                lbl = string.concat("~/", rest)
             }
         }
     }
-    return p
+    // gp_model.clip_name: >20 chars renders as first 17 + "..."
+    if string.length(lbl) > 20 {
+        return string.concat(string.substring(lbl, 0, 17), "...")
+    }
+    return lbl
 }
 
 // ─── /widgets readings in this app's vocabulary ──────────────────

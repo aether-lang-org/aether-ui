@@ -92,12 +92,24 @@ overlay suites — they need the drawn overlay host, not canvas events),
 **shortcuts** (`/window/key` answers `fired:false` honestly), **text
 metrics** (GDI), **weight / on_layout / wrap**.
 
-Known harness gap (NOT a backend stub): the gp_* spec rows stay red on
-Windows because gp clips crumb-button labels and the fixture's long
-native path (`C:/Users/paul/.gp-…`) truncates, so
-`widget_id_by_text(root_label)` finds no exact match. Fix belongs in
-`gp_driver.ae`/`clip_name`, not the backend — canvas events themselves
-are verified working.
+~~Known harness gap~~ FIXED 2026-07-16: gp clips crumb-button labels
+(>20 chars → 17+"..."), and on Windows the fixture's long native path
+truncates while Linux's short `~/.gp-ci-XXXXXX` doesn't —
+`gp_driver.root_crumb_label()` now mirrors the clip, so the spec
+searches for the AS-RENDERED label. With that plus the canvas-events
+commit, **gp_map_nav is 2/2 green on Windows** (drill + crumbs +
+keyboard nav proven through the matrix). NB: the ae module cache can
+serve a STALE spec helper — `rm -rf ~/.aether/cache` when a spec edit
+seems to have no effect.
+
+**Windows matrix baseline (2026-07-16): 47 passing / 70 failing.**
+GREEN: calculator 9, each 6, listbox 6, table 4, bindings 6,
+gp_map_nav 2. Remaining reds map to: overlay host (overlay,
+vg_tooltip, picker), shortcuts (testable ×2, gp_scan_and_list ×4),
+splitview+layout (split 13), GDI metrics (text_metrics), ctx-menu
+driver actions + gio (context_menu, gp_fileops), toggle_group radio
+exclusivity + resize relayout (gp_legend, gp_hover_and_resize), tabs
+strip (tabs 9 — honest stub), Tab order platform-native (testable 1).
 
 **Windows spec-matrix baseline (2026-07-14 evening, winbaz, post
 macOS-parity pull + timer fix):** `AEOCHA_DIR=... ./tests/spec_matrix.sh`
