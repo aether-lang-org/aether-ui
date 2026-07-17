@@ -1,0 +1,65 @@
+// lismusic.ae — the app shell (original: main.qml + LisMusic.qml).
+//
+// A port of LisMusic (远征队音乐) by SLTwitness — a NetEase-Cloud-Music-style
+// player — from Qt6/QML to Aether-UI. See README.md for the full provenance,
+// the original→port file map, and what is faithful vs. stubbed. All UI strings
+// are translated to English. Four subsystems (audio, SQLite, FFmpeg cover
+// extraction, network API) have no Aether-UI peer and live behind stub seams
+// (lis_audio / lis_store / lis_cover / lis_net).
+//
+// The original shell is: a frameless window holding LeftPage (sidebar) +
+// RightPage (top bar + page stack) + BottomSection (player), with a login
+// popup. Here: a top splitview (sidebar | right page) over the bottom player
+// bar, in a vstack; the login is a modal overlay.
+
+import ui
+import ui (window, vstack, splitview, weight, scrollview,
+    ui_state_s, ui_state_b, ui_state_i, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+import lis_config
+import lis_config (Config, mk_config, set_cover)
+import lis_leftpage
+import lis_leftpage (build_left)
+import lis_rightpage
+import lis_rightpage (build_right)
+import lis_bottom
+import lis_bottom (build_bottom)
+import lis_cover
+import lis_cover (DEFAULT_COVER)
+
+main() {
+    c = mk_config()
+
+    window("LisMusic — 远征队音乐 (Aether-UI port)", 1055, 753) {
+        vstack(0) {
+            // Create the shared Config state handles at window-build time, so
+            // every component below binds to the SAME handles (the event bus).
+            c.st_title = ui_state_s("Lumière")
+            c.st_author = ui_state_s("Unknown")
+            c.st_playing = ui_state_b(0)
+            c.st_search = ui_state_s("")
+            c.st_cover = ui_state_s(DEFAULT_COVER())
+            c.st_page = ui_state_i(0)
+
+            // Top region: sidebar | right page. The original nests LeftPage +
+            // RightPage side by side; a horizontal splitview is the native
+            // draggable version of that.
+            top = splitview("h") {
+                // Sidebar (scrolls — the My-Music list is long).
+                scrollview() {
+                    build_left(c)
+                }
+                // Right page: top bar + tabbed page stack.
+                _tv = build_right(c)
+            }
+            weight(top, 1)   // the split takes all vertical space above the bar
+
+            // Bottom: the now-playing player bar (fixed height row).
+            build_bottom(c)
+        }
+
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

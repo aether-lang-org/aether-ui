@@ -1,0 +1,32 @@
+// lis_login.ae — login popup (original: Loginpop.qml / OtherLoginpop.qml).
+//
+// The original opens a framed login window (with a QR-scan mock); the author
+// notes it's "framework only — no real login" (it was a joke paywall while
+// learning). We keep that honesty: a modal overlay card with a title, a note,
+// and a Close button. Opened from the shell (original: Config.startlogin →
+// loginpop.open()).
+
+import ui
+import ui (root_vstack, text, btn, overlay_modal, dismiss_overlay)
+import lis_config
+import lis_config (Config)
+
+exports ( open_login )
+
+// Open the login modal. Mirrors the original's framework-only popup: no auth,
+// just the window. Returns the overlay handle (0 on failure).
+open_login(c: *Config) -> int {
+    card = root_vstack(10)
+    _ = text(card, "Sign in to Expedition Music")
+    _ = text(card, "(Login is framework-only in the original — no real auth.)")
+    handle = 0
+    _ = btn(card, "Close") callback {
+        dismiss_overlay(handle)
+        handle = 0
+    }
+    handle = overlay_modal(c.win, card, "center", 0, 0) callback {
+        // Scrim click dismisses; drop our handle.
+        handle = 0
+    }
+    return handle
+}

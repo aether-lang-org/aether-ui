@@ -1,0 +1,48 @@
+// lis_net.ae — network SEAM (original: netmusic*.{h,cpp} + musicworker.*).
+//
+// The original runs a QThread worker that hits a third-party HTTP+JSON music
+// API (doc.vkeys.cn) and parses song title / artist / cover / stream URL out
+// of the reply, then signals the UI. Aether HAS std.http + std.json, so a
+// real fetch is *possible* — but it needs a live API key/endpoint and the
+// threaded-signal plumbing the widget loop doesn't yet expose, so this is a
+// stub that returns a small canned result set. Wiring the real API later
+// means implementing THIS module (parse JSON → Song list) — the search UI
+// only calls `search`.
+//
+// Original surface: getnetmusic(url) → netmusicready(list-of-songs)
+
+import std.string
+import std.list
+
+extern println(s: string)
+extern malloc(size: int) -> ptr
+
+exports ( Song, search, song_title, song_artist )
+
+struct Song {
+    title: string
+    artist: string
+}
+
+mk_song(title: string, artist: string) -> *Song {
+    s = malloc(16) as *Song
+    s.title = title
+    s.artist = artist
+    return s
+}
+
+song_title(s: *Song) -> string { return s.title }
+song_artist(s: *Song) -> string { return s.artist }
+
+// Search the (stubbed) catalogue for `term`. STUB — returns a fixed set so
+// the results list renders; the original fetches + parses JSON off-thread.
+// Returns a std.list of *Song.
+search(term: string) -> ptr {
+    println("[lis_net STUB] search '${term}' -> canned results")
+    out = list.new()
+    _ = list.add(out, mk_song(string.concat(term, " (Live)"), "Various Artists"))
+    _ = list.add(out, mk_song("Lumière", "Sample Artist"))
+    _ = list.add(out, mk_song("远征 Overture", "远征队"))
+    _ = list.add(out, mk_song("Midnight City", "Demo Band"))
+    return out
+}

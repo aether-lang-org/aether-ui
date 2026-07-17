@@ -1,0 +1,38 @@
+// lis_leftpage.ae — left sidebar (original: LeftPage.qml).
+//
+// The original is a Column of nav "sections" (推荐/精选/播客/漫游/关注) plus a
+// "我的" (My) group (我喜欢的音乐 … 本地音乐 …). Clicking pushes onto the page
+// stack via Config. Here: a titled logo row, then two lists of nav buttons,
+// each wired to Config.nav_to. Chinese labels are translated to English.
+
+import ui
+import ui (vstack, text, btn, divider)
+import lis_config
+import lis_config (Config, nav_to)
+
+exports ( build_left )
+
+// Build the sidebar contents into the enclosing container (_ctx auto-inject).
+build_left(_ctx: ptr, c: *Config) {
+    vstack(4) {
+        text("远征队音乐 — Expedition Music")
+        divider()
+        // Top nav (original: 推荐/精选/播客/漫游/关注). "Home/Recommended" is
+        // page 0; the rest are placeholders (the original only wired 推荐).
+        btn("Home") callback { nav_to(c, 0) }
+        btn("Featured") callback { nav_to(c, 0) }
+        btn("Podcasts") callback { nav_to(c, 0) }
+        btn("Roam") callback { nav_to(c, 0) }
+        btn("Following") callback { nav_to(c, 0) }
+        divider()
+        text("My")
+        // "My" group (original: only 本地音乐 / Local Music was wired → MyMusic).
+        btn("Favorites") callback { nav_to(c, 2) }
+        btn("Recently Played") callback { nav_to(c, 2) }
+        btn("My Podcasts") callback { nav_to(c, 2) }
+        btn("My Collection") callback { nav_to(c, 2) }
+        btn("Downloads") callback { nav_to(c, 2) }
+        btn("Local Music") callback { nav_to(c, 2) }
+        btn("Music Cloud Drive") callback { nav_to(c, 2) }
+    }
+}

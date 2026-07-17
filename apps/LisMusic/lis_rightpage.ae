@@ -1,0 +1,60 @@
+// lis_rightpage.ae — top bar + page stack (original: RightPage.qml +
+// RightTopTitle.qml).
+//
+// The original is a RightTopTitle (search box + user + window controls) over a
+// StackView whose pages are Home (MusicShow), MyMusic, and SearchMusic,
+// switched by Config signals. Aether-UI's `tabs` IS that page stack: three
+// tabs (Home / Search / My Music), the strip standing in for the StackView.
+// Config.nav_to switches the tab; the search bar lives on the Search tab.
+
+import ui
+import ui (vstack, hstack, text, btn, tabs, tab, on_tab_change,
+    tab_select)
+import lis_config
+import lis_config (Config, nav_to, set_page)
+import lis_search
+import lis_search (build_search_bar, build_search_page)
+import lis_login
+import lis_login (open_login)
+
+exports ( build_right )
+
+// Build the top bar + tabbed page area into the enclosing container.
+// Returns the tabs handle so the shell can bind Config.st_page ⇄ tabs.
+build_right(_ctx: ptr, c: *Config) -> int {
+    tv = 0
+    results = null
+    vstack(6) {
+        // Top bar (original: RightTopTitle) — a Sign-in button on the right,
+        // the search box wired to the Search tab.
+        hstack(10) {
+            text("Expedition Music")
+            _login = btn("Sign in") callback { _ = open_login(c) }
+        }
+        // Page stack as tabs (original: the StackView pages).
+        tv = tabs() {
+            tab("Home") {
+                text("Recommended — your home feed")
+                text("(The original's MusicShow page; UI-only in this port.)")
+            }
+            tab("Search") {
+                // The search page owns the results each-list; the bar (built
+                // after) refreshes it.
+                results = build_search_page(c)
+            }
+            tab("My Music") {
+                text("Local Music")
+                text("(The original imports *.mp3 / *.flv here and extracts")
+                text(" cover art via FFmpeg — stubbed in lis_cover.)")
+            }
+        }
+        // The search bar sits under the tab strip, driving the Search tab's
+        // results and switching to that tab on use.
+        build_search_bar(c, results)
+    }
+    // Config.nav_to writes st_page; keep the tab strip in sync with it.
+    on_tab_change(tv) callback |i: int| {
+        set_page(c, i)
+    }
+    return tv
+}

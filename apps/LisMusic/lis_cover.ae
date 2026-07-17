@@ -1,0 +1,26 @@
+// lis_cover.ae — cover-art SEAM (original: ffmpegsolve.h / ffmpegsolve.cpp).
+//
+// The original shells out to the FFmpeg CLI to pull the embedded cover image
+// out of a local audio file and writes it to a temp path the QML Image loads.
+// Aether can spawn processes (std.host), but there is no ui-layer path to
+// decode arbitrary image bytes into a widget, so this stays a stub: it
+// returns a bundled placeholder cover path. Wiring real extraction later
+// means implementing THIS module.
+//
+// Original surface: getcover(localpath) -> coverpath (emitted as a signal)
+
+import std.string
+
+extern println(s: string)
+
+exports ( extract_cover, DEFAULT_COVER )
+
+// The placeholder cover shown when real extraction isn't wired.
+DEFAULT_COVER() -> string { return "Resrc/Pic/24.png" }
+
+// Extract embedded cover art from `audio_path`. STUB — returns the
+// placeholder; the original returns an FFmpeg-written temp PNG path.
+extract_cover(audio_path: string) -> string {
+    println("[lis_cover STUB] extract_cover ${audio_path} -> placeholder")
+    return DEFAULT_COVER()
+}

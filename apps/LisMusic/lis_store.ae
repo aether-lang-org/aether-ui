@@ -1,0 +1,44 @@
+// lis_store.ae — persistence SEAM (original: savehisty.h / savehisty.cpp).
+//
+// The original uses SQLite (QSqlDatabase) to persist search history and
+// local-music paths. Aether's std has http/json/net but no SQLite binding,
+// so this is an in-memory stub with the same surface. Wiring real storage
+// later means implementing THIS module — the UI only calls these.
+//
+// Original surface: savehis(list) / loadhis() -> list / deletdata()
+
+import std.string
+import std.list
+
+extern println(s: string)
+
+exports ( History, mk_history, save_his, load_his, delete_data )
+
+struct History {
+    items: ptr   // std.list of search-term strings (in memory only)
+}
+
+mk_history() -> *History {
+    h = malloc(16) as *History
+    h.items = list.new()
+    return h
+}
+
+// Persist a search term. STUB — in-memory list, lost on exit (the original
+// writes a SQLite row).
+save_his(h: *History, term: string) {
+    if string.length(term) == 0 { return }
+    _ = list.add(h.items, term)
+    println("[lis_store STUB] save_his ${term} (in-memory; no SQLite)")
+}
+
+load_his(h: *History) -> ptr {
+    return h.items
+}
+
+delete_data(h: *History) {
+    h.items = list.new()
+    println("[lis_store STUB] delete_data")
+}
+
+extern malloc(size: int) -> ptr

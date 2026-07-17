@@ -1,0 +1,55 @@
+// lis_bottom.ae — now-playing player bar (original: BottomSection.qml).
+//
+// The original is a rich bottom strip: rotating cover disc, title/artist,
+// like/download/… icons, a centre transport row (prev / play-pause / next),
+// a seek slider with current/total time, and a volume popup. Here we keep the
+// real, bindable pieces: title + artist (bound to Config state), the
+// play/pause toggle (drives lis_audio + flips Config.playing), a seek slider,
+// and a volume slider. Icon-only decorations are dropped (no icon assets in
+// this port); their intent is noted.
+
+import ui
+import ui (vstack, hstack, text, btn, slider, divider, bind_text)
+import lis_config
+import lis_config (Config, toggle_play, playing)
+import lis_audio
+import lis_audio (Player, start_play, stop_play, is_playing, set_voice, seek_frac)
+
+exports ( build_bottom )
+
+build_bottom(_ctx: ptr, c: *Config) {
+    hstack(16) {
+        // Left: title + artist, bound to Config's now-playing state (the
+        // original binds these to player.titleChanged / authorChanged).
+        vstack(2) {
+            t_title = text("")
+            bind_text(t_title, c.st_title)
+            t_author = text("")
+            bind_text(t_author, c.st_author)
+        }
+        divider()
+        // Centre: transport. The original has prev / play-pause / next; play-
+        // pause is the wired one (drives the player + Config event bus).
+        hstack(8) {
+            _prev = btn("⏮") callback { }
+            play_btn = btn("▶ / ⏸") callback {
+                if is_playing(c.player) == 1 {
+                    stop_play(c.player)
+                } else {
+                    start_play(c.player)
+                }
+                toggle_play(c)
+            }
+            _next = btn("⏭") callback { }
+        }
+        // Seek slider (original: playslider 0..100). Wired to the audio seam.
+        _seek = slider(0.0, 100.0, 0.0, |v: float| {
+            seek_frac(c.player, v / 100.0)
+        })
+        divider()
+        // Volume (original: the vertical volume popup slider 0..1).
+        _vol = slider(0.0, 1.0, 0.5, |v: float| {
+            set_voice(c.player, v)
+        })
+    }
+}

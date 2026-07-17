@@ -1,0 +1,59 @@
+// lis_search.ae — search field + results (original: Searchtop.qml +
+// SearchData.qml + the search page).
+//
+// The original has a search box in the top bar whose text drives a network
+// query; results render as rows with a per-row play button. Here: a textfield
+// bound to Config.search, a "Search" button that runs the lis_net stub, and
+// an each-list of result rows with a play button that drives lis_audio.
+
+import ui
+import ui (vstack, hstack, text, btn, textfield, each, each_update)
+import std.string
+import lis_config
+import lis_config (Config, set_search, search_term)
+import lis_net
+import lis_net (Song, search, song_title, song_artist)
+import lis_audio
+import lis_audio (play_net, start_play)
+
+exports ( build_search_bar, build_search_page, run_search )
+
+// The top-bar search box (original: Searchtop.qml). Bound to Config.search;
+// the Search button refreshes `results` (the each-handle from build_search_page).
+build_search_bar(_ctx: ptr, c: *Config, results: ptr) {
+    hstack(6) {
+        _tf = textfield("Search music…") callback |val: string| {
+            set_search(c, val)
+        }
+        _sb = btn("Search") callback {
+            run_search(c, results)
+        }
+    }
+}
+
+// The results page (original: the SearchMusic stack page): an each-list, one
+// row per song. Each row is "Title — Artist" + a Play button. Returns the
+// each-handle so the bar can refresh it.
+build_search_page(_ctx: ptr, c: *Config) -> ptr {
+    return each("v", 4, |item: ptr, i: int, parent: int| {
+        s = item as *Song
+        // Each item's row: an hstack built into the each-provided parent
+        // (gp builds crumb buttons into `parent` the same way — here we make
+        // a row container and attach the label + play button into it).
+        row = hstack(parent, 8)
+        label = string.concat(song_title(s), string.concat("   —   ", song_artist(s)))
+        _t = text(row, label)
+        _p = btn(row, "Play") callback {
+            play_net(c.player, song_title(s))
+            start_play(c.player)
+        }
+    })
+}
+
+// Run the (stubbed) search and refresh the results each-list.
+run_search(c: *Config, results: ptr) {
+    term = search_term(c)
+    if string.length(term) == 0 { term = "music" }
+    songs = search(term)
+    each_update(results, songs)
+}

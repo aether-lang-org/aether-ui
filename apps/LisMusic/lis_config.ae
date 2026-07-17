@@ -1,0 +1,111 @@
+// lis_config.ae — the app-wide event bus + shared state.
+//
+// Direct translation of the original's `Config.qml` singleton, which is a
+// pure observer/event-bus (signals + shared props, no UI). Aether-UI's typed
+// state + property bindings ARE that pattern: a `Config` struct holds the
+// state handles the UI binds to, and the "signals" become plain functions
+// that mutate state — bindings propagate to every bound widget, exactly like
+// QML's signal→Connections.
+//
+// Original singleton members mapped here:
+//   musictxt (search text)      → search_text  (string state)
+//   showmusicplay               → show_play     (bool state)
+//   played()/mainclick()/...    → set_playing() + friends
+//   coverget(cover)             → cover_path    (string state)
+//   leftindex / stackstate      → nav_index / page  (int state; the page stack
+//                                   is the right-panel tab index)
+
+import std.string
+import lis_audio
+import lis_audio (Player, mk_player)
+import lis_store
+import lis_store (History, mk_history)
+
+extern malloc(size: int) -> ptr
+
+exports (
+    Config, mk_config,
+    set_page, nav_to, current_page,
+    set_playing, toggle_play, playing,
+    set_search, search_term,
+    set_cover, cover
+)
+
+struct Config {
+    // Seam backends (see lis_audio / lis_store).
+    player: *Player
+    history: *History
+    // Bound UI state — created against ui.ui_state_* at window-build time and
+    // stored here so every component binds to the same handle (the event bus).
+    st_title: int      // now-playing title  (string state)
+    st_author: int     // now-playing artist (string state)
+    st_playing: int    // 0/1                 (bool state)
+    st_search: int     // search box text     (string state)
+    st_cover: int      // cover image path    (string state)
+    st_page: int       // right-panel page index (int state): 0=Home 1=Search 2=MyMusic
+    st_status: int     // a status label handle for stub feedback (int handle)
+    win: int           // window handle (0 = primary), for overlays/toasts
+}
+
+mk_config() -> *Config {
+    c = malloc(80) as *Config
+    c.player = mk_player()
+    c.history = mk_history()
+    c.st_title = 0
+    c.st_author = 0
+    c.st_playing = 0
+    c.st_search = 0
+    c.st_cover = 0
+    c.st_page = 0
+    c.st_status = 0
+    c.win = 0
+    return c
+}
+
+// ── Page-stack navigation (original: tomusicshow/tomymusic/tosearchmusic +
+// the leftindex/stackstate behaviour stack). Here the right panel is a tab
+// stack and the page is just its index; nav_to switches it. ───────────────
+import ui
+import ui (ui_set_i, ui_get_i, ui_set_s, ui_get_s, ui_set_b, ui_get_b)
+
+set_page(c: *Config, idx: int) {
+    if c.st_page != 0 { _ = ui_set_i(c.st_page, idx) }
+}
+nav_to(c: *Config, idx: int) { set_page(c, idx) }
+current_page(c: *Config) -> int {
+    if c.st_page == 0 { return 0 }
+    return ui_get_i(c.st_page)
+}
+
+// ── Playback state (original: played()/popclick()/mainclick()) ────────────
+set_playing(c: *Config, on: int) {
+    if c.st_playing != 0 { _ = ui_set_b(c.st_playing, on) }
+}
+toggle_play(c: *Config) {
+    cur = playing(c)
+    n = 1
+    if cur == 1 { n = 0 }
+    set_playing(c, n)
+}
+playing(c: *Config) -> int {
+    if c.st_playing == 0 { return 0 }
+    return ui_get_b(c.st_playing)
+}
+
+// ── Search text (original: musictxt) ──────────────────────────────────────
+set_search(c: *Config, term: string) {
+    if c.st_search != 0 { _ = ui_set_s(c.st_search, term) }
+}
+search_term(c: *Config) -> string {
+    if c.st_search == 0 { return "" }
+    return ui_get_s(c.st_search)
+}
+
+// ── Cover (original: coverget(cover)) ─────────────────────────────────────
+set_cover(c: *Config, path: string) {
+    if c.st_cover != 0 { _ = ui_set_s(c.st_cover, path) }
+}
+cover(c: *Config) -> string {
+    if c.st_cover == 0 { return "" }
+    return ui_get_s(c.st_cover)
+}

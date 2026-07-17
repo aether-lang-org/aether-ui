@@ -1,0 +1,92 @@
+// lis_audio.ae — playback SEAM (original: musicplay.h / musicplay.cpp).
+//
+// The original wraps QMediaPlayer + QAudioOutput. Aether-UI has NO audio
+// API, so this is an honest stub: it holds the "now playing" metadata the
+// UI binds to and logs each transport call. Wiring real playback later means
+// implementing THIS module against some future aether audio binding — the
+// rest of the app talks only to these signatures.
+//
+// Original Q_INVOKABLE surface preserved:
+//   playmusic(path) / playnetmusic(path) / startplay() / stopplay()
+//   duration() / position() / setpos(ms) / transtime(ms) -> "MM:SS"
+//   gettitle() / getauthor() / setvoice(v)
+
+import std.string
+
+extern println(s: string)
+extern malloc(size: int) -> ptr
+
+exports (
+    Player, mk_player, play_local, play_net, start_play, stop_play,
+    is_playing, cur_title, cur_author, set_voice, trans_time, seek_frac
+)
+
+struct Player {
+    title: string
+    author: string
+    playing: int      // 0/1
+    voice: float      // 0..1
+    pos_ms: long      // stubbed clock (never advances — no real player)
+    dur_ms: long
+}
+
+mk_player() -> *Player {
+    p = malloc(64) as *Player
+    p.title = "Lumière"
+    p.author = "Unknown"
+    p.playing = 0
+    p.voice = 0.5
+    p.pos_ms = 0
+    p.dur_ms = 0
+    return p
+}
+
+// Load a local file. STUB — no decoder; records the path as the title.
+play_local(p: *Player, path: string) {
+    println("[lis_audio STUB] play_local ${path}")
+    p.title = path
+    p.author = "Local file"
+    p.dur_ms = 0
+}
+
+// Load a network stream URL. STUB — no network/decoder.
+play_net(p: *Player, url: string) {
+    println("[lis_audio STUB] play_net ${url}")
+}
+
+start_play(p: *Player) {
+    println("[lis_audio STUB] start_play")
+    p.playing = 1
+}
+
+stop_play(p: *Player) {
+    println("[lis_audio STUB] stop_play")
+    p.playing = 0
+}
+
+is_playing(p: *Player) -> int { return p.playing }
+cur_title(p: *Player) -> string { return p.title }
+cur_author(p: *Player) -> string { return p.author }
+
+set_voice(p: *Player, v: float) {
+    p.voice = v
+    println("[lis_audio STUB] set_voice ${v}")
+}
+
+// Seek to a fraction 0..1 of the (stubbed) duration.
+seek_frac(p: *Player, frac: float) {
+    println("[lis_audio STUB] seek ${frac}")
+}
+
+// Milliseconds → "MM:SS" (the original's transtime; this part is real).
+trans_time(ms: long) -> string {
+    if ms < 0 { return "00:00" }
+    total_s = ms / 1000
+    mins = total_s / 60
+    secs = total_s % 60
+    mm = "${mins}"
+    if mins < 10 { mm = "0${mins}" }
+    ss = "${secs}"
+    if secs < 10 { ss = "0${secs}" }
+    return "${mm}:${ss}"
+}
