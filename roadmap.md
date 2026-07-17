@@ -11,18 +11,19 @@ platform parity, deferred follow-ups, and the backlog/strategic fork.
 
 ## 1. Platform parity
 
-### macOS — DONE 2026-07-14. Full parity; `./ci.sh` all phases pass.
+### macOS — DONE 2026-07-14 (tabs added 2026-07-17). Full parity; `./ci.sh` all phases pass.
 
 The AppKit backend is no longer the stubbed one. Every item that was
-listed here as a macOS gap is real, and the spec matrix is **81/81
+listed here as a macOS gap is real, and the spec matrix is **85/85
 green on the Mac** (`./tests/spec_matrix.sh`), including all five
-grand_perspective app suites.
+grand_perspective app suites and `ui.tabs`.
 
 | Feature | macOS today |
 |---|---|
 | Driver introspection + `/focus` `/window/key` `/window/resize` | **shared server** — the private one is deleted (see below) |
 | Text metrics (`vg.text_extent`) | CoreText (`CTLineGetTypographicBounds`) on the SAME font the canvas draws with |
 | splitview | real `NSSplitView`, draggable divider (NB its `vertical` is the INVERSE of GTK's) |
+| tabs (`ui.tabs`) | real `NSTabView`; on_change fires via the delegate, deduped against last index (swallows AppKit's initial auto-select) |
 | weight / on_layout / wrap | Auto Layout multiplier constraints / frame-change observer / `AetherWrapView` flow layout |
 | shortcut (accelerators) | one `NSEvent` local monitor + a normalized-combo registry |
 | focus (grab / `GET /focus` / Tab) | `makeFirstResponder:`; **Tab follows BUILD order** (matches GTK — see below) |
@@ -71,13 +72,20 @@ Traps found the hard way, all now commented at their site:
 - **`ui.style_opacity` travels as CSS**, not through the `set_opacity` ABI
   call. Miss that in `apply_css` and every declared transition snaps.
 
-Not fixed (cosmetic, pre-existing, not spec-covered): **buttons stretch
-vertically** to absorb a vstack's slack (they carry contentHugging 200),
-so a table header or a lone button row renders very tall. The calculator
-*depends* on this for its grid look. The principled fix is to give buttons
-natural vertical hugging and let apps opt into stretch via `ui.weight` —
-but that changes how the calculator renders, so it wants a look at GTK
-side-by-side first.
+**Buttons stretching vertically (mostly fixed 2026-07-17).** Buttons carry
+contentHugging 200, so they absorb a vstack's leftover space. The fix was
+NOT to change the button (the calculator *depends* on that stretch for its
+grid, and has no canvas to hand the slack to): instead the CANVAS's
+size-preference constraint was dropped to priority 150, below the button
+hugging. A canvas and a button both grow to take slack; the lower-resistance
+one wins, so the canvas now out-competes buttons. rubiks_cube's Reset/
+Shuffle/Solve went from 146px tall to a natural 20px and the cube canvas
+took the freed space; the calculator (no canvas) is untouched. Remaining:
+in a stack with a **non-canvas** slack-taker missing (e.g. a lone button row
+with nothing below it, or the **tabs page area** sharing a vstack with a
+button row) the buttons still absorb the slack. The real end-state is
+natural button hugging + explicit `ui.weight` opt-in, which wants a GTK
+side-by-side first; the canvas-priority fix covers the common case.
 
 ### win32 — the gaps that remain
 

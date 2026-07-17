@@ -43,6 +43,7 @@ typedef enum {
     AETHER_DRV_CTX_MENU     = 14,  // handle=widget → retval=1 if it has a menu
     AETHER_DRV_CTX_ACTIVATE = 15,  // handle=widget, ival=item index → retval=1 if fired
     AETHER_DRV_TAB_SELECT   = 16,  // handle=tabs, ival=index → retval=resulting index
+    AETHER_DRV_CANVAS_RELEASE = 17,// handle=canvas, dval=x, dval2=y — completes a drag
 } AetherDriverActionKind;
 
 typedef struct {

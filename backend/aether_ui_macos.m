@@ -62,7 +62,7 @@ enum {
     AUI_VSTACK, AUI_HSTACK, AUI_ZSTACK, AUI_SPACER,
     AUI_CANVAS, AUI_IMAGE, AUI_FORM_SECTION, AUI_FORM_SECTION_INNER,
     AUI_NAVSTACK, AUI_BANNER, AUI_WINDOW, AUI_SHEET,
-    AUI_SPLITVIEW, AUI_WRAP, AUI_SCRIM
+    AUI_SPLITVIEW, AUI_WRAP, AUI_SCRIM, AUI_TABS
 };
 
 // ---------------------------------------------------------------------------
@@ -140,10 +140,12 @@ static int register_widget_typed(void* widget, int type) {
     widget_classes[widget_count] = NULL;
     widget_clicks[widget_count] = NULL;
     widget_weights[widget_count] = 0;
-    // A canvas, splitview or scrollview is a slack-absorber in both axes — the
-    // AppKit equivalent of GTK setting hexpand/vexpand TRUE on a drawing area.
+    // A canvas, splitview, scrollview or tabs composite is a slack-absorber in
+    // both axes — the AppKit equivalent of GTK setting hexpand/vexpand TRUE on
+    // a drawing area (the vg scene rescales its viewBox to fill).
     widget_expand[widget_count] =
-        (type == AUI_CANVAS || type == AUI_SPLITVIEW || type == AUI_SCROLLVIEW)
+        (type == AUI_CANVAS || type == AUI_SPLITVIEW || type == AUI_SCROLLVIEW
+         || type == AUI_TABS)
             ? (AEUI_EXPAND_H | AEUI_EXPAND_V) : 0;
     widget_group[widget_count] = 0;
     widget_count++;
@@ -1236,26 +1238,126 @@ int aether_ui_wrap_create(void) {
     return register_widget_typed((__bridge void*)wv, AUI_WRAP);
 }
 
-// tabs stub: a vertical stack; each tab() appends its page (no NSTabView
-// switching yet). Keeps the ABI + build green and the pages walkable; the
-// real AppKit NSTabView wiring is follow-up parity work on the Mac.
-int aether_ui_tabs_create(void* boxed_closure) {
-    (void)boxed_closure;
-    return aether_ui_vstack_create(0);
+// ---------------------------------------------------------------------------
+// tabs — a native tab strip over a page stack (NSTabView).
+//
+// GTK builds this from GtkStackSwitcher + GtkStack; the AppKit native is
+// NSTabView, which draws the clickable strip and owns the page views itself.
+// Each tab() adds an NSTabViewItem whose view is a vstack, and returns that
+// vstack's handle so the tab's DSL block children lay out inside the page.
+//
+// The change callback fires on a REAL selection change — a strip click or a
+// programmatic tabs_select — deduped against the last index, matching GTK.
+// The dedup also swallows the initial selection AppKit makes when the first
+// item is added, so on_change never fires spuriously at build time.
+// ---------------------------------------------------------------------------
+typedef struct {
+    int        widget_handle;   // the NSTabView's registry handle
+    int        page_count;
+    int        last_index;
+    AeClosure* on_change;
+} TabsState;
+
+static TabsState* tabs_states = NULL;
+static int tabs_state_count = 0;
+static int tabs_state_capacity = 0;
+
+static TabsState* tabs_state_for_handle(int handle) {
+    for (int i = 0; i < tabs_state_count; i++) {
+        if (tabs_states[i].widget_handle == handle) return &tabs_states[i];
+    }
+    return NULL;
 }
+
+// The delegate turns AppKit's didSelect into the deduped on_change fire. One
+// shared instance keyed by the tab view's handle covers every tabs composite.
+@interface AetherTabsDelegate : NSObject <NSTabViewDelegate>
+@end
+
+@implementation AetherTabsDelegate
+- (void)tabView:(NSTabView*)tabView didSelectTabViewItem:(NSTabViewItem*)item {
+    int handle = handle_for_view(tabView);
+    TabsState* ts = tabs_state_for_handle(handle);
+    if (!ts) return;
+    NSInteger idx = [tabView indexOfTabViewItem:item];
+    if (idx == NSNotFound || (int)idx == ts->last_index) return;  // dedup
+    ts->last_index = (int)idx;
+    AeClosure* c = ts->on_change;
+    if (c && c->fn) ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)idx);
+}
+@end
+
+static AetherTabsDelegate* g_tabs_delegate = nil;
+
+int aether_ui_tabs_create(void* boxed_closure) {
+    NSTabView* tv = [[NSTabView alloc] init];
+    [tv setTranslatesAutoresizingMaskIntoConstraints:NO];
+    if (!g_tabs_delegate) g_tabs_delegate = [[AetherTabsDelegate alloc] init];
+    [tv setDelegate:g_tabs_delegate];
+
+    int handle = register_widget_typed((__bridge void*)tv, AUI_TABS);
+
+    if (tabs_state_count >= tabs_state_capacity) {
+        tabs_state_capacity = tabs_state_capacity == 0 ? 8 : tabs_state_capacity * 2;
+        tabs_states = (TabsState*)realloc(tabs_states,
+                                          sizeof(TabsState) * tabs_state_capacity);
+    }
+    TabsState* ts = &tabs_states[tabs_state_count++];
+    ts->widget_handle = handle;
+    ts->page_count = 0;
+    ts->last_index = 0;
+    ts->on_change = (AeClosure*)boxed_closure;
+    return handle;
+}
+
 int aether_ui_tab_add(int tabs_handle, const char* title) {
-    (void)title;
-    int page = aether_ui_vstack_create(0);
-    aether_ui_widget_add_child_ctx((void*)(intptr_t)tabs_handle, page);
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(tabs_handle);
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    if (!v || !ts || ![v isKindOfClass:[NSTabView class]]) return 0;
+    NSTabView* tv = (NSTabView*)v;
+
+    // The page body is a vstack, so the tab's block children attach the same
+    // way they would in any vstack.
+    int page = aether_ui_vstack_create(8);
+    NSView* pageView = (__bridge NSView*)aether_ui_get_widget(page);
+
+    NSString* ident = [NSString stringWithFormat:@"page_%d", ts->page_count];
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:ident];
+    [item setLabel:[NSString stringWithUTF8String:title ? title : ""]];
+    [item setView:pageView];
+    [tv addTabViewItem:item];
+    ts->page_count++;
     return page;
 }
-int aether_ui_tabs_selected(int tabs_handle) { (void)tabs_handle; return -1; }
-int aether_ui_tabs_count(int tabs_handle)    { (void)tabs_handle; return 0; }
-void aether_ui_tabs_select(int tabs_handle, int index) {
-    (void)tabs_handle; (void)index;
+
+int aether_ui_tabs_selected(int tabs_handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(tabs_handle);
+    if (!v || ![v isKindOfClass:[NSTabView class]]) return -1;
+    NSTabView* tv = (NSTabView*)v;
+    NSTabViewItem* sel = [tv selectedTabViewItem];
+    if (!sel) return -1;
+    NSInteger idx = [tv indexOfTabViewItem:sel];
+    return idx == NSNotFound ? -1 : (int)idx;
 }
+
+int aether_ui_tabs_count(int tabs_handle) {
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    return ts ? ts->page_count : 0;
+}
+
+void aether_ui_tabs_select(int tabs_handle, int index) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(tabs_handle);
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    if (!v || !ts || ![v isKindOfClass:[NSTabView class]]) return;
+    if (index < 0 || index >= ts->page_count) return;
+    // Drives the delegate → fires on_change (deduped), exactly as a strip
+    // click does.
+    [(NSTabView*)v selectTabViewItemAtIndex:index];
+}
+
 void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
-    (void)tabs_handle; (void)boxed_closure;
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    if (ts) ts->on_change = (AeClosure*)boxed_closure;
 }
 
 int aether_ui_hstack_create(int spacing) {
@@ -2946,10 +3048,21 @@ int aether_ui_canvas_create_impl(int width, int height) {
     // area expands to fill its parent and re-maps the vg viewBox on resize;
     // required constraints here would pin the canvas forever and on_resize
     // would never fire. Low priority = "this size unless there's room for more".
+    // Apps that hit-test against a fixed viewBox must unmap px→viewBox with
+    // vg.scene_px_to_vb_x/y (as grand_perspective does), NOT assume the canvas
+    // stays its requested size.
     NSLayoutConstraint* wc = [v.widthAnchor constraintEqualToConstant:width];
     NSLayoutConstraint* hc = [v.heightAnchor constraintEqualToConstant:height];
-    wc.priority = NSLayoutPriorityDefaultLow;
-    hc.priority = NSLayoutPriorityDefaultLow;
+    // Priority 150 — deliberately BELOW a button's content-hugging (200). Both
+    // a canvas and a button will grow to absorb a stack's leftover space; the
+    // one with the lower resistance wins it. A canvas is the natural
+    // slack-taker (its vg scene rescales to fill), so it must out-compete
+    // buttons — otherwise the leftover lands in the button row and Reset /
+    // Shuffle / Solve balloon to 146px tall while the canvas sits at its
+    // requested size (the rubiks_cube bug). The calculator has no canvas, so
+    // its buttons still stretch into a grid, unaffected.
+    wc.priority = 150;
+    hc.priority = 150;
     wc.active = YES;
     hc.active = YES;
     // ...and it must actively WANT the slack, not merely tolerate it. GTK's
@@ -2981,10 +3094,10 @@ int aether_ui_canvas_get_widget(int canvas_id) {
     return cs ? cs->widget_handle : 0;
 }
 
-// Resize hook — honest stub. AppKit live-resize delivery (NSView
-// setFrameSize: → re-map + re-flush) is not wired yet; the vg scene renders
-// at its initial size and does not rescale on window resize on macOS. Tracked
-// for parity with the GTK backend.
+// A canvas re-maps its vg viewBox when its allocation changes; on_resize
+// delivers the new (w, h) so the scene can rescale. The canvas already fills
+// (see canvas_create), so vg apps that hit-test must unmap px→viewBox rather
+// than assume a fixed canvas size.
 void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
@@ -3567,7 +3680,8 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
                 ct == AUI_SCROLLVIEW || ct == AUI_FORM_SECTION ||
                 ct == AUI_DIVIDER || ct == AUI_PROGRESSBAR ||
                 ct == AUI_TEXTAREA || ct == AUI_NAVSTACK ||
-                ct == AUI_SPLITVIEW || ct == AUI_WRAP || ct == AUI_CANVAS) {
+                ct == AUI_SPLITVIEW || ct == AUI_WRAP || ct == AUI_CANVAS ||
+                ct == AUI_TABS) {
                 // Stretch to the full width WHEN YOU CAN, but never force the
                 // parent to your width.
                 //
@@ -3747,6 +3861,7 @@ static const char* widget_type_name_for(int handle) {
         case AUI_SPLITVIEW: return "splitview";
         case AUI_WRAP: return "wrap";
         case AUI_SCRIM: return "scrim";
+        case AUI_TABS: return "tabs";
         default: return "widget";
     }
 }
@@ -4040,7 +4155,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         }
         case AETHER_DRV_TAB_SELECT: {
-            // macOS tabs is still a stub stack; tabs_selected answers -1.
+            // Real NSTabView — switches the page and fires on_change via the
+            // delegate. tabs_selected reports the resulting index.
             aether_ui_tabs_select(ctx->handle, ctx->ival);
             ctx->retval = aether_ui_tabs_selected(ctx->handle);
             ctx->result = 0;
@@ -4058,13 +4174,15 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         }
         case AETHER_DRV_CANVAS_CLICK:
         case AETHER_DRV_CANVAS_MOVE:
+        case AETHER_DRV_CANVAS_RELEASE:
         case AETHER_DRV_CANVAS_KEY: {
             CanvasState* cs = get_canvas_state(ctx->handle);
             AeClosure* c = NULL;
             if (cs) {
-                c = (ctx->action == AETHER_DRV_CANVAS_CLICK) ? cs->on_click
-                  : (ctx->action == AETHER_DRV_CANVAS_MOVE)  ? cs->on_move
-                                                             : cs->on_key;
+                c = (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
+                  : (ctx->action == AETHER_DRV_CANVAS_MOVE)    ? cs->on_move
+                  : (ctx->action == AETHER_DRV_CANVAS_RELEASE) ? cs->on_release
+                                                               : cs->on_key;
             }
             if (!c || !c->fn) { ctx->result = 3; return; }  // 404: unwired, not missed
             if (ctx->action == AETHER_DRV_CANVAS_KEY) {

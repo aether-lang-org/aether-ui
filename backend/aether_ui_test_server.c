@@ -648,15 +648,20 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         aether_ui_overlay_close_impl(id);
         send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
     } else if (method == 1 && strncmp(path, "/canvas/", 8) == 0) {
-        // POST /canvas/{id}/click|move|key — drive the canvas's registered
-        // hit-test closures. A backend with no handler answers 404, which is
-        // how a spec learns the difference between "missed" and "unwired".
+        // POST /canvas/{id}/click|move|release|key — drive the canvas's
+        // registered hit-test closures. A backend with no handler answers 404,
+        // which is how a spec learns the difference between "missed" and
+        // "unwired". release completes a press→drag→release gesture; without it
+        // no driver on any backend could exercise a drag-to-swipe app.
         AetherDriverActionCtx ctx = {0};
         ctx.handle = extract_id_from_path(path, "/canvas/");
         const char* what = "canvas event";
         if (strstr(path, "/click")) {
             ctx.action = AETHER_DRV_CANVAS_CLICK;
             what = "no canvas click handler";
+        } else if (strstr(path, "/release")) {
+            ctx.action = AETHER_DRV_CANVAS_RELEASE;
+            what = "no canvas release handler";
         } else if (strstr(path, "/move")) {
             ctx.action = AETHER_DRV_CANVAS_MOVE;
             what = "no canvas move handler";

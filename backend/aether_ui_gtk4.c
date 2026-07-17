@@ -3784,6 +3784,7 @@ void aether_ui_clear_children_impl(int handle) {
 //   POST /state/{id}/set?v=X        — set reactive state value
 //   POST /canvas/{id}/click?x=&y=   — click a canvas at (x,y); hit-tests AeVG shapes
 //   POST /canvas/{id}/move?x=&y=    — pointer-move (hover) at (x,y)
+//   POST /canvas/{id}/release?x=&y= — pointer-release (completes a drag)
 //   POST /canvas/{id}/key?name=X    — key press by GDK name ("Down", "Return", …)
 //   POST /window/resize?w=&h=       — resize the app's top-level window
 //   POST /shutdown                  — close the app window; the process exits
@@ -4249,6 +4250,22 @@ static gboolean canvas_move_idle(gpointer data) {
     CanvasState* cs = get_canvas_state(a->canvas_id);
     if (cs && cs->on_move && cs->on_move->fn) {
         ((void(*)(void*, double, double))cs->on_move->fn)(cs->on_move->env, a->x, a->y);
+        a->result = 0;
+    } else {
+        a->result = 3;
+    }
+    a->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
+// Canvas pointer-release — fires on_release with (x, y), completing a
+// press→drag→release gesture. Without it a drag-to-swipe app (rubiks_cube)
+// can't be driven at all: the swipe only fires on release.
+static gboolean canvas_release_idle(gpointer data) {
+    CanvasClickAction* a = (CanvasClickAction*)data;
+    CanvasState* cs = get_canvas_state(a->canvas_id);
+    if (cs && cs->on_release && cs->on_release->fn) {
+        ((void(*)(void*, double, double))cs->on_release->fn)(cs->on_release->env, a->x, a->y);
         a->result = 0;
     } else {
         a->result = 3;
@@ -4734,22 +4751,25 @@ static void handle_test_request(int client_fd) {
     if (method == 1 && strncmp(path, "/canvas/", 8) == 0) {
         char* action_part = strchr(path + 8, '/');
         if (action_part && (strncmp(action_part, "/click", 6) == 0 ||
-                            strncmp(action_part, "/move", 5) == 0)) {
+                            strncmp(action_part, "/move", 5) == 0 ||
+                            strncmp(action_part, "/release", 8) == 0)) {
             CanvasClickAction ca = {0};
             ca.canvas_id = atoi(path + 8);
             const char* xs = extract_query_param(path, "x");
             const char* ys = extract_query_param(path, "y");
             ca.x = xs ? atof(xs) : 0.0;
             ca.y = ys ? atof(ys) : 0.0;
-            int is_move = action_part[1] == 'm';
-            g_idle_add(is_move ? canvas_move_idle : canvas_click_idle, &ca);
+            GSourceFunc idle;
+            const char* err;
+            if (action_part[1] == 'm')      { idle = canvas_move_idle;    err = "{\"error\":\"no canvas move handler\"}"; }
+            else if (action_part[1] == 'r') { idle = canvas_release_idle; err = "{\"error\":\"no canvas release handler\"}"; }
+            else                            { idle = canvas_click_idle;   err = "{\"error\":\"no canvas click handler\"}"; }
+            g_idle_add(idle, &ca);
             while (!ca.done) usleep(1000);
             if (ca.result == 0) {
                 send_response(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
             } else {
-                send_response(client_fd, 404, "Not Found", "application/json",
-                              is_move ? "{\"error\":\"no canvas move handler\"}"
-                                      : "{\"error\":\"no canvas click handler\"}");
+                send_response(client_fd, 404, "Not Found", "application/json", err);
             }
             close(client_fd);
             return;

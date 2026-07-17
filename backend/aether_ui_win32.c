@@ -3921,11 +3921,12 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
         }
         if (ctx->action == AETHER_DRV_CANVAS_CLICK
             || ctx->action == AETHER_DRV_CANVAS_MOVE
+            || ctx->action == AETHER_DRV_CANVAS_RELEASE
             || ctx->action == AETHER_DRV_CANVAS_KEY) {
             // Drive the canvas hit-test hooks directly, exactly as a real
-            // WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_KEYDOWN would (result 3 =
-            // "no such handler wired", so a spec can tell a missed click
-            // from an unwired canvas).
+            // WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_LBUTTONUP / WM_KEYDOWN would
+            // (result 3 = "no such handler wired", so a spec can tell a missed
+            // click from an unwired canvas).
             ctx->result = 3;
             if (ctx->handle >= 1 && ctx->handle <= canvas_count) {
                 Canvas* cv = &canvases[ctx->handle - 1];
@@ -3939,6 +3940,12 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     if (cv->on_click && cv->on_click->fn) {
                         ((void(*)(void*, double, double))cv->on_click->fn)(
                             cv->on_click->env, ctx->dval, ctx->dval2);
+                        ctx->result = 0;
+                    }
+                } else if (ctx->action == AETHER_DRV_CANVAS_RELEASE) {
+                    if (cv->on_release && cv->on_release->fn) {
+                        ((void(*)(void*, double, double))cv->on_release->fn)(
+                            cv->on_release->env, ctx->dval, ctx->dval2);
                         ctx->result = 0;
                     }
                 } else { // AETHER_DRV_CANVAS_KEY
