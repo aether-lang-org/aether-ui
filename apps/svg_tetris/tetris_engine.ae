@@ -1,0 +1,325 @@
+// tetris_engine.ae — SVG Tetris game logic, with NO UI or vg dependency.
+//
+// The pure core of the svg_tetris app: board state, the alex-fritze shape set,
+// collision, rotation, movement, gravity, locking, line-clearing, scoring and
+// the ghost-landing calculation. Nothing here touches widgets, the canvas, or
+// labels — which is exactly what makes it unit-testable (see
+// test_tetris_engine.ae). The renderer (svg_tetris.ae) reads this state and
+// draws it; it never reaches back in.
+//
+// Provenance: logic ported from alex fritze's public-domain SVGtetris.svg
+// (2004) via the Tsyne tetris-engine.ts. Under aether-ui's own licence.
+
+exports (
+    // types
+    Game,
+    // lifecycle
+    mk_game, start_game, toggle_pause,
+    // input verbs
+    move_left, move_right, rotate, soft_drop, hard_drop, tick,
+    // queries the renderer needs
+    board_get, collides, ghost_row, get_block, orient_count, shape_color,
+    // board dimensions
+    COLS, ROWS, CELLS,
+    // internals exposed for tests
+    lock_piece, clear_full_rows, spawn_piece,
+    // deterministic test seams (mirror the TS _setCell / _setCurrentPiece / …)
+    eng_set_cell, eng_set_current, eng_set_next, eng_set_phase
+)
+
+import std.math
+import std.intarr
+
+extern malloc(size: int) -> ptr
+
+// ─── Board dimensions ────────────────────────────────────────────────────────
+COLS()  -> int { return 10 }
+ROWS()  -> int { return 20 }
+CELLS() -> int { return 200 }             // COLS * ROWS
+
+// ─── Shape table ─────────────────────────────────────────────────────────────
+// alex fritze's SHAPE_DESCRIPTORS: 7 shapes, 1..4 rotation states each, every
+// state 4 cells as (col,row). Stored flat, padded to 4 orientation slots
+// (unused slots never read — rotation cycles modulo orient_count).
+SHAPE_STRIDE() -> int { return 32 }       // 4 orients * 4 blocks * 2 coords
+
+orient_count(s: int) -> int {
+    if s == 0 { return 1 }                // O
+    if s == 3 { return 2 }                // I
+    if s == 4 { return 2 }                // S
+    if s == 5 { return 2 }                // Z
+    return 4                               // J, L, T
+}
+
+set_rot(arr: ptr, s: int, rot: int,
+        a: int, b: int, c: int, d: int,
+        e: int, f: int, g: int, h: int) {
+    base = s * SHAPE_STRIDE() + rot * 8
+    intarr_set_unchecked(arr, base + 0, a); intarr_set_unchecked(arr, base + 1, b)
+    intarr_set_unchecked(arr, base + 2, c); intarr_set_unchecked(arr, base + 3, d)
+    intarr_set_unchecked(arr, base + 4, e); intarr_set_unchecked(arr, base + 5, f)
+    intarr_set_unchecked(arr, base + 6, g); intarr_set_unchecked(arr, base + 7, h)
+}
+
+build_shapes() -> ptr {
+    arr, _e = intarr.new(7 * SHAPE_STRIDE())
+    // 0 O grey (1 orientation)
+    set_rot(arr, 0, 0, 0,0, 1,0, 0,1, 1,1)
+    // 1 J blue (4)
+    set_rot(arr, 1, 0, 0,0, 1,0, 2,0, 2,1)
+    set_rot(arr, 1, 1, 1,0, 1,1, 1,2, 0,2)
+    set_rot(arr, 1, 2, 0,0, 0,1, 1,1, 2,1)
+    set_rot(arr, 1, 3, 0,0, 1,0, 0,1, 0,2)
+    // 2 L purple (4)
+    set_rot(arr, 2, 0, 0,0, 0,1, 1,0, 2,0)
+    set_rot(arr, 2, 1, 0,0, 1,0, 1,1, 1,2)
+    set_rot(arr, 2, 2, 0,1, 1,1, 2,1, 2,0)
+    set_rot(arr, 2, 3, 0,0, 0,1, 0,2, 1,2)
+    // 3 I cyan (2)
+    set_rot(arr, 3, 0, 0,0, 1,0, 2,0, 3,0)
+    set_rot(arr, 3, 1, 0,0, 0,1, 0,2, 0,3)
+    // 4 S green (2)
+    set_rot(arr, 4, 0, 1,0, 2,0, 0,1, 1,1)
+    set_rot(arr, 4, 1, 0,0, 0,1, 1,1, 1,2)
+    // 5 Z red (2)
+    set_rot(arr, 5, 0, 1,0, 1,1, 0,1, 0,2)
+    set_rot(arr, 5, 1, 0,0, 1,0, 1,1, 2,1)
+    // 6 T yellow (4)
+    set_rot(arr, 6, 0, 0,1, 1,1, 2,1, 1,0)
+    set_rot(arr, 6, 1, 0,0, 0,1, 0,2, 1,1)
+    set_rot(arr, 6, 2, 0,0, 1,0, 2,0, 1,1)
+    set_rot(arr, 6, 3, 1,0, 1,1, 1,2, 0,1)
+    return arr
+}
+
+// The (col,row) of block `blk` (0..3) of shape `s` in orientation `rot`.
+get_block(sh: ptr, s: int, rot: int, blk: int) -> (int, int) {
+    base = s * SHAPE_STRIDE() + rot * 8 + blk * 2
+    return intarr_get_unchecked(sh, base), intarr_get_unchecked(sh, base + 1)
+}
+
+// Solid fill for a shape index (alex fritze's palette).
+shape_color(s: int) -> string {
+    if s == 0 { return "rgb(128,128,128)" }   // O grey
+    if s == 1 { return "rgb(68,68,255)" }      // J blue
+    if s == 2 { return "rgb(170,68,255)" }     // L purple
+    if s == 3 { return "rgb(0,204,204)" }      // I cyan
+    if s == 4 { return "rgb(0,204,0)" }        // S green
+    if s == 5 { return "rgb(204,0,0)" }        // Z red
+    return "rgb(204,204,0)"                      // T yellow
+}
+
+// ─── Game state ──────────────────────────────────────────────────────────────
+// phase: 0=ready 1=running 2=paused 3=over. board: intarr(CELLS), -1 empty
+// else the locked cell's colour index. NB no UI handles here — the renderer
+// keeps those.
+struct Game {
+    shapes: ptr
+    board: ptr
+    cur_shape: int
+    cur_orient: int
+    cur_x: int
+    cur_y: int
+    next_shape: int
+    next_orient: int
+    phase: int
+    score: int
+    lines: int
+    last_drop: float        // seconds timestamp of the last gravity step
+    tick_time: float        // seconds between gravity steps (shrinks with lines)
+}
+
+board_get(g: *Game, col: int, row: int) -> int {
+    return intarr_get_unchecked(g.board, row * COLS() + col)
+}
+board_set(g: *Game, col: int, row: int, v: int) {
+    intarr_set_unchecked(g.board, row * COLS() + col, v)
+}
+
+mk_game() -> *Game {
+    g = malloc(96) as *Game
+    g.shapes = build_shapes()
+    arr, _e = intarr.new_filled(CELLS(), -1)
+    g.board = arr
+    g.cur_shape = -1
+    g.cur_orient = 0
+    g.cur_x = 3
+    g.cur_y = 0
+    g.next_shape = 0
+    g.next_orient = 0
+    g.phase = 0
+    g.score = 0
+    g.lines = 0
+    g.last_drop = 0.0
+    g.tick_time = 0.5
+    return g
+}
+
+clear_board(g: *Game) {
+    i = 0
+    while i < CELLS() {
+        intarr_set_unchecked(g.board, i, -1)
+        i = i + 1
+    }
+}
+
+// ── Collision ────────────────────────────────────────────────────────────────
+collides(g: *Game, s: int, rot: int, x: int, y: int) -> int {
+    blk = 0
+    while blk < 4 {
+        bc, br = get_block(g.shapes, s, rot, blk)
+        c = x + bc
+        r = y + br
+        if c < 0 { return 1 }
+        if c >= COLS() { return 1 }
+        if r < 0 { return 1 }
+        if r >= ROWS() { return 1 }
+        if board_get(g, c, r) >= 0 { return 1 }
+        blk = blk + 1
+    }
+    return 0
+}
+
+// The row the current piece would land on (>= cur_y). Equals cur_y when the
+// piece is already resting (no ghost drawn in that case).
+ghost_row(g: *Game) -> int {
+    gy = g.cur_y
+    while collides(g, g.cur_shape, g.cur_orient, g.cur_x, gy + 1) == 0 {
+        gy = gy + 1
+    }
+    return gy
+}
+
+// ── Piece spawn ──────────────────────────────────────────────────────────────
+rand_shape() -> int { return math.random_int(0, 6) }
+rand_orient(s: int) -> int { return math.random_int(0, orient_count(s) - 1) }
+
+spawn_piece(g: *Game) {
+    g.cur_shape = g.next_shape
+    g.cur_orient = g.next_orient
+    g.cur_x = 3
+    g.cur_y = 0
+    g.next_shape = rand_shape()
+    g.next_orient = rand_orient(g.next_shape)
+    g.last_drop = 0.0
+    if collides(g, g.cur_shape, g.cur_orient, g.cur_x, g.cur_y) == 1 {
+        g.phase = 3            // game over
+    }
+}
+
+start_game(g: *Game) {
+    clear_board(g)
+    g.score = 0
+    g.lines = 0
+    g.tick_time = 0.5
+    g.next_shape = rand_shape()
+    g.next_orient = rand_orient(g.next_shape)
+    g.phase = 1
+    spawn_piece(g)
+}
+
+toggle_pause(g: *Game) {
+    if g.phase == 1 { g.phase = 2 }
+    else { if g.phase == 2 { g.phase = 1; g.last_drop = 0.0 } }
+}
+
+// ── Movement ─────────────────────────────────────────────────────────────────
+move_left(g: *Game) {
+    if g.phase != 1 { return }
+    if collides(g, g.cur_shape, g.cur_orient, g.cur_x - 1, g.cur_y) == 0 { g.cur_x = g.cur_x - 1 }
+}
+move_right(g: *Game) {
+    if g.phase != 1 { return }
+    if collides(g, g.cur_shape, g.cur_orient, g.cur_x + 1, g.cur_y) == 0 { g.cur_x = g.cur_x + 1 }
+}
+rotate(g: *Game) {
+    if g.phase != 1 { return }
+    nr = (g.cur_orient + 1) % orient_count(g.cur_shape)
+    if collides(g, g.cur_shape, nr, g.cur_x, g.cur_y) == 0 { g.cur_orient = nr }
+}
+soft_drop(g: *Game) {
+    if g.phase != 1 { return }
+    if collides(g, g.cur_shape, g.cur_orient, g.cur_x, g.cur_y + 1) == 0 {
+        g.cur_y = g.cur_y + 1
+        g.last_drop = 0.0
+    }
+}
+hard_drop(g: *Game) {
+    if g.phase != 1 { return }
+    while collides(g, g.cur_shape, g.cur_orient, g.cur_x, g.cur_y + 1) == 0 {
+        g.cur_y = g.cur_y + 1
+    }
+    lock_piece(g)
+}
+
+// ── Lock + line clear ────────────────────────────────────────────────────────
+lock_piece(g: *Game) {
+    blk = 0
+    while blk < 4 {
+        bc, br = get_block(g.shapes, g.cur_shape, g.cur_orient, blk)
+        c = g.cur_x + bc
+        r = g.cur_y + br
+        if r >= 0 { board_set(g, c, r, g.cur_shape) }
+        blk = blk + 1
+    }
+    g.score = g.score + 1
+    clear_full_rows(g)
+    spawn_piece(g)
+}
+
+clear_full_rows(g: *Game) {
+    r = ROWS() - 1
+    while r >= 0 {
+        full = 1
+        c = 0
+        while c < COLS() {
+            if board_get(g, c, r) < 0 { full = 0 }
+            c = c + 1
+        }
+        if full == 1 {
+            // shift everything above row r down by one
+            rr = r
+            while rr > 0 {
+                cc = 0
+                while cc < COLS() {
+                    board_set(g, cc, rr, board_get(g, cc, rr - 1))
+                    cc = cc + 1
+                }
+                rr = rr - 1
+            }
+            cc = 0
+            while cc < COLS() { board_set(g, cc, 0, -1); cc = cc + 1 }
+            g.lines = g.lines + 1
+            g.tick_time = g.tick_time * 0.95
+            if g.tick_time < 0.1 { g.tick_time = 0.1 }
+            // re-test the same row index — content shifted into it
+        } else {
+            r = r - 1
+        }
+    }
+}
+
+// ── Gravity (driven by the caller's monotonic clock, in seconds) ─────────────
+tick(g: *Game, now: float) {
+    if g.phase != 1 { return }
+    if g.cur_shape < 0 { return }
+    if g.last_drop == 0.0 { g.last_drop = now; return }
+    if now - g.last_drop >= g.tick_time {
+        g.last_drop = now
+        if collides(g, g.cur_shape, g.cur_orient, g.cur_x, g.cur_y + 1) == 0 {
+            g.cur_y = g.cur_y + 1
+        } else {
+            lock_piece(g)
+        }
+    }
+}
+
+// ── Deterministic test seams ─────────────────────────────────────────────────
+// Direct state pokes so unit tests can build an exact board/piece without
+// touching randomness (mirror the TS engine's _setCell / _setCurrentPiece / …).
+eng_set_cell(g: *Game, col: int, row: int, v: int) { board_set(g, col, row, v) }
+eng_set_current(g: *Game, s: int, rot: int, x: int, y: int) {
+    g.cur_shape = s; g.cur_orient = rot; g.cur_x = x; g.cur_y = y
+}
+eng_set_next(g: *Game, s: int, rot: int) { g.next_shape = s; g.next_orient = rot }
+eng_set_phase(g: *Game, phase: int) { g.phase = phase }

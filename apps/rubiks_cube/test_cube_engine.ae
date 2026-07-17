@@ -1,0 +1,99 @@
+// test_cube_engine.ae — unit tests for the pure Rubik's cube state machine.
+//
+// No UI, no vg — the cube logic exercised through its move primitives. These
+// are the invariants that matter for a cube: a fresh cube is solved, one turn
+// unsolves it, a quarter-turn done 4× is identity, a move and its inverse
+// cancel (faces AND slices), the move log records everything, and
+// shuffle-then-solve always returns to solved. Fail-fast.
+
+import cube_engine
+import cube_engine (Cube, mk_cube, reset, is_solved, cell,
+    U, F, R, B, L, D,
+    rotate_side, do_e_slice, do_m_slice, do_s_slice, shuffle, solve)
+
+import std.math
+
+extern println(s: string)
+extern exit(code: int)
+
+check_true(label: string, cond: int) {
+    if cond == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label} (expected true)"); exit(1) }
+}
+check_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label} got=${got} want=${want}"); exit(1) }
+}
+
+main() {
+    println("=== test_cube_engine ===")
+
+    // ── Fresh cube is solved ───────────────────────────────────
+    c = mk_cube()
+    check_true("fresh cube is solved", is_solved(c))
+    check_int("fresh history empty", c.hist_len, 0)
+    check_int("centre of U is U", cell(c, U(), 1, 1), 0)
+
+    // ── One face turn unsolves; logs a move ────────────────────
+    rotate_side(c, F(), 1)
+    check_true("one F turn unsolves", is_solved(c) == 0)
+    check_int("history logged the turn", c.hist_len, 1)
+
+    // ── Four quarter-turns of a face = identity ────────────────
+    reset(c)
+    rotate_side(c, R(), 1)
+    rotate_side(c, R(), 1)
+    rotate_side(c, R(), 1)
+    rotate_side(c, R(), 1)
+    check_true("R x4 is solved again", is_solved(c))
+
+    // ── A face turn and its inverse cancel ─────────────────────
+    reset(c)
+    rotate_side(c, U(), 1)
+    rotate_side(c, U(), 0)
+    check_true("U cw then U ccw is solved", is_solved(c))
+    reset(c)
+    rotate_side(c, B(), 0)
+    rotate_side(c, B(), 1)
+    check_true("B ccw then B cw is solved", is_solved(c))
+
+    // ── Slice moves are self-inverse (cw then ccw) ─────────────
+    reset(c)
+    do_e_slice(c, 1); do_e_slice(c, 0)
+    check_true("E slice cw+ccw is solved", is_solved(c))
+    reset(c)
+    do_m_slice(c, 1); do_m_slice(c, 0)
+    check_true("M slice cw+ccw is solved", is_solved(c))
+    reset(c)
+    do_s_slice(c, 1); do_s_slice(c, 0)
+    check_true("S slice cw+ccw is solved", is_solved(c))
+    reset(c)
+    do_e_slice(c, 1); do_e_slice(c, 1); do_e_slice(c, 1); do_e_slice(c, 1)
+    check_true("E slice x4 is solved", is_solved(c))
+
+    // ── A specific sequence really scrambles, and solve undoes it ─
+    reset(c)
+    rotate_side(c, F(), 1)
+    rotate_side(c, R(), 0)
+    do_e_slice(c, 1)
+    rotate_side(c, U(), 1)
+    do_m_slice(c, 0)
+    check_true("mixed face+slice scramble is unsolved", is_solved(c) == 0)
+    check_int("history has 5 moves", c.hist_len, 5)
+    solve(c)
+    check_true("solve() returns to solved (faces + slices)", is_solved(c))
+
+    // ── shuffle + solve returns to solved, several fresh cubes ──
+    math.random_seed(424242)
+    ci = 0
+    while ci < 5 {
+        c2 = mk_cube()
+        shuffle(c2)
+        check_true("shuffled cube is unsolved", is_solved(c2) == 0)
+        solve(c2)
+        check_true("shuffle then solve is solved", is_solved(c2))
+        ci = ci + 1
+    }
+
+    println("=== test_cube_engine passed ===")
+}

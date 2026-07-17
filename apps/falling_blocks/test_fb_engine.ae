@@ -1,0 +1,135 @@
+// test_fb_engine.ae — unit tests for the pure falling-blocks engine.
+//
+// No UI, no vg — game logic exercised through its public verbs and the
+// deterministic test seams. Covers collision, rotation, movement, hard-drop
+// scoring, locking, and single/multi-line scoring. Fail-fast.
+//
+// GPL-3.0 (tests a GPL-3.0 engine — see fb_engine.ae).
+
+import fb_engine
+import fb_engine (Game, mk_game, start_game, toggle_pause,
+    move_left, move_right, rotate, soft_drop, hard_drop, tick,
+    board_get, collides, line_score, lock_piece, clear_lines,
+    eng_set_cell, eng_set_current, eng_set_next, eng_set_phase, eng_set_level)
+
+extern println(s: string)
+extern exit(code: int)
+
+check_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label} got=${got} want=${want}")
+        exit(1)
+    }
+}
+check_true(label: string, cond: int) {
+    if cond == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label} (expected true)"); exit(1) }
+}
+
+main() {
+    println("=== test_fb_engine ===")
+
+    // ── Fresh + start ──────────────────────────────────────────
+    g = mk_game()
+    check_int("fresh: phase ready", g.phase, 0)
+    check_int("fresh: level 1", g.level, 1)
+    start_game(g)
+    check_int("start: phase playing", g.phase, 1)
+    check_int("start: score 0", g.score, 0)
+    check_true("start: has a piece", g.cur_shape >= 0)
+
+    // ── line_score table ───────────────────────────────────────
+    check_int("line_score 1", line_score(1), 100)
+    check_int("line_score 2", line_score(2), 300)
+    check_int("line_score 3", line_score(3), 500)
+    check_int("line_score 4", line_score(4), 800)
+
+    // ── Collision at the walls (I piece rot 0 = a horizontal bar) ─
+    // I rot 0 blocks: (0,1),(1,1),(2,1),(3,1) — spans cols 0..3 in row 1.
+    eng_set_current(g, 0, 0, 0, 0)
+    check_int("I at col=0 blocks left",  collides(g, -1, 0, 0), 1)
+    check_int("I at col=0 fits",         collides(g, 0, 0, 0), 0)
+    check_int("I at col=6 fits (right)", collides(g, 6, 0, 0), 0)
+    check_int("I at col=7 off right",    collides(g, 7, 0, 0), 1)
+    // floor: I row1 lands at board row = row+1; row=18 → cells row19 ok, row=19 off
+    check_int("I at row=18 fits",  collides(g, 0, 18, 0), 0)
+    check_int("I at row=19 floor", collides(g, 0, 19, 0), 1)
+
+    // ── Collision against a locked cell ────────────────────────
+    eng_set_cell(g, 5, 5, 2)
+    // I horizontal at (col=2,row=4): cells (2,5),(3,5),(4,5),(5,5) → hits (5,5)
+    check_int("I overlapping locked collides", collides(g, 2, 4, 0), 1)
+    check_int("I clear of it fits",            collides(g, 0, 0, 0), 0)
+
+    // ── Rotation cycles 0..3 ───────────────────────────────────
+    start_game(g)
+    eng_set_current(g, 1, 0, 3, 5)      // J, mid-board
+    rotate(g); check_int("J 0->1", g.cur_rot, 1)
+    rotate(g); rotate(g); check_int("J 1->3", g.cur_rot, 3)
+    rotate(g); check_int("J wraps 3->0", g.cur_rot, 0)
+
+    // ── Movement + wall no-op ──────────────────────────────────
+    eng_set_current(g, 3, 0, 0, 5)      // O piece near left (O cols 1,2 → col 0 = board cols 1,2)
+    move_left(g); check_int("O move_left to wall", g.cur_col, -1)  // O min col is 1, so col can go to -1
+    // reset and check right advance
+    eng_set_current(g, 3, 0, 3, 5)
+    move_right(g); check_int("O move_right", g.cur_col, 4)
+
+    // ── Phase gate: no move while paused ───────────────────────
+    eng_set_phase(g, 2)
+    eng_set_current(g, 3, 0, 5, 5)
+    move_left(g); check_int("paused: move ignored", g.cur_col, 5)
+    eng_set_phase(g, 1)
+
+    // ── hard_drop scores + locks ───────────────────────────────
+    start_game(g)
+    eng_set_current(g, 3, 0, 3, 0)      // O at top
+    sc0 = g.score
+    hard_drop(g)
+    check_true("hard_drop scored up", g.score > sc0)
+    // O locked at the floor: O cells (1,0),(2,0),(1,1),(2,1) at cur → bottom rows
+    check_true("a cell is now locked on the floor row",
+        (board_get(g, 4, 19) >= 0))
+
+    // ── Single line clear + score/level ────────────────────────
+    start_game(g)
+    // Fill board row 19 cols 0..5 and 8,9, leaving 6,7 for an O piece.
+    c = 0
+    while c < 10 {
+        if c != 6 { if c != 7 { eng_set_cell(g, c, 19, 2) } }
+        c = c + 1
+    }
+    // also fill row 18 the same so the O's upper cells don't complete row 18
+    eng_set_current(g, 3, 0, 5, 18)     // O cols 6,7 at rows 18,19
+    l0 = g.lines
+    hard_drop(g)                        // fills (6,18),(7,18),(6,19),(7,19); row19 completes
+    check_int("single clear: lines +1", g.lines, l0 + 1)
+
+    // ── Game over when spawn is blocked ────────────────────────
+    g2 = mk_game()
+    start_game(g2)
+    rr = 0
+    while rr < 3 {
+        cc = 0
+        while cc < 10 { eng_set_cell(g2, cc, rr, 2); cc = cc + 1 }
+        rr = rr + 1
+    }
+    // the top 3 rows are full → any clear would remove them, so DON'T fill full
+    // rows; instead block just the spawn footprint (cols 3..5 rows 0..1).
+    r2 = 0
+    while r2 < 200 { eng_set_cell(g2, r2 % 10, r2 / 10, -1); r2 = r2 + 1 }  // clear
+    rr = 0
+    while rr < 2 {
+        cc = 3
+        while cc < 6 { eng_set_cell(g2, cc, rr, 2); cc = cc + 1 }
+        rr = rr + 1
+    }
+    eng_set_next(g2, 3)                 // next = O (spawns at col 3)
+    eng_set_current(g2, 0, 1, 9, 16)    // lock a harmless vertical I at the wall
+    hard_drop(g2)                       // lock → spawn O into blocked cols → over
+    check_int("game over when spawn blocked", g2.phase, 3)
+
+    println("=== test_fb_engine passed ===")
+}

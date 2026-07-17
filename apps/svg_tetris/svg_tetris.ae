@@ -1,0 +1,259 @@
+// svg_tetris.ae — renderer + input for the classic 2004 "SVG Tetris".
+//
+// ─── Provenance / licence ───────────────────────────────────────────────────
+// Original: SVGtetris.svg by alex fritze <alex@croczilla.com>, 2004 — released
+// into the public domain (CC0). Score/restart tweaks by Tuna-Fish and Mardeg.
+// Ported (via Tsyne) from that SVG; under aether-ui's own licence.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A SECOND tetris, deliberately distinct from falling_blocks: alex fritze's own
+// shape set + palette, a GHOST piece (dim outline of the landing spot), and a
+// NEXT-piece preview panel.
+//
+// STRUCTURE: the game logic lives in tetris_engine.ae (pure, no UI — unit-tested
+// in test_tetris_engine.ae). THIS file is only the AeVG renderer, the input
+// mapping, and the window. It reads engine state and draws it; it never
+// reaches into the engine's internals.
+//
+// Run: ./target/build/apps/svg_tetris/bin/svg_tetris
+//   Arrows to move, Up to rotate, Space to hard-drop, P pause, R / New Game.
+
+import ui
+import ui (window, vstack, hstack, btn, text, enable_test_server,
+    canvas_on_click, canvas_on_key)
+import vg.live (vg, canvas_region)
+import vg
+import vg (view_box, rect, fill, stroke, text_sized)
+import std.math
+import std.string
+import std.os
+import std.os (os_getenv)
+
+import tetris_engine
+import tetris_engine (Game, mk_game, start_game, toggle_pause,
+    move_left, move_right, rotate, soft_drop, hard_drop, tick,
+    board_get, collides, ghost_row, get_block, orient_count, shape_color,
+    COLS, ROWS)
+
+extern malloc(size: int) -> ptr
+extern aether_ui_text_set_string(handle: int, text: string)
+
+// ─── Layout (viewBox px) ─────────────────────────────────────────────────────
+BLOCK() -> float { return 24.0 }
+BX() -> float { return 2.0 }              // board origin
+BY() -> float { return 2.0 }
+PX() -> float { return 282.0 }            // preview panel left
+PY() -> float { return 2.0 }
+
+// The same-index colour dimmed ~0.35 — the ghost/landing preview.
+ghost_color(s: int) -> string {
+    if s == 0 { return "rgb(45,45,45)" }
+    if s == 1 { return "rgb(24,24,89)" }
+    if s == 2 { return "rgb(60,24,89)" }
+    if s == 3 { return "rgb(0,71,71)" }
+    if s == 4 { return "rgb(0,71,0)" }
+    if s == 5 { return "rgb(71,0,0)" }
+    return "rgb(71,71,0)"
+}
+
+// ─── App-side view state ─────────────────────────────────────────────────────
+// The UI handles the engine deliberately doesn't know about. Held in a heap
+// struct so the render/input closures can reach it (they capture this pointer).
+struct View {
+    score_lbl: int
+    status_lbl: int
+}
+mk_view() -> *View {
+    v = malloc(16) as *View
+    v.score_lbl = 0
+    v.status_lbl = 0
+    return v
+}
+
+refresh_labels(g: *Game, v: *View) {
+    if v.score_lbl != 0 {
+        s = "Score "
+        s = string.concat(s, string.from_int(g.score))
+        s = string.concat(s, "   Lines ")
+        s = string.concat(s, string.from_int(g.lines))
+        aether_ui_text_set_string(v.score_lbl, s)
+    }
+    if v.status_lbl != 0 {
+        st = "Arrows move, Up rotates, Space drops, P pause, R restart"
+        if g.phase == 2 { st = "PAUSED — P to resume" }
+        if g.phase == 3 { st = "Game Over — R or New Game to restart" }
+        aether_ui_text_set_string(v.status_lbl, st)
+    }
+}
+
+// ─── Rendering ───────────────────────────────────────────────────────────────
+draw_cell_px(rn: ptr, x: float, y: float, color: string) {
+    border = vg.rect(rn, x, y, BLOCK(), BLOCK())
+    vg.fill(border, "rgb(34,34,34)")
+    inner = vg.rect(rn, x + 1.0, y + 1.0, BLOCK() - 2.0, BLOCK() - 2.0)
+    vg.fill(inner, color)
+}
+
+draw_board(rn: ptr, g: *Game) {
+    bw = COLS() * 1.0 * BLOCK()
+    bh = ROWS() * 1.0 * BLOCK()
+
+    // Board border + background.
+    brd = vg.rect(rn, BX() - 2.0, BY() - 2.0, bw + 4.0, bh + 4.0)
+    vg.fill(brd, "rgb(85,85,85)")
+    bg = vg.rect(rn, BX(), BY(), bw, bh)
+    vg.fill(bg, "rgb(17,17,17)")
+
+    // Locked cells.
+    row = 0
+    while row < ROWS() {
+        col = 0
+        while col < COLS() {
+            v = board_get(g, col, row)
+            if v >= 0 {
+                draw_cell_px(rn, BX() + col * 1.0 * BLOCK(), BY() + row * 1.0 * BLOCK(), shape_color(v))
+            }
+            col = col + 1
+        }
+        row = row + 1
+    }
+
+    if g.phase == 1 {
+        // Ghost — where the piece will land (only if it actually falls further).
+        gy = ghost_row(g)
+        if gy > g.cur_y {
+            gcol = ghost_color(g.cur_shape)
+            blk = 0
+            while blk < 4 {
+                bc, br = get_block(g.shapes, g.cur_shape, g.cur_orient, blk)
+                c = g.cur_x + bc
+                r = gy + br
+                if r >= 0 {
+                    draw_cell_px(rn, BX() + c * 1.0 * BLOCK(), BY() + r * 1.0 * BLOCK(), gcol)
+                }
+                blk = blk + 1
+            }
+        }
+        // Current piece.
+        color = shape_color(g.cur_shape)
+        blk = 0
+        while blk < 4 {
+            bc, br = get_block(g.shapes, g.cur_shape, g.cur_orient, blk)
+            c = g.cur_x + bc
+            r = g.cur_y + br
+            if r >= 0 {
+                draw_cell_px(rn, BX() + c * 1.0 * BLOCK(), BY() + r * 1.0 * BLOCK(), color)
+            }
+            blk = blk + 1
+        }
+    }
+
+    // Preview panel: border + background + the next piece.
+    pw = 4.0 * BLOCK()
+    pbrd = vg.rect(rn, PX() - 2.0, PY() - 2.0, pw + 4.0, pw + 4.0)
+    vg.fill(pbrd, "rgb(85,85,85)")
+    pbg = vg.rect(rn, PX(), PY(), pw, pw)
+    vg.fill(pbg, "rgb(17,17,17)")
+    if g.next_shape >= 0 {
+        ncol = shape_color(g.next_shape)
+        blk = 0
+        while blk < 4 {
+            bc, br = get_block(g.shapes, g.next_shape, g.next_orient, blk)
+            draw_cell_px(rn, PX() + bc * 1.0 * BLOCK(), PY() + br * 1.0 * BLOCK(), ncol)
+            blk = blk + 1
+        }
+    }
+
+    // Overlay text for non-playing states.
+    if g.phase == 0 {
+        t = vg.text_sized(rn, 24.0, 250.0, 20.0, "Press R or New Game")
+        vg.fill(t, "rgb(255,255,255)")
+    }
+    if g.phase == 2 {
+        t = vg.text_sized(rn, 85.0, 250.0, 26.0, "PAUSED")
+        vg.fill(t, "rgb(255,255,0)")
+    }
+    if g.phase == 3 {
+        t = vg.text_sized(rn, 55.0, 240.0, 24.0, "GAME OVER")
+        vg.fill(t, "rgb(255,90,90)")
+        t2 = vg.text_sized(rn, 40.0, 272.0, 15.0, "Press R to retry")
+        vg.fill(t2, "rgb(220,220,220)")
+    }
+}
+
+// ─── Input mapping (renderer → engine verbs) ─────────────────────────────────
+handle_key(g: *Game, key: string) {
+    if g.phase == 0 { start_game(g); return }
+    if g.phase == 3 { start_game(g); return }
+    if string.equals(key, "Left") == 1 { move_left(g); return }
+    if string.equals(key, "a") == 1 { move_left(g); return }
+    if string.equals(key, "Right") == 1 { move_right(g); return }
+    if string.equals(key, "d") == 1 { move_right(g); return }
+    if string.equals(key, "Down") == 1 { soft_drop(g); return }
+    if string.equals(key, "s") == 1 { soft_drop(g); return }
+    if string.equals(key, "Up") == 1 { rotate(g); return }
+    if string.equals(key, "w") == 1 { rotate(g); return }
+    if string.equals(key, "space") == 1 { hard_drop(g); return }
+    if string.equals(key, "p") == 1 { toggle_pause(g); return }
+    if string.equals(key, "P") == 1 { toggle_pause(g); return }
+    if string.equals(key, "r") == 1 { start_game(g); return }
+    if string.equals(key, "R") == 1 { start_game(g); return }
+}
+
+// Tap: left / centre / right thirds of the BOARD (x already unmapped px→viewBox).
+handle_tap(g: *Game, x: float) {
+    if g.phase != 1 { start_game(g); return }
+    third = COLS() * 1.0 * BLOCK() / 3.0
+    if x < BX() + third { move_left(g); return }
+    if x > BX() + third * 2.0 { move_right(g); return }
+    rotate(g)
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+main() {
+    math.random_seed(20260717)
+    g = mk_game()
+    view = mk_view()
+
+    window("SVG Tetris", 440, 640) {
+        vstack(6) {
+            hstack(6) {
+                btn("New Game") callback { start_game(g) }
+                btn("Pause") callback { toggle_pause(g) }
+                btn("Left") callback { move_left(g) }
+                btn("Rotate") callback { rotate(g) }
+                btn("Right") callback { move_right(g) }
+                btn("Drop") callback { hard_drop(g) }
+            }
+            view.score_lbl = text("Score 0   Lines 0")
+
+            vg(view_box(0, 0, 396, 484), 396, 484) {
+                anchor = rect(0, 0, 0, 0)
+                root_node = vg.vg_root(vg.node_scene(anchor))
+                scene = vg.node_scene(root_node)
+                vg.scene_set_refreshing(scene, 1)
+
+                // The engine is pure — the loop advances it, refreshes the
+                // labels from its state, then draws.
+                canvas_region(root_node, 0.0, 0.0, 396.0, 484.0) callback |rn: ptr, t: float| {
+                    tick(g, t)
+                    refresh_labels(g, view)
+                    draw_board(rn, g)
+                }
+                cid = vg.scene_canvas(scene)
+
+                canvas_on_key(cid) callback |key: string| {
+                    handle_key(g, key)
+                }
+                // Tap fallback: unmap px→viewBox before splitting into thirds
+                // (the canvas fills wider than its viewBox).
+                canvas_on_click(cid) callback |cx: float, cy: float| {
+                    handle_tap(g, vg.scene_px_to_vb_x(scene, cx))
+                }
+            }
+
+            view.status_lbl = text("Arrows move, Up rotates, Space drops, P pause, R restart")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

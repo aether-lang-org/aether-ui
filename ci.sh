@@ -226,6 +226,28 @@ if pkg-config --exists gtk4 2>/dev/null; then
 else
     echo "  SKIP AEVG_GTK_TESTS (gtk4 dev libs absent)"
 fi
+
+# App-level pure engine tests — game logic factored out of an app with NO UI
+# or vg dependency, so it's unit-testable in isolation (the svg_tetris engine:
+# collision, rotation, line-clear, ghost, scoring, game-over). Compiled with
+# the app's own dir on the lib path so `import <engine>` resolves; links
+# libaether only (no backend, no text-metrics stub — nothing imports vg).
+ENGINE_TESTS=("svg_tetris:test_tetris_engine" "falling_blocks:test_fb_engine" "rubiks_cube:test_cube_engine")
+for spec in "${ENGINE_TESTS[@]}"; do
+    app="${spec%%:*}"; t="${spec##*:}"
+    src="apps/${app}/${t}.ae"; cfile="build/eng_${t}.c"; bin="build/eng_${t}"
+    if ! aetherc --lib "apps/${app}" "$src" "$cfile" > "/tmp/ci_eng_${t}.log" 2>&1; then
+        echo "  FAIL $t (compile)"; tail -15 "/tmp/ci_eng_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
+    fi
+    if ! gcc "$cfile" $(ae cflags) -o "$bin" >> "/tmp/ci_eng_${t}.log" 2>&1; then
+        echo "  FAIL $t (link)"; tail -15 "/tmp/ci_eng_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
+    fi
+    if "$bin" > "/tmp/ci_eng_${t}_run.log" 2>&1; then
+        echo "  OK   $t"
+    else
+        echo "  FAIL $t (run)"; tail -15 "/tmp/ci_eng_${t}_run.log" | sed 's/^/       /'; FAIL=$((FAIL + 1))
+    fi
+done
 echo
 
 echo "=== Phase 1: build all aether_ui examples (aeb fan-out) ==="
@@ -437,6 +459,22 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=tabs_demo/spec_tabs_demo \
     run_server_test "$(EX_BIN tabs_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" tabs_demo || FAIL=$((FAIL + 1))
+fi
+
+echo "=== Phase 5l: AetherUIDriver game specs (falling_blocks / svg_tetris / rubiks_cube) ==="
+# The three AeVG games (apps/, not examples/): each drives its buttons and
+# canvas through the driver end-to-end, complementing the pure engine unit
+# tests run in Phase 0. AEVG_BIN resolves target/build/apps/<name>/bin/<name>.
+if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=falling_blocks/spec_falling_blocks \
+    run_server_test "$(AEVG_BIN falling_blocks)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" falling_blocks || FAIL=$((FAIL + 1))
+    UI_SPEC=svg_tetris/spec_svg_tetris \
+    run_server_test "$(AEVG_BIN svg_tetris)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" svg_tetris || FAIL=$((FAIL + 1))
+    UI_SPEC=rubiks_cube/spec_rubiks_cube \
+    run_server_test "$(AEVG_BIN rubiks_cube)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" rubiks_cube || FAIL=$((FAIL + 1))
 fi
 
 echo

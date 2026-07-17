@@ -1,0 +1,144 @@
+// test_tetris_engine.ae — unit tests for the pure SVG-Tetris engine.
+//
+// No UI, no vg — just the game logic, exercised through its public verbs and
+// the deterministic test seams (eng_set_cell / eng_set_current / …). This is
+// what the monolith couldn't have: collision, rotation, movement, ghost,
+// locking, scoring, line-clear (single + double) and game-over, each asserted
+// in isolation. Fail-fast: the first wrong answer prints and exits non-zero.
+//
+// Build + run (also wired into ci.sh Phase 0):
+//   aetherc --lib apps/svg_tetris apps/svg_tetris/test_tetris_engine.ae /tmp/t.c
+//   gcc $(ae cflags) /tmp/t.c -o /tmp/t $(ae cflags --libs) && /tmp/t
+
+import tetris_engine
+import tetris_engine (Game, mk_game, start_game, toggle_pause,
+    move_left, move_right, rotate, soft_drop, hard_drop, tick,
+    board_get, collides, ghost_row,
+    eng_set_cell, eng_set_current, eng_set_next, eng_set_phase)
+
+extern println(s: string)
+extern exit(code: int)
+
+check_int(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label} got=${got} want=${want}")
+        exit(1)
+    }
+}
+check_true(label: string, cond: int) {
+    if cond == 1 {
+        println("  PASS: ${label}")
+    } else {
+        println("  FAIL: ${label} (expected true)")
+        exit(1)
+    }
+}
+
+main() {
+    println("=== test_tetris_engine ===")
+
+    // ── Fresh game ─────────────────────────────────────────────
+    g = mk_game()
+    check_int("fresh: phase ready", g.phase, 0)
+    check_int("fresh: score 0", g.score, 0)
+    check_int("fresh: board (0,0) empty", board_get(g, 0, 0), -1)
+
+    // ── start_game ─────────────────────────────────────────────
+    start_game(g)
+    check_int("start: phase running", g.phase, 1)
+    check_int("start: score 0", g.score, 0)
+    check_true("start: has a current piece", g.cur_shape >= 0)
+
+    // ── Collision against the walls (O piece: cols/rows 0..1) ──
+    eng_set_current(g, 0, 0, 0, 0)
+    check_int("O at x=0 blocks moving left", collides(g, 0, 0, -1, 0), 1)
+    check_int("O at x=0 fits in place",       collides(g, 0, 0, 0, 0), 0)
+    check_int("O at x=8 fits (right edge)",   collides(g, 0, 0, 8, 0), 0)
+    check_int("O at x=9 off the right",       collides(g, 0, 0, 9, 0), 1)
+    check_int("O at y=18 fits (bottom)",      collides(g, 0, 0, 0, 18), 0)
+    check_int("O at y=19 off the bottom",     collides(g, 0, 0, 0, 19), 1)
+
+    // ── Collision against a locked cell ────────────────────────
+    eng_set_cell(g, 5, 5, 3)
+    check_int("O overlapping a locked cell collides", collides(g, 0, 0, 4, 4), 1)
+    check_int("O clear of it fits",                   collides(g, 0, 0, 0, 0), 0)
+
+    // ── Rotation cycles modulo orient_count ────────────────────
+    start_game(g)                       // clears the board
+    eng_set_current(g, 3, 0, 3, 5)      // I: 2 orientations
+    rotate(g); check_int("I rotates 0->1", g.cur_orient, 1)
+    rotate(g); check_int("I wraps 1->0",   g.cur_orient, 0)
+    eng_set_current(g, 1, 0, 3, 5)      // J: 4 orientations
+    rotate(g); check_int("J 0->1", g.cur_orient, 1)
+    rotate(g); rotate(g); check_int("J 1->3", g.cur_orient, 3)
+    rotate(g); check_int("J wraps 3->0", g.cur_orient, 0)
+
+    // ── Movement respects the walls ────────────────────────────
+    start_game(g)
+    eng_set_current(g, 0, 0, 0, 0)
+    move_left(g);  check_int("move_left at wall is a no-op", g.cur_x, 0)
+    move_right(g); check_int("move_right advances",          g.cur_x, 1)
+
+    // ── Phase gate: no movement when not running ───────────────
+    eng_set_phase(g, 2)                 // paused
+    eng_set_current(g, 0, 0, 5, 5)
+    move_left(g); check_int("paused: move ignored", g.cur_x, 5)
+    eng_set_phase(g, 1)
+
+    // ── Ghost + hard-drop landing ──────────────────────────────
+    start_game(g)
+    eng_set_current(g, 0, 0, 0, 0)      // O at the top-left
+    check_int("ghost lands the O at row 18", ghost_row(g), 18)
+    sc0 = g.score
+    hard_drop(g)
+    check_int("hard_drop scored +1", g.score, sc0 + 1)
+    check_int("O locked at (0,19)",  board_get(g, 0, 19), 0)
+    check_int("O locked at (1,18)",  board_get(g, 1, 18), 0)
+
+    // ── Single line clear ──────────────────────────────────────
+    start_game(g)
+    c = 2
+    while c < 10 { eng_set_cell(g, c, 19, 3); c = c + 1 }   // row 19 cols 2..9 filled
+    eng_set_current(g, 0, 0, 0, 0)                          // O completes cols 0,1
+    l0 = g.lines
+    hard_drop(g)
+    check_int("single clear: lines +1", g.lines, l0 + 1)
+    check_int("cleared cell (2,19) emptied", board_get(g, 2, 19), -1)
+    check_int("row above shifted down to (0,19)", board_get(g, 0, 19), 0)
+
+    // ── Double line clear ──────────────────────────────────────
+    start_game(g)
+    c = 2
+    while c < 10 {
+        eng_set_cell(g, c, 19, 3)
+        eng_set_cell(g, c, 18, 3)
+        c = c + 1
+    }
+    // I piece, vertical, dropped in col 0 fills (0,16..19); that alone won't
+    // complete rows. Instead use an O twice-stacked: fill cols 0,1 of rows 18,19.
+    eng_set_cell(g, 0, 19, 3); eng_set_cell(g, 1, 19, 3)
+    eng_set_cell(g, 0, 18, 3); eng_set_cell(g, 1, 18, 3)
+    // rows 18 and 19 are now completely full — clear them by locking any piece.
+    ld0 = g.lines
+    eng_set_current(g, 3, 1, 9, 16)     // I vertical parked at the right wall
+    hard_drop(g)
+    check_int("double clear: lines +2", g.lines, ld0 + 2)
+
+    // ── Game over when the spawn cell is blocked ───────────────
+    g2 = mk_game()
+    start_game(g2)
+    rr = 0
+    while rr < 4 {                       // wall off the spawn zone (cols 3..6)
+        cc = 3
+        while cc < 7 { eng_set_cell(g2, cc, rr, 3); cc = cc + 1 }
+        rr = rr + 1
+    }
+    eng_set_next(g2, 0, 0)               // next = O, will spawn at (3,0) → blocked
+    eng_set_current(g2, 3, 1, 9, 16)     // lock something harmless at the right
+    hard_drop(g2)                        // lock → spawn O → collides → game over
+    check_int("game over when spawn blocked", g2.phase, 3)
+
+    println("=== test_tetris_engine passed ===")
+}

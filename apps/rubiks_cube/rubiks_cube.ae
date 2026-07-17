@@ -1,408 +1,65 @@
-// rubiks_cube.ae — a 3D Rubik's Cube, the AeVG showcase for drag-to-swipe input
-// and isometric polygon rendering.
+// rubiks_cube.ae — renderer + input for a 3D Rubik's Cube (isometric polygons,
+// drag-to-swipe).
 //
-// Ported (via Tsyne) from the Cosyne "3D Cube" — the tsyne project's own
-// declarative-polygon implementation (~scm/tsyne/tsyne/ported-apps/3d-cube/,
-// cube.ts + index.ts; no upstream/copyleft lineage, unlike the Qt3DCube fork in
-// the same dir). Under aether-ui's own licence.
+// Ported (via Tsyne) from the Cosyne "3D Cube". Under aether-ui's own licence.
 //
-// Demonstrates:
-//   • drag-to-swipe — canvas_on_click (press) + canvas_on_move (track) +
-//     canvas_on_release (the new primitive) compose a press→drag→release gesture
-//   • isometric projection: 3 visible faces (Up/Front/Right) × 9 cells drawn as
-//     vg.path quads (SVG "M…L…Z" polygons) + grid lines via vg.line
-//   • a faithful cube state machine: face turns + slice moves as flat-array
-//     index permutations, with reset / shuffle / solve (undo history)
-//   • canvas_region DRAW region re-rendering from cube state each frame
+// STRUCTURE: the cube STATE MACHINE lives in cube_engine.ae (pure, no UI —
+// unit-tested in test_cube_engine.ae). THIS file is only the isometric
+// renderer, the hit-test + gesture layer, and the window. Demonstrates
+// drag-to-swipe (canvas_on_click/move/release) and vg.path polygon rendering.
 //
-// Run: DISPLAY=:0 ./build/rubiks_cube
-//   Swipe across a cell to rotate that row/column; Reset / Shuffle / Solve.
+// Run: DISPLAY=:0 ./target/build/apps/rubiks_cube/bin/rubiks_cube
+//   Swipe across a cell to rotate that row/column; Reset / Shuffle / Solve;
+//   press L for the debug face-letter legend.
 
 import ui
 import ui (window, vstack, hstack, btn, text, enable_test_server,
-    canvas_on_click, canvas_on_move, canvas_on_release)
+    canvas_on_click, canvas_on_move, canvas_on_release, shortcut)
 import vg.live (vg, canvas_region)
 import vg
 import vg (view_box, rect, fill, stroke, path, line)
 import std.math
 import std.string
-import std.intarr
 import std.os
 import std.os (os_getenv)
+
+import cube_engine
+import cube_engine (Cube, mk_cube, reset, is_solved, cell,
+    U, F, R, B, L, D, side_color,
+    rotate_side, do_e_slice, do_m_slice, do_s_slice, shuffle, solve)
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
 extern aether_ui_text_set_string(handle: int, text: string)
 
-// ─── Sides ───────────────────────────────────────────────────────────────────
-// U=0 F=1 R=2 B=3 L=4 D=5 (matches the TS Side enum order).
-U() -> int { return 0 }
-F() -> int { return 1 }
-R() -> int { return 2 }
-B() -> int { return 3 }
-L() -> int { return 4 }
-D() -> int { return 5 }
-
-// Sticker colour for a side index (the standard Rubik's scheme from the port).
-side_color(s: int) -> string {
-    if s == 0 { return "#ffffff" }   // U white
-    if s == 1 { return "#009b48" }   // F green
-    if s == 2 { return "#b71234" }   // R red
-    if s == 3 { return "#0046ad" }   // B blue
-    if s == 4 { return "#ff5800" }   // L orange
-    return "#ffd500"                  // D yellow
-}
-
 // ─── Isometric projection ─────────────────────────────────────────────────────
-// ISO = 30°. project(x,y,z) → screen (cx,cy is the canvas centre). Faithful to
-// cube.ts: x' = cx + (x - z)cos, y' = cy - y + (x + z)sin.
 ISO_COS() -> float { return 0.86602540378 }   // cos(30°)
 ISO_SIN() -> float { return 0.5 }              // sin(30°)
+proj_x(x: float, z: float, cx: float) -> float { return cx + (x - z) * ISO_COS() }
+proj_y(x: float, y: float, z: float, cy: float) -> float { return cy - y + (x + z) * ISO_SIN() }
 
-proj_x(x: float, z: float, cx: float) -> float {
-    return cx + (x - z) * ISO_COS()
-}
-proj_y(x: float, y: float, z: float, cy: float) -> float {
-    return cy - y + (x + z) * ISO_SIN()
-}
-
-// ─── Cube state ────────────────────────────────────────────────────────────
-//
-// faces = flat intarr(54): index face*9 + row*3 + col, value = side colour
-// index 0-5. history = a move log (side, cw) for solve(); stored as two
-// parallel intarrs grown by hand (fixed cap; shuffle uses ≤64).
-HIST_CAP() -> int { return 256 }
-
-struct Cube {
-    faces: ptr          // intarr(54)
-    hist_side: ptr      // intarr(HIST_CAP)
-    hist_cw: ptr        // intarr(HIST_CAP)  (1=cw, 0=ccw)
-    hist_len: int
-    // drag state
+// ─── App-side view state (drag + UI handles the engine doesn't know about) ────
+struct View {
     drag_active: int
     drag_x0: float
     drag_y0: float
     drag_x1: float
     drag_y1: float
-    drag_face: int      // hit-tested face at press (-1 = none)
+    drag_face: int
     drag_row: int
     drag_col: int
-    // UI handles
     moves_lbl: int
     status_lbl: int
+    show_legend: int
 }
-
-cell(c: *Cube, face: int, row: int, col: int) -> int {
-    return intarr_get_unchecked(c.faces, face * 9 + row * 3 + col)
-}
-set_cell(c: *Cube, face: int, row: int, col: int, v: int) {
-    intarr_set_unchecked(c.faces, face * 9 + row * 3 + col, v)
-}
-
-mk_cube() -> *Cube {
-    c = malloc(128) as *Cube
-    fa, _e0 = intarr.new(54)
-    c.faces = fa
-    hs, _e1 = intarr.new(HIST_CAP())
-    c.hist_side = hs
-    hc, _e2 = intarr.new(HIST_CAP())
-    c.hist_cw = hc
-    c.hist_len = 0
-    c.drag_active = 0
-    c.drag_face = -1
-    c.moves_lbl = 0
-    c.status_lbl = 0
-    reset(c)
-    return c
-}
-
-reset(c: *Cube) {
-    s = 0
-    while s < 6 {
-        i = 0
-        while i < 9 {
-            intarr_set_unchecked(c.faces, s * 9 + i, s)
-            i = i + 1
-        }
-        s = s + 1
-    }
-    c.hist_len = 0
-}
-
-is_solved(c: *Cube) -> int {
-    s = 0
-    while s < 6 {
-        i = 0
-        while i < 9 {
-            if intarr_get_unchecked(c.faces, s * 9 + i) != s { return 0 }
-            i = i + 1
-        }
-        s = s + 1
-    }
-    return 1
-}
-
-// ─── Face rotation (the 3×3 sticker turn) ──────────────────────────────────
-// n[cw ? c : 2-c][cw ? 2-r : r] = f[r][c]. Read all 9 first, then write.
-rotate_face(c: *Cube, side: int, cw: int) {
-    g00 = cell(c, side, 0, 0); g01 = cell(c, side, 0, 1); g02 = cell(c, side, 0, 2)
-    g10 = cell(c, side, 1, 0); g11 = cell(c, side, 1, 1); g12 = cell(c, side, 1, 2)
-    g20 = cell(c, side, 2, 0); g21 = cell(c, side, 2, 1); g22 = cell(c, side, 2, 2)
-    if cw == 1 {
-        // (r,c)->(c,2-r): 90° clockwise
-        set_cell(c, side, 0, 2, g00); set_cell(c, side, 1, 2, g01); set_cell(c, side, 2, 2, g02)
-        set_cell(c, side, 0, 1, g10); set_cell(c, side, 1, 1, g11); set_cell(c, side, 2, 1, g12)
-        set_cell(c, side, 0, 0, g20); set_cell(c, side, 1, 0, g21); set_cell(c, side, 2, 0, g22)
-    } else {
-        // (r,c)->(2-c,r): 90° counter-clockwise
-        set_cell(c, side, 2, 0, g00); set_cell(c, side, 1, 0, g01); set_cell(c, side, 0, 0, g02)
-        set_cell(c, side, 2, 1, g10); set_cell(c, side, 1, 1, g11); set_cell(c, side, 0, 1, g12)
-        set_cell(c, side, 2, 2, g20); set_cell(c, side, 1, 2, g21); set_cell(c, side, 0, 2, g22)
-    }
-}
-
-// ─── Edge cycles ──────────────────────────────────────────────────────────
-// Each ports the matching rotate*Edges from cube.ts: read the four edge triples
-// into temps, then write the cycle. cw matches the TS `cw` arg.
-
-rotate_up_edges(c: *Cube, cw: int) {
-    f0 = cell(c, F(), 0, 0); f1 = cell(c, F(), 0, 1); f2 = cell(c, F(), 0, 2)
-    r0 = cell(c, R(), 0, 0); r1 = cell(c, R(), 0, 1); r2 = cell(c, R(), 0, 2)
-    b0 = cell(c, B(), 0, 0); b1 = cell(c, B(), 0, 1); b2 = cell(c, B(), 0, 2)
-    l0 = cell(c, L(), 0, 0); l1 = cell(c, L(), 0, 1); l2 = cell(c, L(), 0, 2)
-    if cw == 1 {
-        set_cell(c, F(), 0, 0, r0); set_cell(c, F(), 0, 1, r1); set_cell(c, F(), 0, 2, r2)
-        set_cell(c, R(), 0, 0, b0); set_cell(c, R(), 0, 1, b1); set_cell(c, R(), 0, 2, b2)
-        set_cell(c, B(), 0, 0, l0); set_cell(c, B(), 0, 1, l1); set_cell(c, B(), 0, 2, l2)
-        set_cell(c, L(), 0, 0, f0); set_cell(c, L(), 0, 1, f1); set_cell(c, L(), 0, 2, f2)
-    } else {
-        set_cell(c, F(), 0, 0, l0); set_cell(c, F(), 0, 1, l1); set_cell(c, F(), 0, 2, l2)
-        set_cell(c, L(), 0, 0, b0); set_cell(c, L(), 0, 1, b1); set_cell(c, L(), 0, 2, b2)
-        set_cell(c, B(), 0, 0, r0); set_cell(c, B(), 0, 1, r1); set_cell(c, B(), 0, 2, r2)
-        set_cell(c, R(), 0, 0, f0); set_cell(c, R(), 0, 1, f1); set_cell(c, R(), 0, 2, f2)
-    }
-}
-
-rotate_down_edges(c: *Cube, cw: int) {
-    f0 = cell(c, F(), 2, 0); f1 = cell(c, F(), 2, 1); f2 = cell(c, F(), 2, 2)
-    r0 = cell(c, R(), 2, 0); r1 = cell(c, R(), 2, 1); r2 = cell(c, R(), 2, 2)
-    b0 = cell(c, B(), 2, 0); b1 = cell(c, B(), 2, 1); b2 = cell(c, B(), 2, 2)
-    l0 = cell(c, L(), 2, 0); l1 = cell(c, L(), 2, 1); l2 = cell(c, L(), 2, 2)
-    if cw == 1 {
-        set_cell(c, F(), 2, 0, l0); set_cell(c, F(), 2, 1, l1); set_cell(c, F(), 2, 2, l2)
-        set_cell(c, L(), 2, 0, b0); set_cell(c, L(), 2, 1, b1); set_cell(c, L(), 2, 2, b2)
-        set_cell(c, B(), 2, 0, r0); set_cell(c, B(), 2, 1, r1); set_cell(c, B(), 2, 2, r2)
-        set_cell(c, R(), 2, 0, f0); set_cell(c, R(), 2, 1, f1); set_cell(c, R(), 2, 2, f2)
-    } else {
-        set_cell(c, F(), 2, 0, r0); set_cell(c, F(), 2, 1, r1); set_cell(c, F(), 2, 2, r2)
-        set_cell(c, R(), 2, 0, b0); set_cell(c, R(), 2, 1, b1); set_cell(c, R(), 2, 2, b2)
-        set_cell(c, B(), 2, 0, l0); set_cell(c, B(), 2, 1, l1); set_cell(c, B(), 2, 2, l2)
-        set_cell(c, L(), 2, 0, f0); set_cell(c, L(), 2, 1, f1); set_cell(c, L(), 2, 2, f2)
-    }
-}
-
-rotate_front_edges(c: *Cube, cw: int) {
-    u0 = cell(c, U(), 2, 0); u1 = cell(c, U(), 2, 1); u2 = cell(c, U(), 2, 2)
-    if cw == 1 {
-        // U row2 <- L col2 (reversed); L col2 <- D row0; D row0 <- R col0 (reversed); R col0 <- U row2
-        l02 = cell(c, L(), 0, 2); l12 = cell(c, L(), 1, 2); l22 = cell(c, L(), 2, 2)
-        d00 = cell(c, D(), 0, 0); d01 = cell(c, D(), 0, 1); d02 = cell(c, D(), 0, 2)
-        r00 = cell(c, R(), 0, 0); r10 = cell(c, R(), 1, 0); r20 = cell(c, R(), 2, 0)
-        set_cell(c, U(), 2, 0, l22); set_cell(c, U(), 2, 1, l12); set_cell(c, U(), 2, 2, l02)
-        set_cell(c, L(), 0, 2, d00); set_cell(c, L(), 1, 2, d01); set_cell(c, L(), 2, 2, d02)
-        set_cell(c, D(), 0, 0, r20); set_cell(c, D(), 0, 1, r10); set_cell(c, D(), 0, 2, r00)
-        set_cell(c, R(), 0, 0, u0); set_cell(c, R(), 1, 0, u1); set_cell(c, R(), 2, 0, u2)
-    } else {
-        r00 = cell(c, R(), 0, 0); r10 = cell(c, R(), 1, 0); r20 = cell(c, R(), 2, 0)
-        d00 = cell(c, D(), 0, 0); d01 = cell(c, D(), 0, 1); d02 = cell(c, D(), 0, 2)
-        l02 = cell(c, L(), 0, 2); l12 = cell(c, L(), 1, 2); l22 = cell(c, L(), 2, 2)
-        set_cell(c, U(), 2, 0, r00); set_cell(c, U(), 2, 1, r10); set_cell(c, U(), 2, 2, r20)
-        set_cell(c, R(), 0, 0, d02); set_cell(c, R(), 1, 0, d01); set_cell(c, R(), 2, 0, d00)
-        set_cell(c, D(), 0, 0, l02); set_cell(c, D(), 0, 1, l12); set_cell(c, D(), 0, 2, l22)
-        set_cell(c, L(), 0, 2, u2); set_cell(c, L(), 1, 2, u1); set_cell(c, L(), 2, 2, u0)
-    }
-}
-
-rotate_back_edges(c: *Cube, cw: int) {
-    u0 = cell(c, U(), 0, 0); u1 = cell(c, U(), 0, 1); u2 = cell(c, U(), 0, 2)
-    if cw == 1 {
-        r02 = cell(c, R(), 0, 2); r12 = cell(c, R(), 1, 2); r22 = cell(c, R(), 2, 2)
-        d20 = cell(c, D(), 2, 0); d21 = cell(c, D(), 2, 1); d22 = cell(c, D(), 2, 2)
-        l00 = cell(c, L(), 0, 0); l10 = cell(c, L(), 1, 0); l20 = cell(c, L(), 2, 0)
-        set_cell(c, U(), 0, 0, r02); set_cell(c, U(), 0, 1, r12); set_cell(c, U(), 0, 2, r22)
-        set_cell(c, R(), 0, 2, d22); set_cell(c, R(), 1, 2, d21); set_cell(c, R(), 2, 2, d20)
-        set_cell(c, D(), 2, 0, l00); set_cell(c, D(), 2, 1, l10); set_cell(c, D(), 2, 2, l20)
-        set_cell(c, L(), 0, 0, u2); set_cell(c, L(), 1, 0, u1); set_cell(c, L(), 2, 0, u0)
-    } else {
-        l20 = cell(c, L(), 2, 0); l10 = cell(c, L(), 1, 0); l00 = cell(c, L(), 0, 0)
-        d20 = cell(c, D(), 2, 0); d21 = cell(c, D(), 2, 1); d22 = cell(c, D(), 2, 2)
-        r22 = cell(c, R(), 2, 2); r12 = cell(c, R(), 1, 2); r02 = cell(c, R(), 0, 2)
-        set_cell(c, U(), 0, 0, l20); set_cell(c, U(), 0, 1, l10); set_cell(c, U(), 0, 2, l00)
-        set_cell(c, L(), 0, 0, d20); set_cell(c, L(), 1, 0, d21); set_cell(c, L(), 2, 0, d22)
-        set_cell(c, D(), 2, 0, r22); set_cell(c, D(), 2, 1, r12); set_cell(c, D(), 2, 2, r02)
-        set_cell(c, R(), 0, 2, u0); set_cell(c, R(), 1, 2, u1); set_cell(c, R(), 2, 2, u2)
-    }
-}
-
-rotate_right_edges(c: *Cube, cw: int) {
-    u02 = cell(c, U(), 0, 2); u12 = cell(c, U(), 1, 2); u22 = cell(c, U(), 2, 2)
-    if cw == 1 {
-        f02 = cell(c, F(), 0, 2); f12 = cell(c, F(), 1, 2); f22 = cell(c, F(), 2, 2)
-        d02 = cell(c, D(), 0, 2); d12 = cell(c, D(), 1, 2); d22 = cell(c, D(), 2, 2)
-        b00 = cell(c, B(), 0, 0); b10 = cell(c, B(), 1, 0); b20 = cell(c, B(), 2, 0)
-        set_cell(c, U(), 0, 2, f02); set_cell(c, U(), 1, 2, f12); set_cell(c, U(), 2, 2, f22)
-        set_cell(c, F(), 0, 2, d02); set_cell(c, F(), 1, 2, d12); set_cell(c, F(), 2, 2, d22)
-        set_cell(c, D(), 0, 2, b20); set_cell(c, D(), 1, 2, b10); set_cell(c, D(), 2, 2, b00)
-        set_cell(c, B(), 0, 0, u22); set_cell(c, B(), 1, 0, u12); set_cell(c, B(), 2, 0, u02)
-    } else {
-        b20 = cell(c, B(), 2, 0); b10 = cell(c, B(), 1, 0); b00 = cell(c, B(), 0, 0)
-        d22 = cell(c, D(), 2, 2); d12 = cell(c, D(), 1, 2); d02 = cell(c, D(), 0, 2)
-        f02 = cell(c, F(), 0, 2); f12 = cell(c, F(), 1, 2); f22 = cell(c, F(), 2, 2)
-        set_cell(c, U(), 0, 2, b20); set_cell(c, U(), 1, 2, b10); set_cell(c, U(), 2, 2, b00)
-        set_cell(c, B(), 0, 0, d22); set_cell(c, B(), 1, 0, d12); set_cell(c, B(), 2, 0, d02)
-        set_cell(c, D(), 0, 2, f02); set_cell(c, D(), 1, 2, f12); set_cell(c, D(), 2, 2, f22)
-        set_cell(c, F(), 0, 2, u02); set_cell(c, F(), 1, 2, u12); set_cell(c, F(), 2, 2, u22)
-    }
-}
-
-rotate_left_edges(c: *Cube, cw: int) {
-    u00 = cell(c, U(), 0, 0); u10 = cell(c, U(), 1, 0); u20 = cell(c, U(), 2, 0)
-    if cw == 1 {
-        b22 = cell(c, B(), 2, 2); b12 = cell(c, B(), 1, 2); b02 = cell(c, B(), 0, 2)
-        d20 = cell(c, D(), 2, 0); d10 = cell(c, D(), 1, 0); d00 = cell(c, D(), 0, 0)
-        f00 = cell(c, F(), 0, 0); f10 = cell(c, F(), 1, 0); f20 = cell(c, F(), 2, 0)
-        set_cell(c, U(), 0, 0, b22); set_cell(c, U(), 1, 0, b12); set_cell(c, U(), 2, 0, b02)
-        set_cell(c, B(), 0, 2, d20); set_cell(c, B(), 1, 2, d10); set_cell(c, B(), 2, 2, d00)
-        set_cell(c, D(), 0, 0, f00); set_cell(c, D(), 1, 0, f10); set_cell(c, D(), 2, 0, f20)
-        set_cell(c, F(), 0, 0, u00); set_cell(c, F(), 1, 0, u10); set_cell(c, F(), 2, 0, u20)
-    } else {
-        f00 = cell(c, F(), 0, 0); f10 = cell(c, F(), 1, 0); f20 = cell(c, F(), 2, 0)
-        d00 = cell(c, D(), 0, 0); d10 = cell(c, D(), 1, 0); d20 = cell(c, D(), 2, 0)
-        b22 = cell(c, B(), 2, 2); b12 = cell(c, B(), 1, 2); b02 = cell(c, B(), 0, 2)
-        set_cell(c, U(), 0, 0, f00); set_cell(c, U(), 1, 0, f10); set_cell(c, U(), 2, 0, f20)
-        set_cell(c, F(), 0, 0, d00); set_cell(c, F(), 1, 0, d10); set_cell(c, F(), 2, 0, d20)
-        set_cell(c, D(), 0, 0, b22); set_cell(c, D(), 1, 0, b12); set_cell(c, D(), 2, 0, b02)
-        set_cell(c, B(), 0, 2, u20); set_cell(c, B(), 1, 2, u10); set_cell(c, B(), 2, 2, u00)
-    }
-}
-
-rotate_edges(c: *Cube, side: int, cw: int) {
-    if side == U() { rotate_up_edges(c, cw); return }
-    if side == D() { rotate_down_edges(c, cw); return }
-    if side == F() { rotate_front_edges(c, cw); return }
-    if side == B() { rotate_back_edges(c, cw); return }
-    if side == R() { rotate_right_edges(c, cw); return }
-    if side == L() { rotate_left_edges(c, cw); return }
-}
-
-// A face turn = sticker rotation + edge cycle, logged for solve().
-rotate_side(c: *Cube, side: int, cw: int) {
-    rotate_face(c, side, cw)
-    rotate_edges(c, side, cw)
-    if c.hist_len < HIST_CAP() {
-        intarr_set_unchecked(c.hist_side, c.hist_len, side)
-        intarr_set_unchecked(c.hist_cw, c.hist_len, cw)
-        c.hist_len = c.hist_len + 1
-    }
-}
-
-// ─── Slice moves (E/M/S middle layers) ──────────────────────────────────────
-rotate_e_slice(c: *Cube, cw: int) {       // middle ROW (between U and D)
-    f0 = cell(c, F(), 1, 0); f1 = cell(c, F(), 1, 1); f2 = cell(c, F(), 1, 2)
-    r0 = cell(c, R(), 1, 0); r1 = cell(c, R(), 1, 1); r2 = cell(c, R(), 1, 2)
-    b0 = cell(c, B(), 1, 0); b1 = cell(c, B(), 1, 1); b2 = cell(c, B(), 1, 2)
-    l0 = cell(c, L(), 1, 0); l1 = cell(c, L(), 1, 1); l2 = cell(c, L(), 1, 2)
-    if cw == 1 {
-        set_cell(c, F(), 1, 0, l0); set_cell(c, F(), 1, 1, l1); set_cell(c, F(), 1, 2, l2)
-        set_cell(c, L(), 1, 0, b0); set_cell(c, L(), 1, 1, b1); set_cell(c, L(), 1, 2, b2)
-        set_cell(c, B(), 1, 0, r0); set_cell(c, B(), 1, 1, r1); set_cell(c, B(), 1, 2, r2)
-        set_cell(c, R(), 1, 0, f0); set_cell(c, R(), 1, 1, f1); set_cell(c, R(), 1, 2, f2)
-    } else {
-        set_cell(c, F(), 1, 0, r0); set_cell(c, F(), 1, 1, r1); set_cell(c, F(), 1, 2, r2)
-        set_cell(c, R(), 1, 0, b0); set_cell(c, R(), 1, 1, b1); set_cell(c, R(), 1, 2, b2)
-        set_cell(c, B(), 1, 0, l0); set_cell(c, B(), 1, 1, l1); set_cell(c, B(), 1, 2, l2)
-        set_cell(c, L(), 1, 0, f0); set_cell(c, L(), 1, 1, f1); set_cell(c, L(), 1, 2, f2)
-    }
-}
-
-rotate_m_slice(c: *Cube, cw: int) {       // middle COL (between L and R)
-    f0 = cell(c, F(), 0, 1); f1 = cell(c, F(), 1, 1); f2 = cell(c, F(), 2, 1)
-    u0 = cell(c, U(), 0, 1); u1 = cell(c, U(), 1, 1); u2 = cell(c, U(), 2, 1)
-    b0 = cell(c, B(), 0, 1); b1 = cell(c, B(), 1, 1); b2 = cell(c, B(), 2, 1)
-    d0 = cell(c, D(), 0, 1); d1 = cell(c, D(), 1, 1); d2 = cell(c, D(), 2, 1)
-    if cw == 1 {
-        set_cell(c, F(), 0, 1, d0); set_cell(c, F(), 1, 1, d1); set_cell(c, F(), 2, 1, d2)
-        set_cell(c, D(), 0, 1, b2); set_cell(c, D(), 1, 1, b1); set_cell(c, D(), 2, 1, b0)
-        set_cell(c, B(), 0, 1, u2); set_cell(c, B(), 1, 1, u1); set_cell(c, B(), 2, 1, u0)
-        set_cell(c, U(), 0, 1, f0); set_cell(c, U(), 1, 1, f1); set_cell(c, U(), 2, 1, f2)
-    } else {
-        set_cell(c, F(), 0, 1, u0); set_cell(c, F(), 1, 1, u1); set_cell(c, F(), 2, 1, u2)
-        set_cell(c, U(), 0, 1, b2); set_cell(c, U(), 1, 1, b1); set_cell(c, U(), 2, 1, b0)
-        set_cell(c, B(), 0, 1, d2); set_cell(c, B(), 1, 1, d1); set_cell(c, B(), 2, 1, d0)
-        set_cell(c, D(), 0, 1, f0); set_cell(c, D(), 1, 1, f1); set_cell(c, D(), 2, 1, f2)
-    }
-}
-
-rotate_s_slice(c: *Cube, cw: int) {       // standing middle (between F and B)
-    u0 = cell(c, U(), 1, 0); u1 = cell(c, U(), 1, 1); u2 = cell(c, U(), 1, 2)
-    if cw == 1 {
-        l01 = cell(c, L(), 0, 1); l11 = cell(c, L(), 1, 1); l21 = cell(c, L(), 2, 1)
-        d10 = cell(c, D(), 1, 0); d11 = cell(c, D(), 1, 1); d12 = cell(c, D(), 1, 2)
-        r01 = cell(c, R(), 0, 1); r11 = cell(c, R(), 1, 1); r21 = cell(c, R(), 2, 1)
-        set_cell(c, U(), 1, 0, l21); set_cell(c, U(), 1, 1, l11); set_cell(c, U(), 1, 2, l01)
-        set_cell(c, L(), 0, 1, d10); set_cell(c, L(), 1, 1, d11); set_cell(c, L(), 2, 1, d12)
-        set_cell(c, D(), 1, 0, r21); set_cell(c, D(), 1, 1, r11); set_cell(c, D(), 1, 2, r01)
-        set_cell(c, R(), 0, 1, u0); set_cell(c, R(), 1, 1, u1); set_cell(c, R(), 2, 1, u2)
-    } else {
-        r01 = cell(c, R(), 0, 1); r11 = cell(c, R(), 1, 1); r21 = cell(c, R(), 2, 1)
-        d12 = cell(c, D(), 1, 2); d11 = cell(c, D(), 1, 1); d10 = cell(c, D(), 1, 0)
-        l01 = cell(c, L(), 0, 1); l11 = cell(c, L(), 1, 1); l21 = cell(c, L(), 2, 1)
-        set_cell(c, U(), 1, 0, r01); set_cell(c, U(), 1, 1, r11); set_cell(c, U(), 1, 2, r21)
-        set_cell(c, R(), 0, 1, d12); set_cell(c, R(), 1, 1, d11); set_cell(c, R(), 2, 1, d10)
-        set_cell(c, D(), 1, 0, l01); set_cell(c, D(), 1, 1, l11); set_cell(c, D(), 1, 2, l21)
-        set_cell(c, L(), 0, 1, u2); set_cell(c, L(), 1, 1, u1); set_cell(c, L(), 2, 1, u0)
-    }
-}
-
-// ─── Shuffle / solve ────────────────────────────────────────────────────────
-shuffle(c: *Cube) {
-    c.hist_len = 0
-    i = 0
-    while i < 20 {
-        side = math.random_int(0, 5)
-        cw = 0
-        if math.random_int(0, 1) == 1 { cw = 1 }
-        rotate_side(c, side, cw)
-        i = i + 1
-    }
-    refresh_labels(c)
-}
-
-// Replay the move log in reverse with inverted turns → back to solved.
-solve(c: *Cube) {
-    n = c.hist_len
-    // snapshot the log (rotate_side rewrites it as it replays)
-    snap_side, _e0 = intarr.new(HIST_CAP())
-    snap_cw, _e1 = intarr.new(HIST_CAP())
-    k = 0
-    while k < n {
-        intarr_set_unchecked(snap_side, k, intarr_get_unchecked(c.hist_side, k))
-        intarr_set_unchecked(snap_cw, k, intarr_get_unchecked(c.hist_cw, k))
-        k = k + 1
-    }
-    c.hist_len = 0
-    j = n - 1
-    while j >= 0 {
-        side = intarr_get_unchecked(snap_side, j)
-        cw = intarr_get_unchecked(snap_cw, j)
-        inv = 1
-        if cw == 1 { inv = 0 }
-        rotate_side(c, side, inv)
-        j = j - 1
-    }
-    intarr_free(snap_side)
-    intarr_free(snap_cw)
-    refresh_labels(c)
+mk_view() -> *View {
+    v = malloc(64) as *View
+    v.drag_active = 0
+    v.drag_face = -1
+    v.moves_lbl = 0
+    v.status_lbl = 0
+    v.show_legend = 0
+    return v
 }
 
 // ─── Gesture → rotation (faithful to GestureController) ───────────────────────
@@ -420,15 +77,14 @@ swipe_front(c: *Cube, row: int, col: int, dir: int) {
         if dir == 3 { cw = 1 }                 // W → cw
         if row == 0 { rotate_side(c, U(), cw) }
         else { if row == 2 { rotate_side(c, D(), inv(cw)) }
-               else { rotate_e_slice(c, inv(cw)) } }
+               else { do_e_slice(c, inv(cw)) } }
     } else {
         cw = 0
         if dir == 1 { cw = 1 }                 // S → cw
         if col == 0 { rotate_side(c, L(), cw) }
         else { if col == 2 { rotate_side(c, R(), inv(cw)) }
-               else { rotate_m_slice(c, inv(cw)) } }
+               else { do_m_slice(c, inv(cw)) } }
     }
-    refresh_labels(c)
 }
 
 swipe_up(c: *Cube, row: int, col: int, dir: int) {
@@ -437,15 +93,14 @@ swipe_up(c: *Cube, row: int, col: int, dir: int) {
         if dir == 2 { cw = 1 }                 // E → cw
         if row == 0 { rotate_side(c, B(), inv(cw)) }
         else { if row == 2 { rotate_side(c, F(), cw) }
-               else { rotate_s_slice(c, cw) } }
+               else { do_s_slice(c, cw) } }
     } else {
         cw = 0
         if dir == 1 { cw = 1 }                 // S → cw
         if col == 0 { rotate_side(c, L(), cw) }
         else { if col == 2 { rotate_side(c, R(), inv(cw)) }
-               else { rotate_m_slice(c, inv(cw)) } }
+               else { do_m_slice(c, inv(cw)) } }
     }
-    refresh_labels(c)
 }
 
 swipe_right(c: *Cube, row: int, col: int, dir: int) {
@@ -454,27 +109,44 @@ swipe_right(c: *Cube, row: int, col: int, dir: int) {
         if dir == 3 { cw = 1 }                 // W → cw
         if row == 0 { rotate_side(c, U(), cw) }
         else { if row == 2 { rotate_side(c, D(), inv(cw)) }
-               else { rotate_e_slice(c, inv(cw)) } }
+               else { do_e_slice(c, inv(cw)) } }
     } else {
         cw = 0
         if dir == 1 { cw = 1 }                 // S → cw
         if col == 0 { rotate_side(c, F(), cw) }
         else { if col == 2 { rotate_side(c, B(), inv(cw)) }
-               else { rotate_s_slice(c, cw) } }
+               else { do_s_slice(c, cw) } }
     }
-    refresh_labels(c)
 }
 
-// dx,dy → swipe dir (0=N 1=S 2=E 3=W), or -1 if the drag was too short.
-swipe_dir(dx: float, dy: float) -> int {
+// Drag vector (dx,dy) → swipe dir (0=N 1=S 2=E 3=W), classified in the pressed
+// cell's FACE-LOCAL axes, not screen axes. This is the fix for a real bug: the
+// faces are isometric diamonds, so a cell's +col and +row axes run DIAGONALLY
+// on screen (on the top face, moving down a column goes down-LEFT). A plain
+// screen-space |dx|>|dy| test then misreads a column drag as a horizontal
+// swipe and rotates the wrong layer (dragging U0→U6 rotated Back, moving R2 to
+// U0, instead of the left column).
+//
+// The +col axis (E/W) and +row axis (N/S) come straight from the cell's quad:
+// corner1-corner0 is +col, corner3-corner0 is +row. Both edges have equal
+// length, so the raw dot products are directly comparable. E/W ↔ ±col and
+// N/S ↔ ±row, which is exactly what swipe_front/up/right already expect.
+swipe_dir_face(face: int, row: int, col: int, dx: float, dy: float) -> int {
     dist = math.sqrt(dx * dx + dy * dy)
     if dist < 20.0 { return -1 }
-    if math.abs_float(dx) > math.abs_float(dy) {
-        if dx > 0.0 { return 2 }
-        return 3
+    a0x, a0y = quad_pt(face, row, col, 0)
+    a1x, a1y = quad_pt(face, row, col, 1)   // +col corner
+    a3x, a3y = quad_pt(face, row, col, 3)   // +row corner
+    colx = a1x - a0x; coly = a1y - a0y
+    rowx = a3x - a0x; rowy = a3y - a0y
+    pc = dx * colx + dy * coly              // drag component along +col
+    pr = dx * rowx + dy * rowy              // drag component along +row
+    if math.abs_float(pc) >= math.abs_float(pr) {
+        if pc > 0.0 { return 2 }            // +col → E
+        return 3                             // -col → W
     }
-    if dy > 0.0 { return 1 }
-    return 0
+    if pr > 0.0 { return 1 }                // +row → S
+    return 0                                 // -row → N
 }
 
 // ─── Layout geometry (shared by render + hit-test) ────────────────────────────
@@ -581,12 +253,63 @@ cross_sign(ax: float, ay: float, bx: float, by: float, px: float, py: float) -> 
 }
 
 // ─── Rendering ────────────────────────────────────────────────────────────
-draw_cube(rn: ptr, c: *Cube) {
+draw_cube(rn: ptr, c: *Cube, show_legend: int) {
     bg = vg.rect(rn, 0.0, 0.0, CANVAS(), CANVAS())
     vg.fill(bg, "#1e1e1e")
     draw_face(rn, c, U())
     draw_face(rn, c, F())
     draw_face(rn, c, R())
+    if show_legend == 1 {
+        draw_legend(rn, c, U())
+        draw_legend(rn, c, F())
+        draw_legend(rn, c, R())
+    }
+}
+
+// The classic face letter for a sticker's colour index (U/F/R/B/L/D).
+face_letter(v: int) -> string {
+    if v == 0 { return "U" }
+    if v == 1 { return "F" }
+    if v == 2 { return "R" }
+    if v == 3 { return "B" }
+    if v == 4 { return "L" }
+    return "D"
+}
+// A legend colour that reads against the sticker: dark ink on light stickers
+// (white U, yellow D, orange L), light ink on the darker ones (green/red/blue).
+legend_ink(v: int) -> string {
+    if v == 0 || v == 5 || v == 4 { return "#111111" }
+    return "#ffffff"
+}
+// Cell centroid = mean of the quad's four corners.
+cell_center(face: int, row: int, col: int) -> (float, float) {
+    ax, ay = quad_pt(face, row, col, 0)
+    bx, by = quad_pt(face, row, col, 1)
+    cx, cy = quad_pt(face, row, col, 2)
+    dx, dy = quad_pt(face, row, col, 3)
+    return (ax + bx + cx + dx) / 4.0, (ay + by + cy + dy) / 4.0
+}
+// Overlay every visible sticker of `face` with a legend: the current colour's
+// face letter PLUS the cell's fixed position index 0..8 (row*3+col). The letter
+// moves with the colour as you turn; the number is fixed to the slot — so a
+// solved face reads F0 F1 F2 / F3 … F8 and you can track exactly which colour
+// lands in which slot after a move.
+draw_legend(rn: ptr, c: *Cube, face: int) {
+    row = 0
+    while row < 3 {
+        col = 0
+        while col < 3 {
+            v = cell(c, face, row, col)
+            mx, my = cell_center(face, row, col)
+            lbl = face_letter(v)
+            lbl = string.concat(lbl, string.from_int(row * 3 + col))
+            // +5 nudges the baseline down so "middle" anchor reads centred.
+            t = vg.text_anchored(rn, mx, my + 5.0, 17.0, "middle", lbl)
+            vg.fill(t, legend_ink(v))
+            col = col + 1
+        }
+        row = row + 1
+    }
 }
 
 draw_face(rn: ptr, c: *Cube, face: int) {
@@ -605,53 +328,56 @@ draw_face(rn: ptr, c: *Cube, face: int) {
 }
 
 // ─── Labels ──────────────────────────────────────────────────────────────
-refresh_labels(c: *Cube) {
-    if c.moves_lbl != 0 {
+refresh_labels(c: *Cube, view: *View) {
+    if view.moves_lbl != 0 {
         m = "Moves: "
         m = string.concat(m, string.from_int(c.hist_len))
-        aether_ui_text_set_string(c.moves_lbl, m)
+        aether_ui_text_set_string(view.moves_lbl, m)
     }
-    if c.status_lbl != 0 {
+    if view.status_lbl != 0 {
         st = "Scrambled"
         if is_solved(c) == 1 { st = "Solved!" }
-        aether_ui_text_set_string(c.status_lbl, st)
+        aether_ui_text_set_string(view.status_lbl, st)
     }
 }
 
-// ─── Drag handling ──────────────────────────────────────────────────────────
-on_press(c: *Cube, x: float, y: float) {
-    c.drag_active = 1
-    c.drag_x0 = x; c.drag_y0 = y
-    c.drag_x1 = x; c.drag_y1 = y
+// ─── Drag handling (operates on the app-side view; fires engine moves) ────────
+on_press(view: *View, x: float, y: float) {
+    view.drag_active = 1
+    view.drag_x0 = x; view.drag_y0 = y
+    view.drag_x1 = x; view.drag_y1 = y
     fhit, rhit, chit = hit_cell(x, y)
-    c.drag_face = fhit; c.drag_row = rhit; c.drag_col = chit
+    view.drag_face = fhit; view.drag_row = rhit; view.drag_col = chit
 }
-on_drag(c: *Cube, x: float, y: float) {
-    if c.drag_active == 1 { c.drag_x1 = x; c.drag_y1 = y }
+on_drag(view: *View, x: float, y: float) {
+    if view.drag_active == 1 { view.drag_x1 = x; view.drag_y1 = y }
 }
-on_release_pt(c: *Cube, x: float, y: float) {
-    if c.drag_active == 0 { return }
-    c.drag_x1 = x; c.drag_y1 = y
-    c.drag_active = 0
-    if c.drag_face < 0 { return }
-    dir = swipe_dir(c.drag_x1 - c.drag_x0, c.drag_y1 - c.drag_y0)
+on_release_pt(c: *Cube, view: *View, x: float, y: float) {
+    if view.drag_active == 0 { return }
+    view.drag_x1 = x; view.drag_y1 = y
+    view.drag_active = 0
+    if view.drag_face < 0 { return }
+    dir = swipe_dir_face(view.drag_face, view.drag_row, view.drag_col,
+                         view.drag_x1 - view.drag_x0, view.drag_y1 - view.drag_y0)
     if dir < 0 { return }
-    handle_swipe(c, c.drag_face, c.drag_row, c.drag_col, dir)
+    handle_swipe(c, view.drag_face, view.drag_row, view.drag_col, dir)
+    refresh_labels(c, view)
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 main() {
     math.random_seed(20260616)
     c = mk_cube()
+    view = mk_view()
 
     window("3D Cube", 520, 680) {
         vstack(6) {
             hstack(6) {
-                btn("Reset") callback { reset(c); refresh_labels(c) }
-                btn("Shuffle") callback { shuffle(c) }
-                btn("Solve") callback { solve(c) }
+                btn("Reset") callback { reset(c); refresh_labels(c, view) }
+                btn("Shuffle") callback { shuffle(c); refresh_labels(c, view) }
+                btn("Solve") callback { solve(c); refresh_labels(c, view) }
             }
-            c.moves_lbl = text("Moves: 0")
+            view.moves_lbl = text("Moves: 0")
 
             vg(view_box(0, 0, 460, 460), 460, 460) {
                 anchor = rect(0, 0, 0, 0)
@@ -660,25 +386,31 @@ main() {
                 vg.scene_set_refreshing(scene, 1)
 
                 canvas_region(root_node, 0.0, 0.0, 460.0, 460.0) callback |rn: ptr, t: float| {
-                    draw_cube(rn, c)
+                    draw_cube(rn, c, view.show_legend)
                 }
                 cid = vg.scene_canvas(scene)
 
-                // Drag-to-swipe: press records the start + hit cell, move tracks
-                // the current point, release computes the swipe direction.
+                // Drag-to-swipe. The canvas delivers CANVAS-PIXEL coords but our
+                // geometry is the 460 viewBox, so unmap px→viewBox first (same
+                // as grand_perspective) or swipes land on the wrong cell.
                 canvas_on_click(cid) callback |px: float, py: float| {
-                    on_press(c, px, py)
+                    on_press(view, vg.scene_px_to_vb_x(scene, px), vg.scene_px_to_vb_y(scene, py))
                 }
                 canvas_on_move(cid) callback |mx: float, my: float| {
-                    on_drag(c, mx, my)
+                    on_drag(view, vg.scene_px_to_vb_x(scene, mx), vg.scene_px_to_vb_y(scene, my))
                 }
                 canvas_on_release(cid) callback |rx: float, ry: float| {
-                    on_release_pt(c, rx, ry)
+                    on_release_pt(c, view, vg.scene_px_to_vb_x(scene, rx), vg.scene_px_to_vb_y(scene, ry))
                 }
             }
 
-            c.status_lbl = text("Swipe across a cell to rotate a row or column")
+            view.status_lbl = text("Swipe across a cell to rotate a row or column")
+        }
+        // Debug legend: L toggles the face-letter overlay (window-scoped).
+        shortcut("L") callback {
+            if view.show_legend == 1 { view.show_legend = 0 } else { view.show_legend = 1 }
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }
+

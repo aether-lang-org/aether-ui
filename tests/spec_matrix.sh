@@ -40,6 +40,9 @@ SUITES=(
   "split|examples/split_demo|split_demo/spec_split_demo|"
   "bindings|examples/bindings_demo|bindings_demo/spec_bindings_demo|"
   "tabs|examples/tabs_demo|tabs_demo/spec_tabs_demo|"
+  "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
+  "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"
+  "rubiks_cube|apps/rubiks_cube|rubiks_cube/spec_rubiks_cube|"
 )
 
 # grand_perspective: one spec per component, each against a FRESH app scanning

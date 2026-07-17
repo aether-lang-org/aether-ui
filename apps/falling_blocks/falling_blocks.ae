@@ -1,27 +1,19 @@
-// falling_blocks.ae — a Tetris-style falling-blocks game, the AeVG showcase for
-// keyboard-driven, game-loop-tick interactive vector graphics.
+// falling_blocks.ae — renderer + input for a Tetris-style falling-blocks game.
 //
 // ─── Provenance / licence ───────────────────────────────────────────────────
 // Ported (via Tsyne) from Falling Blocks by Sander Klootwijk:
 //   https://github.com/SanderKlootwijk/fallingblocks  (License: GPL-3.0)
-// The Tsyne intermediate port lives at
-//   ~/scm/tsyne/tsyne/ported-apps/falling-blocks/falling-blocks.ts
-// As a derivative of a GPL-3.0 work, THIS FILE is GPL-3.0. It is a copyleft
-// island in aether-ui: the rest of the toolkit is under aether-ui's own
-// licence; only this game (and its tetromino tables / scoring rules carried
-// over from the original) is GPL-3.0. Distributing a binary built from this
-// file carries the GPL-3.0 obligations for that binary.
+// As a derivative of a GPL-3.0 work, THIS FILE (and fb_engine.ae) is GPL-3.0.
+// It is a copyleft island in aether-ui: the rest of the toolkit is under
+// aether-ui's own licence; only this game is GPL-3.0. Distributing a binary
+// built from these files carries the GPL-3.0 obligations for that binary.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Demonstrates the AeVG interactive surface end to end:
-//   • a per-frame DRAW canvas_region that re-renders from game state each tick
-//   • the game loop driven by the region's monotonic `t` (ms) — drop on interval
-//   • ui.canvas_on_key — keyboard input (arrows / WASD / space) routed
-//     into the game (the keyboard primitive built for this port)
-//   • ui.canvas_on_click — tap-to-play (left/centre/right thirds)
-//   • std.intarr for the flat board + the tetromino shape tables
+// STRUCTURE: the game logic lives in fb_engine.ae (pure, no UI — unit-tested in
+// test_fb_engine.ae). THIS file is only the AeVG renderer (with smooth vertical
+// descent), the input mapping, and the window.
 //
-// Run: DISPLAY=:0 ./target/build/aether_ui/bin/falling_blocks
+// Run: DISPLAY=:0 ./target/build/apps/falling_blocks/bin/falling_blocks
 //   New Game button (or any key) starts; arrows/WASD move, Space hard-drops,
 //   P/Esc pause.
 
@@ -33,339 +25,134 @@ import vg
 import vg (view_box, rect, fill, stroke, text_sized)
 import std.math
 import std.string
-import std.intarr
 import std.os
 import std.os (os_getenv)
 
+import fb_engine
+import fb_engine (Game, mk_game, start_game, toggle_pause,
+    move_left, move_right, rotate, soft_drop, hard_drop, tick,
+    board_get, collides, get_block, shape_color, current_interval,
+    BOARD_W, BOARD_H)
+
 extern malloc(size: int) -> ptr
-extern lrint(x: float) -> long
 extern aether_ui_text_set_string(handle: int, text: string)
 
-// ─── Board / geometry constants ──────────────────────────────────────────────
-BOARD_W() -> int   { return 10 }
-BOARD_H() -> int   { return 20 }
-CELLS()   -> int   { return 200 }            // BOARD_W * BOARD_H
+// ─── Render geometry ─────────────────────────────────────────────────────────
 BLOCK()   -> float { return 28.0 }           // px per cell in the vg viewBox
 BOARD_PX_W() -> float { return 280.0 }       // 10 * 28
 BOARD_PX_H() -> float { return 560.0 }       // 20 * 28
-DROP_SEC() -> float { return 0.6 }           // base gravity interval (seconds)
 
-// ─── Tetromino tables ────────────────────────────────────────────────────────
-//
-// 7 shapes × 4 rotations × 4 blocks × (col,row) = 224 ints, flat in an intarr.
-// Index: ((shape*4 + rot)*4 + blk)*2 + (0=col|1=row). Aether has no mutable
-// top-level globals, so the table lives on the Game struct (built in mk_game)
-// and the accessors take `g`. shape -1 marks "no piece".
-SHAPE_STRIDE() -> int { return 32 }          // 4 rot * 4 blk * 2
-
-set_block(arr: ptr, s: int, rot: int, blk: int, col: int, row: int) {
-    base = (s * 4 + rot) * 4 * 2 + blk * 2
-    intarr_set_unchecked(arr, base, col)
-    intarr_set_unchecked(arr, base + 1, row)
-}
-// Define one rotation state (4 blocks) in one call.
-set_rot(arr: ptr, s: int, rot: int, c0: int, r0: int, c1: int, r1: int, c2: int, r2: int, c3: int, r3: int) {
-    set_block(arr, s, rot, 0, c0, r0)
-    set_block(arr, s, rot, 1, c1, r1)
-    set_block(arr, s, rot, 2, c2, r2)
-    set_block(arr, s, rot, 3, c3, r3)
-}
-
-build_shapes() -> ptr {
-    arr, _err = intarr.new(7 * SHAPE_STRIDE())
-    fill_shapes(arr)
-    return arr
-}
-
-fill_shapes(arr: ptr) {
-    // 0: I (cyan)
-    set_rot(arr, 0, 0, 0,1, 1,1, 2,1, 3,1)
-    set_rot(arr, 0, 1, 2,0, 2,1, 2,2, 2,3)
-    set_rot(arr, 0, 2, 0,2, 1,2, 2,2, 3,2)
-    set_rot(arr, 0, 3, 1,0, 1,1, 1,2, 1,3)
-    // 1: J (blue)
-    set_rot(arr, 1, 0, 0,0, 0,1, 1,1, 2,1)
-    set_rot(arr, 1, 1, 1,0, 2,0, 1,1, 1,2)
-    set_rot(arr, 1, 2, 0,1, 1,1, 2,1, 2,2)
-    set_rot(arr, 1, 3, 1,0, 1,1, 0,2, 1,2)
-    // 2: L (orange)
-    set_rot(arr, 2, 0, 2,0, 0,1, 1,1, 2,1)
-    set_rot(arr, 2, 1, 1,0, 1,1, 1,2, 2,2)
-    set_rot(arr, 2, 2, 0,1, 1,1, 2,1, 0,2)
-    set_rot(arr, 2, 3, 0,0, 1,0, 1,1, 1,2)
-    // 3: O (yellow) — same for all rotations
-    set_rot(arr, 3, 0, 1,0, 2,0, 1,1, 2,1)
-    set_rot(arr, 3, 1, 1,0, 2,0, 1,1, 2,1)
-    set_rot(arr, 3, 2, 1,0, 2,0, 1,1, 2,1)
-    set_rot(arr, 3, 3, 1,0, 2,0, 1,1, 2,1)
-    // 4: S (green)
-    set_rot(arr, 4, 0, 1,0, 2,0, 0,1, 1,1)
-    set_rot(arr, 4, 1, 1,0, 1,1, 2,1, 2,2)
-    set_rot(arr, 4, 2, 1,1, 2,1, 0,2, 1,2)
-    set_rot(arr, 4, 3, 0,0, 0,1, 1,1, 1,2)
-    // 5: T (purple)
-    set_rot(arr, 5, 0, 1,0, 0,1, 1,1, 2,1)
-    set_rot(arr, 5, 1, 1,0, 1,1, 2,1, 1,2)
-    set_rot(arr, 5, 2, 0,1, 1,1, 2,1, 1,2)
-    set_rot(arr, 5, 3, 1,0, 0,1, 1,1, 1,2)
-    // 6: Z (red)
-    set_rot(arr, 6, 0, 0,0, 1,0, 1,1, 2,1)
-    set_rot(arr, 6, 1, 2,0, 1,1, 2,1, 1,2)
-    set_rot(arr, 6, 2, 0,1, 1,1, 1,2, 2,2)
-    set_rot(arr, 6, 3, 1,0, 0,1, 1,1, 0,2)
-}
-
-// returns (col, row) of block `blk` in shape `s` rotation `rot`.
-get_block(g: *Game, s: int, rot: int, blk: int) -> (int, int) {
-    base = (s * 4 + rot) * 4 * 2 + blk * 2
-    return intarr_get_unchecked(g.shapes, base), intarr_get_unchecked(g.shapes, base + 1)
-}
-
-// Fill colour string for shape index s (matches the original's palette).
-shape_color(s: int) -> string {
-    if s == 0 { return "rgb(0,255,255)" }    // I cyan
-    if s == 1 { return "rgb(0,0,255)" }       // J blue
-    if s == 2 { return "rgb(255,165,0)" }     // L orange
-    if s == 3 { return "rgb(255,255,0)" }     // O yellow
-    if s == 4 { return "rgb(0,255,0)" }       // S green
-    if s == 5 { return "rgb(128,0,128)" }     // T purple
-    return "rgb(255,0,0)"                       // Z red
-}
-
-// ─── Game state ──────────────────────────────────────────────────────────────
-//
-// phase: 0=ready 1=playing 2=paused 3=gameover (`state` is a reserved word).
-// board is a flat intarr (CELLS slots, -1 empty else shape index).
-struct Game {
-    board: ptr
-    shapes: ptr             // the 7×4×4×2 tetromino table (built in mk_game)
-    cur_shape: int
-    cur_rot: int
-    cur_col: int
-    cur_row: int
-    next_shape: int
-    phase: int
-    score: int
-    lines: int
-    level: int
-    last_drop: float        // ms timestamp of last gravity step
-    // UI handles for label updates
+// ─── App-side view state ─────────────────────────────────────────────────────
+// The UI handles the engine deliberately doesn't know about, held in a heap
+// struct so the render/input closures can reach them.
+struct View {
     score_lbl: int
     status_lbl: int
 }
-
-mk_game() -> *Game {
-    g = malloc(112) as *Game
-    arr, _e = intarr.new_filled(CELLS(), -1)
-    g.board = arr
-    g.shapes = build_shapes()
-    g.cur_shape = -1
-    g.cur_rot = 0
-    g.cur_col = 3
-    g.cur_row = 0
-    g.next_shape = 0
-    g.phase = 0
-    g.score = 0
-    g.lines = 0
-    g.level = 1
-    g.last_drop = 0.0
-    g.score_lbl = 0
-    g.status_lbl = 0
-    return g
+mk_view() -> *View {
+    v = malloc(16) as *View
+    v.score_lbl = 0
+    v.status_lbl = 0
+    return v
 }
 
-board_get(g: *Game, col: int, row: int) -> int {
-    return intarr_get_unchecked(g.board, row * BOARD_W() + col)
-}
-board_set(g: *Game, col: int, row: int, v: int) {
-    intarr_set_unchecked(g.board, row * BOARD_W() + col, v)
+refresh_labels(g: *Game, view: *View) {
+    if view.score_lbl != 0 {
+        s = "Score "
+        s = string.concat(s, string.from_int(g.score))
+        s = string.concat(s, "   Lines ")
+        s = string.concat(s, string.from_int(g.lines))
+        s = string.concat(s, "   Level ")
+        s = string.concat(s, string.from_int(g.level))
+        aether_ui_text_set_string(view.score_lbl, s)
+    }
+    if view.status_lbl != 0 {
+        msg = "Arrows / WASD to move, Up to rotate, Space to drop, P to pause"
+        if g.phase == 2 { msg = "Paused — P or Esc to resume" }
+        if g.phase == 3 { msg = "Game over — press any key to play again" }
+        aether_ui_text_set_string(view.status_lbl, msg)
+    }
 }
 
-// Does shape `s` rotation `rot` at (col,row) collide with walls/floor/board?
-collides(g: *Game, col: int, row: int, rot: int) -> int {
-    if g.cur_shape < 0 { return 0 }
-    blk = 0
-    while blk < 4 {
-        bc, br = get_block(g, g.cur_shape, rot, blk)
-        nc = col + bc
-        nr = row + br
-        if nc < 0 { return 1 }
-        if nc >= BOARD_W() { return 1 }
-        if nr >= BOARD_H() { return 1 }
-        if nr >= 0 {
-            if board_get(g, nc, nr) >= 0 { return 1 }
+// ─── Rendering ───────────────────────────────────────────────────────────────
+// One bevelled cell: a darker border rect + a lighter inner rect.
+draw_cell(rn: ptr, col: int, row: int, color: string) {
+    draw_cell_px(rn, col * 1.0 * BLOCK(), row * 1.0 * BLOCK(), color)
+}
+// Draw a cell at an arbitrary pixel position — lets the falling piece sit at a
+// fractional row so it descends smoothly between grid steps.
+draw_cell_px(rn: ptr, x: float, y: float, color: string) {
+    border = vg.rect(rn, x, y, BLOCK(), BLOCK())
+    vg.fill(border, "rgb(51,51,51)")
+    inner = vg.rect(rn, x + 2.0, y + 2.0, BLOCK() - 4.0, BLOCK() - 4.0)
+    vg.fill(inner, color)
+}
+
+draw_board(rn: ptr, g: *Game, now: float) {
+    // Background.
+    bg = vg.rect(rn, 0.0, 0.0, BOARD_PX_W(), BOARD_PX_H())
+    vg.fill(bg, "rgb(28,28,28)")
+
+    // Locked cells.
+    row = 0
+    while row < BOARD_H() {
+        col = 0
+        while col < BOARD_W() {
+            v = board_get(g, col, row)
+            if v >= 0 { draw_cell(rn, col, row, shape_color(v)) }
+            col = col + 1
         }
-        blk = blk + 1
+        row = row + 1
     }
-    return 0
-}
 
-spawn_piece(g: *Game) {
-    g.cur_shape = g.next_shape
-    g.cur_rot = 0
-    g.cur_col = 3
-    g.cur_row = 0
-    g.next_shape = math.random_int(0, 6)
-    g.last_drop = 0.0                           // re-seed gravity clock for this piece
-    if collides(g, g.cur_col, g.cur_row, g.cur_rot) == 1 {
-        g.phase = 3                            // game over
-    }
-}
-
-start_game(g: *Game) {
-    intarr_fill(g.board, -1)
-    g.score = 0
-    g.lines = 0
-    g.level = 1
-    g.next_shape = math.random_int(0, 6)
-    g.phase = 1
-    g.last_drop = 0.0
-    spawn_piece(g)
-    refresh_labels(g)
-}
-
-move_left(g: *Game) {
-    if g.phase != 1 { return }
-    if collides(g, g.cur_col - 1, g.cur_row, g.cur_rot) == 0 { g.cur_col = g.cur_col - 1 }
-}
-move_right(g: *Game) {
-    if g.phase != 1 { return }
-    if collides(g, g.cur_col + 1, g.cur_row, g.cur_rot) == 0 { g.cur_col = g.cur_col + 1 }
-}
-rotate(g: *Game) {
-    if g.phase != 1 { return }
-    nr = (g.cur_rot + 1) % 4
-    if collides(g, g.cur_col, g.cur_row, nr) == 0 { g.cur_rot = nr }
-}
-soft_drop(g: *Game) {
-    if g.phase != 1 { return }
-    if collides(g, g.cur_col, g.cur_row + 1, g.cur_rot) == 0 {
-        g.cur_row = g.cur_row + 1
-        g.score = g.score + 1
-        refresh_labels(g)
-    }
-}
-hard_drop(g: *Game) {
-    if g.phase != 1 { return }
-    while collides(g, g.cur_col, g.cur_row + 1, g.cur_rot) == 0 {
-        g.cur_row = g.cur_row + 1
-        g.score = g.score + 2
-    }
-    lock_piece(g)
-    refresh_labels(g)
-}
-
-lock_piece(g: *Game) {
-    blk = 0
-    while blk < 4 {
-        bc, br = get_block(g, g.cur_shape, g.cur_rot, blk)
-        col = g.cur_col + bc
-        row = g.cur_row + br
-        if row >= 0 {
-            if row < BOARD_H() {
-                if col >= 0 {
-                    if col < BOARD_W() { board_set(g, col, row, g.cur_shape) }
+    // Current falling piece — drawn at a FRACTIONAL row so it glides between
+    // grid steps instead of snapping. frac is how far through the current
+    // gravity interval we are (0→1), applied only while the piece can actually
+    // fall — a resting piece stays on its grid row until it locks.
+    if g.cur_shape >= 0 {
+        if g.phase == 1 {
+            frac = 0.0
+            if g.last_drop > 0.0 {
+                if collides(g, g.cur_col, g.cur_row + 1, g.cur_rot) == 0 {
+                    frac = (now - g.last_drop) / current_interval(g)
+                    if frac < 0.0 { frac = 0.0 }
+                    if frac > 1.0 { frac = 1.0 }
                 }
             }
-        }
-        blk = blk + 1
-    }
-    clear_lines(g)
-    spawn_piece(g)
-}
-
-// Is board row `row` completely filled?
-row_full(g: *Game, row: int) -> int {
-    col = 0
-    while col < BOARD_W() {
-        if board_get(g, col, row) < 0 { return 0 }
-        col = col + 1
-    }
-    return 1
-}
-// Copy row `src` down into row `dst` (collapse after a clear).
-copy_row(g: *Game, dst: int, src: int) {
-    col = 0
-    while col < BOARD_W() {
-        board_set(g, col, dst, board_get(g, col, src))
-        col = col + 1
-    }
-}
-clear_row_top(g: *Game) {
-    col = 0
-    while col < BOARD_W() { board_set(g, col, 0, -1); col = col + 1 }
-}
-
-clear_lines(g: *Game) {
-    cleared = 0
-    row = BOARD_H() - 1
-    while row >= 0 {
-        if row_full(g, row) == 1 {
-            // shift everything above `row` down by one, clear the top row
-            r = row
-            while r > 0 {
-                copy_row(g, r, r - 1)
-                r = r - 1
+            color = shape_color(g.cur_shape)
+            blk = 0
+            while blk < 4 {
+                bc, br = get_block(g, g.cur_shape, g.cur_rot, blk)
+                c = g.cur_col + bc
+                r = g.cur_row + br
+                if r >= 0 {
+                    px = c * 1.0 * BLOCK()
+                    py = (r * 1.0 + frac) * BLOCK()
+                    draw_cell_px(rn, px, py, color)
+                }
+                blk = blk + 1
             }
-            clear_row_top(g)
-            cleared = cleared + 1
-            // recheck the same row (it now holds what was above)
-        } else {
-            row = row - 1
         }
     }
-    if cleared > 0 {
-        g.lines = g.lines + cleared
-        g.score = g.score + line_score(cleared) * g.level
-        nl = g.lines / 10 + 1
-        if nl > g.level { g.level = nl }
-    }
-}
-line_score(n: int) -> int {
-    if n == 1 { return 100 }
-    if n == 2 { return 300 }
-    if n == 3 { return 500 }
-    if n >= 4 { return 800 }
-    return 0
-}
 
-toggle_pause(g: *Game) {
-    if g.phase == 1 {
-        g.phase = 2
-    } else {
-        if g.phase == 2 {
-            g.phase = 1
-            g.last_drop = 0.0          // resume drops from the next frame
-        }
+    // Overlay text for non-playing states.
+    if g.phase == 0 {
+        t = vg.text_sized(rn, 40.0, 280.0, 22.0, "Press a key to start")
+        vg.fill(t, "rgb(255,255,255)")
     }
-    refresh_labels(g)
-}
-
-// Gravity: drop one cell on interval; lock + spawn at the floor.
-// `now` is the live loop's clock in SECONDS (vg_live passes ms_to_secs(now)),
-// so the drop interval is in seconds too. last_drop is seeded on the first tick
-// after a piece spawns (last_drop == 0.0) so a fresh piece gets a full interval
-// rather than dropping instantly (the epoch-relative `now` is a large value).
-tick(g: *Game, now: float) {
-    if g.phase != 1 { return }
-    if g.cur_shape < 0 { return }
-    if g.last_drop == 0.0 { g.last_drop = now; return }
-    interval = DROP_SEC() - (g.level - 1) * 0.06
-    if interval < 0.12 { interval = 0.12 }
-    if now - g.last_drop >= interval {
-        g.last_drop = now
-        if collides(g, g.cur_col, g.cur_row + 1, g.cur_rot) == 0 {
-            g.cur_row = g.cur_row + 1
-        } else {
-            lock_piece(g)
-        }
-        refresh_labels(g)
+    if g.phase == 2 {
+        t = vg.text_sized(rn, 95.0, 280.0, 26.0, "PAUSED")
+        vg.fill(t, "rgb(255,255,0)")
+    }
+    if g.phase == 3 {
+        t = vg.text_sized(rn, 70.0, 270.0, 26.0, "GAME OVER")
+        vg.fill(t, "rgb(255,80,80)")
+        t2 = vg.text_sized(rn, 50.0, 305.0, 16.0, "Press a key to retry")
+        vg.fill(t2, "rgb(220,220,220)")
     }
 }
 
-// ─── Input ───────────────────────────────────────────────────────────────────
-//
-// key is the GDK/platform key name (e.g. "Left", "a", "space", "Up").
+// ─── Input mapping (renderer → engine verbs) ─────────────────────────────────
 handle_key(g: *Game, key: string) {
     if g.phase == 0 { start_game(g); return }
     if g.phase == 3 { start_game(g); return }
@@ -395,90 +182,11 @@ handle_tap(g: *Game, x: float) {
     rotate(g)
 }
 
-// ─── Rendering ───────────────────────────────────────────────────────────────
-//
-// One bevelled cell: a darker border rect + a lighter inner rect.
-draw_cell(rn: ptr, col: int, row: int, color: string) {
-    x = col * 1.0 * BLOCK()
-    y = row * 1.0 * BLOCK()
-    border = vg.rect(rn, x, y, BLOCK(), BLOCK())
-    vg.fill(border, "rgb(51,51,51)")
-    inner = vg.rect(rn, x + 2.0, y + 2.0, BLOCK() - 4.0, BLOCK() - 4.0)
-    vg.fill(inner, color)
-}
-
-draw_board(rn: ptr, g: *Game) {
-    // Background.
-    bg = vg.rect(rn, 0.0, 0.0, BOARD_PX_W(), BOARD_PX_H())
-    vg.fill(bg, "rgb(28,28,28)")
-
-    // Locked cells.
-    row = 0
-    while row < BOARD_H() {
-        col = 0
-        while col < BOARD_W() {
-            v = board_get(g, col, row)
-            if v >= 0 { draw_cell(rn, col, row, shape_color(v)) }
-            col = col + 1
-        }
-        row = row + 1
-    }
-
-    // Current falling piece.
-    if g.cur_shape >= 0 {
-        if g.phase == 1 {
-            color = shape_color(g.cur_shape)
-            blk = 0
-            while blk < 4 {
-                bc, br = get_block(g, g.cur_shape, g.cur_rot, blk)
-                c = g.cur_col + bc
-                r = g.cur_row + br
-                if r >= 0 { draw_cell(rn, c, r, color) }
-                blk = blk + 1
-            }
-        }
-    }
-
-    // Overlay text for non-playing states.
-    if g.phase == 0 {
-        t = vg.text_sized(rn, 40.0, 280.0, 22.0, "Press a key to start")
-        vg.fill(t, "rgb(255,255,255)")
-    }
-    if g.phase == 2 {
-        t = vg.text_sized(rn, 95.0, 280.0, 26.0, "PAUSED")
-        vg.fill(t, "rgb(255,255,0)")
-    }
-    if g.phase == 3 {
-        t = vg.text_sized(rn, 70.0, 270.0, 26.0, "GAME OVER")
-        vg.fill(t, "rgb(255,80,80)")
-        t2 = vg.text_sized(rn, 50.0, 305.0, 16.0, "Press a key to retry")
-        vg.fill(t2, "rgb(220,220,220)")
-    }
-}
-
-// ─── Label updates ─────────────────────────────────────────────────────────
-refresh_labels(g: *Game) {
-    if g.score_lbl != 0 {
-        s = "Score "
-        s = string.concat(s, string.from_int(g.score))
-        s = string.concat(s, "   Lines ")
-        s = string.concat(s, string.from_int(g.lines))
-        s = string.concat(s, "   Level ")
-        s = string.concat(s, string.from_int(g.level))
-        aether_ui_text_set_string(g.score_lbl, s)
-    }
-    if g.status_lbl != 0 {
-        msg = "Arrows / WASD to move, Up to rotate, Space to drop, P to pause"
-        if g.phase == 2 { msg = "Paused — P or Esc to resume" }
-        if g.phase == 3 { msg = "Game over — press any key to play again" }
-        aether_ui_text_set_string(g.status_lbl, msg)
-    }
-}
-
 // ─── App ─────────────────────────────────────────────────────────────────────
 main() {
-    math.random_seed(20260615)                 // deterministic-but-varied piece bag
+    math.random_seed(20260615)
     g = mk_game()
+    view = mk_view()
 
     window("Falling Blocks", 360, 720) {
         vstack(6) {
@@ -490,7 +198,7 @@ main() {
                 btn("Right") callback { move_right(g) }
                 btn("Drop") callback { hard_drop(g) }
             }
-            g.score_lbl = text("Score 0   Lines 0   Level 1")
+            view.score_lbl = text("Score 0   Lines 0   Level 1")
 
             vg(view_box(0, 0, 280, 560), 280, 560) {
                 anchor = rect(0, 0, 0, 0)
@@ -498,30 +206,27 @@ main() {
                 scene = vg.node_scene(root_node)
                 vg.scene_set_refreshing(scene, 1)
 
-                // Per-frame DRAW region: advance the game clock from the
-                // monotonic frame time `t` (ms), then render from state.
+                // Per-frame DRAW region: advance the engine from the monotonic
+                // frame time `t`, refresh labels from state, then render.
                 canvas_region(root_node, 0.0, 0.0, 280.0, 560.0) callback |rn: ptr, t: float| {
                     tick(g, t)
-                    draw_board(rn, g)
+                    refresh_labels(g, view)
+                    draw_board(rn, g, t)
                 }
                 cid = vg.scene_canvas(scene)
 
-                // Keyboard: the primitive built for this port. Routes the key
-                // name into the game (arrows / WASD / space / P).
                 canvas_on_key(cid) callback |key: string| {
                     handle_key(g, key)
                 }
-                // Tap fallback: left/centre/right thirds (start when idle).
+                // Tap fallback: unmap px→viewBox before splitting into thirds
+                // (the canvas fills wider than its 280 viewBox).
                 canvas_on_click(cid) callback |cx: float, cy: float| {
-                    handle_tap(g, cx)
+                    handle_tap(g, vg.scene_px_to_vb_x(scene, cx))
                 }
             }
 
-            g.status_lbl = text("Arrows / WASD to move, Up to rotate, Space to drop, P to pause")
+            view.status_lbl = text("Arrows / WASD to move, Up to rotate, Space to drop, P to pause")
         }
-        // AetherUIDriver: arm the HTTP test server when AETHER_UI_TEST_PORT set.
-        // Drives the buttons (/widget/{id}/click); the game is otherwise a
-        // plain window.
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }

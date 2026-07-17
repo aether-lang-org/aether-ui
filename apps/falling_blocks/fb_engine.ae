@@ -1,0 +1,347 @@
+// fb_engine.ae — Falling Blocks game logic, with NO UI or vg dependency.
+//
+// The pure core of the falling_blocks app: board state, the 7×4 tetromino
+// table, collision, rotation, movement, gravity, locking, line-clearing and
+// scoring. Nothing here touches widgets, the canvas or labels — which is what
+// makes it unit-testable (see test_fb_engine.ae). The renderer
+// (falling_blocks.ae) reads this state and draws it.
+//
+// Provenance: logic ported from Falling Blocks by Sander Klootwijk (GPL-3.0);
+// as a derivative of a GPL-3.0 work, THIS FILE is GPL-3.0 (a copyleft island —
+// see falling_blocks.ae for the full note).
+
+exports (
+    // types
+    Game,
+    // lifecycle
+    mk_game, start_game, toggle_pause,
+    // input verbs
+    move_left, move_right, rotate, soft_drop, hard_drop, tick,
+    // queries the renderer needs
+    board_get, collides, get_block, shape_color, current_interval,
+    // internals exposed for tests
+    lock_piece, clear_lines, spawn_piece, line_score,
+    // board dimensions
+    BOARD_W, BOARD_H, CELLS, DROP_SEC,
+    // deterministic test seams
+    eng_set_cell, eng_set_current, eng_set_next, eng_set_phase, eng_set_level
+)
+
+import std.math
+import std.intarr
+
+extern malloc(size: int) -> ptr
+
+// ─── Board / geometry constants ──────────────────────────────────────────────
+BOARD_W() -> int   { return 10 }
+BOARD_H() -> int   { return 20 }
+CELLS()   -> int   { return 200 }            // BOARD_W * BOARD_H
+DROP_SEC() -> float { return 0.6 }           // base gravity interval (seconds)
+
+// ─── Tetromino tables ────────────────────────────────────────────────────────
+// 7 shapes × 4 rotations × 4 blocks × (col,row), flat in an intarr. shape -1
+// marks "no piece".
+SHAPE_STRIDE() -> int { return 32 }          // 4 rot * 4 blk * 2
+
+set_block(arr: ptr, s: int, rot: int, blk: int, col: int, row: int) {
+    base = (s * 4 + rot) * 4 * 2 + blk * 2
+    intarr_set_unchecked(arr, base, col)
+    intarr_set_unchecked(arr, base + 1, row)
+}
+set_rot(arr: ptr, s: int, rot: int, c0: int, r0: int, c1: int, r1: int, c2: int, r2: int, c3: int, r3: int) {
+    set_block(arr, s, rot, 0, c0, r0)
+    set_block(arr, s, rot, 1, c1, r1)
+    set_block(arr, s, rot, 2, c2, r2)
+    set_block(arr, s, rot, 3, c3, r3)
+}
+
+build_shapes() -> ptr {
+    arr, _err = intarr.new(7 * SHAPE_STRIDE())
+    fill_shapes(arr)
+    return arr
+}
+
+fill_shapes(arr: ptr) {
+    // 0: I (cyan)
+    set_rot(arr, 0, 0, 0,1, 1,1, 2,1, 3,1)
+    set_rot(arr, 0, 1, 2,0, 2,1, 2,2, 2,3)
+    set_rot(arr, 0, 2, 0,2, 1,2, 2,2, 3,2)
+    set_rot(arr, 0, 3, 1,0, 1,1, 1,2, 1,3)
+    // 1: J (blue)
+    set_rot(arr, 1, 0, 0,0, 0,1, 1,1, 2,1)
+    set_rot(arr, 1, 1, 1,0, 2,0, 1,1, 1,2)
+    set_rot(arr, 1, 2, 0,1, 1,1, 2,1, 2,2)
+    set_rot(arr, 1, 3, 1,0, 1,1, 0,2, 1,2)
+    // 2: L (orange)
+    set_rot(arr, 2, 0, 2,0, 0,1, 1,1, 2,1)
+    set_rot(arr, 2, 1, 1,0, 1,1, 1,2, 2,2)
+    set_rot(arr, 2, 2, 0,1, 1,1, 2,1, 0,2)
+    set_rot(arr, 2, 3, 0,0, 1,0, 1,1, 1,2)
+    // 3: O (yellow) — same for all rotations
+    set_rot(arr, 3, 0, 1,0, 2,0, 1,1, 2,1)
+    set_rot(arr, 3, 1, 1,0, 2,0, 1,1, 2,1)
+    set_rot(arr, 3, 2, 1,0, 2,0, 1,1, 2,1)
+    set_rot(arr, 3, 3, 1,0, 2,0, 1,1, 2,1)
+    // 4: S (green)
+    set_rot(arr, 4, 0, 1,0, 2,0, 0,1, 1,1)
+    set_rot(arr, 4, 1, 1,0, 1,1, 2,1, 2,2)
+    set_rot(arr, 4, 2, 1,1, 2,1, 0,2, 1,2)
+    set_rot(arr, 4, 3, 0,0, 0,1, 1,1, 1,2)
+    // 5: T (purple)
+    set_rot(arr, 5, 0, 1,0, 0,1, 1,1, 2,1)
+    set_rot(arr, 5, 1, 1,0, 1,1, 2,1, 1,2)
+    set_rot(arr, 5, 2, 0,1, 1,1, 2,1, 1,2)
+    set_rot(arr, 5, 3, 1,0, 0,1, 1,1, 1,2)
+    // 6: Z (red)
+    set_rot(arr, 6, 0, 0,0, 1,0, 1,1, 2,1)
+    set_rot(arr, 6, 1, 2,0, 1,1, 2,1, 1,2)
+    set_rot(arr, 6, 2, 0,1, 1,1, 1,2, 2,2)
+    set_rot(arr, 6, 3, 1,0, 0,1, 1,1, 0,2)
+}
+
+// returns (col, row) of block `blk` in shape `s` rotation `rot`.
+get_block(g: *Game, s: int, rot: int, blk: int) -> (int, int) {
+    base = (s * 4 + rot) * 4 * 2 + blk * 2
+    return intarr_get_unchecked(g.shapes, base), intarr_get_unchecked(g.shapes, base + 1)
+}
+
+// Fill colour string for shape index s (the original's palette).
+shape_color(s: int) -> string {
+    if s == 0 { return "rgb(0,255,255)" }    // I cyan
+    if s == 1 { return "rgb(0,0,255)" }       // J blue
+    if s == 2 { return "rgb(255,165,0)" }     // L orange
+    if s == 3 { return "rgb(255,255,0)" }     // O yellow
+    if s == 4 { return "rgb(0,255,0)" }       // S green
+    if s == 5 { return "rgb(128,0,128)" }     // T purple
+    return "rgb(255,0,0)"                       // Z red
+}
+
+// ─── Game state ──────────────────────────────────────────────────────────────
+// phase: 0=ready 1=playing 2=paused 3=gameover. board: intarr(CELLS), -1 empty
+// else the shape index. NB no UI handles — the renderer keeps those.
+struct Game {
+    board: ptr
+    shapes: ptr
+    cur_shape: int
+    cur_rot: int
+    cur_col: int
+    cur_row: int
+    next_shape: int
+    phase: int
+    score: int
+    lines: int
+    level: int
+    last_drop: float        // seconds timestamp of the last gravity step
+}
+
+mk_game() -> *Game {
+    g = malloc(96) as *Game
+    arr, _e = intarr.new_filled(CELLS(), -1)
+    g.board = arr
+    g.shapes = build_shapes()
+    g.cur_shape = -1
+    g.cur_rot = 0
+    g.cur_col = 3
+    g.cur_row = 0
+    g.next_shape = 0
+    g.phase = 0
+    g.score = 0
+    g.lines = 0
+    g.level = 1
+    g.last_drop = 0.0
+    return g
+}
+
+board_get(g: *Game, col: int, row: int) -> int {
+    return intarr_get_unchecked(g.board, row * BOARD_W() + col)
+}
+board_set(g: *Game, col: int, row: int, v: int) {
+    intarr_set_unchecked(g.board, row * BOARD_W() + col, v)
+}
+
+// Does the CURRENT shape in rotation `rot` at (col,row) collide?
+collides(g: *Game, col: int, row: int, rot: int) -> int {
+    if g.cur_shape < 0 { return 0 }
+    blk = 0
+    while blk < 4 {
+        bc, br = get_block(g, g.cur_shape, rot, blk)
+        nc = col + bc
+        nr = row + br
+        if nc < 0 { return 1 }
+        if nc >= BOARD_W() { return 1 }
+        if nr >= BOARD_H() { return 1 }
+        if nr >= 0 {
+            if board_get(g, nc, nr) >= 0 { return 1 }
+        }
+        blk = blk + 1
+    }
+    return 0
+}
+
+spawn_piece(g: *Game) {
+    g.cur_shape = g.next_shape
+    g.cur_rot = 0
+    g.cur_col = 3
+    g.cur_row = 0
+    g.next_shape = math.random_int(0, 6)
+    g.last_drop = 0.0
+    if collides(g, g.cur_col, g.cur_row, g.cur_rot) == 1 {
+        g.phase = 3            // game over
+    }
+}
+
+start_game(g: *Game) {
+    intarr_fill(g.board, -1)
+    g.score = 0
+    g.lines = 0
+    g.level = 1
+    g.next_shape = math.random_int(0, 6)
+    g.phase = 1
+    g.last_drop = 0.0
+    spawn_piece(g)
+}
+
+move_left(g: *Game) {
+    if g.phase != 1 { return }
+    if collides(g, g.cur_col - 1, g.cur_row, g.cur_rot) == 0 { g.cur_col = g.cur_col - 1 }
+}
+move_right(g: *Game) {
+    if g.phase != 1 { return }
+    if collides(g, g.cur_col + 1, g.cur_row, g.cur_rot) == 0 { g.cur_col = g.cur_col + 1 }
+}
+rotate(g: *Game) {
+    if g.phase != 1 { return }
+    nr = (g.cur_rot + 1) % 4
+    if collides(g, g.cur_col, g.cur_row, nr) == 0 { g.cur_rot = nr }
+}
+soft_drop(g: *Game) {
+    if g.phase != 1 { return }
+    if collides(g, g.cur_col, g.cur_row + 1, g.cur_rot) == 0 {
+        g.cur_row = g.cur_row + 1
+        g.score = g.score + 1
+        g.last_drop = 0.0
+    }
+}
+hard_drop(g: *Game) {
+    if g.phase != 1 { return }
+    while collides(g, g.cur_col, g.cur_row + 1, g.cur_rot) == 0 {
+        g.cur_row = g.cur_row + 1
+        g.score = g.score + 2
+    }
+    lock_piece(g)
+}
+
+lock_piece(g: *Game) {
+    blk = 0
+    while blk < 4 {
+        bc, br = get_block(g, g.cur_shape, g.cur_rot, blk)
+        col = g.cur_col + bc
+        row = g.cur_row + br
+        if row >= 0 {
+            if row < BOARD_H() {
+                if col >= 0 {
+                    if col < BOARD_W() { board_set(g, col, row, g.cur_shape) }
+                }
+            }
+        }
+        blk = blk + 1
+    }
+    clear_lines(g)
+    spawn_piece(g)
+}
+
+// Is board row `row` completely filled?
+row_full(g: *Game, row: int) -> int {
+    col = 0
+    while col < BOARD_W() {
+        if board_get(g, col, row) < 0 { return 0 }
+        col = col + 1
+    }
+    return 1
+}
+copy_row(g: *Game, dst: int, src: int) {
+    col = 0
+    while col < BOARD_W() {
+        board_set(g, col, dst, board_get(g, col, src))
+        col = col + 1
+    }
+}
+clear_row_top(g: *Game) {
+    col = 0
+    while col < BOARD_W() { board_set(g, col, 0, -1); col = col + 1 }
+}
+
+clear_lines(g: *Game) {
+    cleared = 0
+    row = BOARD_H() - 1
+    while row >= 0 {
+        if row_full(g, row) == 1 {
+            r = row
+            while r > 0 {
+                copy_row(g, r, r - 1)
+                r = r - 1
+            }
+            clear_row_top(g)
+            cleared = cleared + 1
+            // recheck the same row (it now holds what was above)
+        } else {
+            row = row - 1
+        }
+    }
+    if cleared > 0 {
+        g.lines = g.lines + cleared
+        g.score = g.score + line_score(cleared) * g.level
+        nl = g.lines / 10 + 1
+        if nl > g.level { g.level = nl }
+    }
+}
+line_score(n: int) -> int {
+    if n == 1 { return 100 }
+    if n == 2 { return 300 }
+    if n == 3 { return 500 }
+    if n >= 4 { return 800 }
+    return 0
+}
+
+toggle_pause(g: *Game) {
+    if g.phase == 1 {
+        g.phase = 2
+    } else {
+        if g.phase == 2 {
+            g.phase = 1
+            g.last_drop = 0.0
+        }
+    }
+}
+
+// Gravity interval (seconds) at the current level — shared by tick (when to
+// step) and the renderer (how far through the step we are, for smooth descent).
+current_interval(g: *Game) -> float {
+    interval = DROP_SEC() - (g.level - 1) * 0.06
+    if interval < 0.12 { interval = 0.12 }
+    return interval
+}
+
+tick(g: *Game, now: float) {
+    if g.phase != 1 { return }
+    if g.cur_shape < 0 { return }
+    if g.last_drop == 0.0 { g.last_drop = now; return }
+    interval = current_interval(g)
+    if now - g.last_drop >= interval {
+        g.last_drop = now
+        if collides(g, g.cur_col, g.cur_row + 1, g.cur_rot) == 0 {
+            g.cur_row = g.cur_row + 1
+        } else {
+            lock_piece(g)
+        }
+    }
+}
+
+// ─── Deterministic test seams ─────────────────────────────────────────────────
+eng_set_cell(g: *Game, col: int, row: int, v: int) { board_set(g, col, row, v) }
+eng_set_current(g: *Game, s: int, rot: int, col: int, row: int) {
+    g.cur_shape = s; g.cur_rot = rot; g.cur_col = col; g.cur_row = row
+}
+eng_set_next(g: *Game, s: int) { g.next_shape = s }
+eng_set_phase(g: *Game, phase: int) { g.phase = phase }
+eng_set_level(g: *Game, level: int) { g.level = level }
