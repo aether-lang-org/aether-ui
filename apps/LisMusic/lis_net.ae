@@ -2,12 +2,14 @@
 //
 // The original runs a QThread worker that hits a third-party HTTP+JSON music
 // API (doc.vkeys.cn) and parses song title / artist / cover / stream URL out
-// of the reply, then signals the UI. Aether HAS std.http + std.json, so a
-// real fetch is *possible* — but it needs a live API key/endpoint and the
-// threaded-signal plumbing the widget loop doesn't yet expose, so this is a
-// stub that returns a small canned result set. Wiring the real API later
-// means implementing THIS module (parse JSON → Song list) — the search UI
-// only calls `search`.
+// of the reply, then signals the UI. std.http.client + std.json ARE complete,
+// so the fetch+parse itself is easy — but send_request is BLOCKING, and
+// aether-ui gives an app no way to run it off the UI thread and post the
+// result back (calling it from a button callback freezes the GTK loop). That
+// missing async-worker primitive is filed as
+// aether/asks/ui-async-worker-for-blocking-io.md, with THIS module as the
+// named consumer. Until it lands, search() returns a small canned set; wiring
+// the real API later means rewriting just this module's search().
 //
 // Original surface: getnetmusic(url) → netmusicready(list-of-songs)
 
