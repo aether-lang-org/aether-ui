@@ -175,14 +175,16 @@ term in one result row — cosmetic, doesn't affect the spec.
   was ALREADY done (`vg.text_anchored`, "middle"/"end" → center/trailing
   with real advance-width shifting; test_grammar_text asserts it). So this
   line is fully closed.
-- **Table/list:** virtualization (the GtkColumnView / recycled-cell vs
-  handle-registry question — the one real remaining table item),
-  ~~delegate cells (%-bars, chips)~~ **DONE** (`table_col_delegate` — a
-  column whose cells a closure builds widgets into), ~~row double-click~~
-  **DONE**, ~~multi-select~~ **DONE**, ~~**tree mode**~~ **DONE**
-  (`tree`/`tree_node`/`tree_add_child` — hierarchical rows, disclosure
-  toggle, independent subtrees; 3/3). All pure module.ae (backend-
-  agnostic); tree+delegate+table_bind verified GTK4+win32.
+- **Table/list:** ~~virtualization~~ **DONE 2026-07-18** — `vlist` renders
+  only a bounded WINDOW of row widgets over an arbitrarily large item list;
+  `vlist_scroll_to` slides the window and recycles (1000 items → 10
+  widgets; scroll → still 10). Pure module.ae, so all-backend; 3/3 on
+  GTK4. (This is the explicit-scroll form; a native-scroll gesture that
+  calls vlist_scroll_to as the viewport moves is a later enhancement.)
+  ~~delegate cells (%-bars, chips)~~ **DONE** (`table_col_delegate`),
+  ~~row double-click~~ **DONE**, ~~multi-select~~ **DONE**, ~~**tree
+  mode**~~ **DONE**. The whole Table/list line is now closed. All pure
+  module.ae (backend-agnostic); verified GTK4+win32.
 - **Effects:** ~~shadows on paths/text~~ **DONE 2026-07-18** — vg.shadow
   now covers `<path>` (silhouette follows the real outline via
   fill_path_in_buffer_scaled + path_bounds, not a bbox rect) and `<text>`
@@ -250,7 +252,9 @@ term in one result row — cosmetic, doesn't affect the spec.
   NSOpenPanel+NSSavePanel). Headless-no-op (returns ""), so no spec —
   verified headless-safe (no hang) on GTK4 + win32. (gp's xdg-open is a
   file *launcher*, a separate thing, still there.)
-- **Tab view** (`ui.tabs`) — navstack exists; tabs don't. S–M.
+- ~~**Tab view** (`ui.tabs`)~~ **DONE** — real tab strip on all three
+  backends (GtkStackSwitcher/GtkStack, NSTabView, win32 strip-over-zstack);
+  `tabs_demo` 4/4 everywhere. (This backlog note was stale.)
 - **Drag & drop** — inter-widget first (list reorder), inter-app later. M.
 - **Multi-window** — one window per app today (surface table is
   single-window by design). M, needs a driver story (window ids in

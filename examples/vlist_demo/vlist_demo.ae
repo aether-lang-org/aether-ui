@@ -1,0 +1,44 @@
+// Aether UI virtualized list — only a window of row widgets is ever realized,
+// no matter how many items. 1000 items, window of 10 → ~10 row widgets;
+// scrolling recycles them.
+import ui
+import ui (window, vstack, text, btn,
+    vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern malloc(size: int) -> ptr
+
+struct Item { n: int }
+mk_item(n: int) -> ptr {
+    it = malloc(16) as *Item
+    it.n = n
+    return it as ptr
+}
+
+main() {
+    // 1000 items.
+    items = list.new()
+    k = 0
+    while k < 1000 {
+        _ = list.add(items, mk_item(k))
+        k = k + 1
+    }
+
+    window("virtualized list", 300, 320) {
+        vstack(8) {
+            v = vlist("v", 10, |item: ptr, i: int, parent: int| {
+                it = item as *Item
+                _t = text(parent, string.concat("row ", string.from_int(it.n)))
+            })
+            vlist_set(v, items)
+            // Buttons scroll the window so a spec can drive it.
+            _top = btn("top") callback { vlist_scroll_to(v, 0) }
+            _mid = btn("to 500") callback { vlist_scroll_to(v, 500) }
+            _end = btn("to end") callback { vlist_scroll_to(v, 999) }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

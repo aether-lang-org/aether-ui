@@ -55,6 +55,7 @@ exports (
     on_sort,
     tree, tree_node, tree_add_child, tree_set_expanded, tree_refresh,
     tree_visible_count,
+    vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_from_bytes, image_size,
     canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -1946,6 +1947,92 @@ tree_visible_count(tp: ptr) -> int {
     t = tp as *TreeDef
     if t.flat == null { return 0 }
     return list.size(t.flat)
+}
+
+// ── Virtualized list (recycled window over a large item list) ───────
+// A vlist holds the FULL item list but only ever realizes a window of
+// `window` row widgets — the visible slice [first, first+window). Scrolling
+// shifts the window and re-renders that slice, so widget count stays bounded
+// no matter how many items there are (10k items, ~window widgets). The render
+// closure receives the ABSOLUTE index so rows can show their true position.
+//   v = vlist("v", 12, |item, i, parent| { text(parent, label_of(item, i)) })
+//   vlist_set(v, big_list)          // renders items 0..11
+//   vlist_scroll_to(v, 500)         // window slides to 500..511, recycles
+struct VList {
+    container: int,     // the vstack the window's rows live in
+    render: ptr,        // boxed |item, absolute_i, parent|
+    items: ptr,         // the full std.list (not owned)
+    window: int,        // max rows realized at once
+    first: int          // current window start index
+}
+
+vlist(_ctx: ptr, orientation: string, window: int, render: fn) -> ptr {
+    h = 0
+    if string.equals(orientation, "h") == 1 {
+        h = aether_ui_hstack_create(2)
+    } else {
+        h = aether_ui_vstack_create(2)
+    }
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, h)
+    }
+    v = malloc(40) as *VList
+    v.container = h
+    v.render = box_closure(render)
+    v.items = null
+    v.window = window
+    v.first = 0
+    return v as ptr
+}
+
+// Render the current window [first, first+window) of `items` into the
+// container. Only up to `window` widgets are ever created.
+_vlist_render(v: *VList) {
+    aether_ui_clear_children_impl(v.container)
+    if v.items == null { return }
+    r = unbox_closure(v.render)
+    n = list.size(v.items)
+    i = v.first
+    last = v.first + v.window
+    if last > n { last = n }
+    while i < last {
+        it, _e = list.get(v.items, i)
+        _each_invoke(r, it, i, v.container)   // absolute index i
+        i = i + 1
+    }
+}
+
+vlist_set(vp: ptr, items: ptr) {
+    v = vp as *VList
+    v.items = items
+    v.first = 0
+    _vlist_render(v)
+}
+
+// Slide the window so it starts at `index` (clamped so it never runs past the
+// end), then re-render. This is the scroll primitive; a native-scroll gesture
+// would call it as the viewport moves.
+vlist_scroll_to(vp: ptr, index: int) {
+    v = vp as *VList
+    if v.items == null { return }
+    n = list.size(v.items)
+    maxfirst = n - v.window
+    if maxfirst < 0 { maxfirst = 0 }
+    f = index
+    if f < 0 { f = 0 }
+    if f > maxfirst { f = maxfirst }
+    v.first = f
+    _vlist_render(v)
+}
+
+vlist_count(vp: ptr) -> int {
+    v = vp as *VList
+    if v.items == null { return 0 }
+    return list.size(v.items)
+}
+vlist_window_first(vp: ptr) -> int {
+    v = vp as *VList
+    return v.first
 }
 
 // table_on_select(t) callback |i: int| — row selection (delegates to listbox).

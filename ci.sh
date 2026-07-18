@@ -60,7 +60,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo)
+EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -547,6 +547,9 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=polish_demo/spec_polish_demo \
     run_server_test "$(EX_BIN polish_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" polish_demo || FAIL=$((FAIL + 1))
+    UI_SPEC=vlist_demo/spec_vlist_demo \
+    run_server_test "$(EX_BIN vlist_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" vlist_demo || FAIL=$((FAIL + 1))
 fi
 
 echo "=== Phase 5l: AetherUIDriver game specs (falling_blocks / svg_tetris / rubiks_cube) ==="
