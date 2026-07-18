@@ -69,6 +69,12 @@ static inline void invoke_closure(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
 }
 
+// Tabs strip clicks are resolved in WM_COMMAND, which is defined long before
+// the tabs implementation; forward-declare the two hooks it needs.
+typedef struct TabsState TabsState;
+static TabsState* tabs_state_for_button(int btn_handle, int* out_index);
+static void tabs_do_select(TabsState* ts, int index, int fire);
+
 // ---------------------------------------------------------------------------
 // AETHER_UI_HEADLESS contract — set by CI, widget smoke tests, or any
 // caller that wants to exercise the backend without a user. Every API
@@ -148,6 +154,7 @@ typedef enum {
     WK_SHEET,
     WK_GRID,
     WK_SCRIM,     // overlay modal scrim (full-client click-eater)
+    WK_TABS,      // native tab strip over a page stack
 } WidgetKind;
 
 typedef struct {
@@ -631,6 +638,33 @@ static void stack_do_layout(HWND stack_hwnd) {
     }
     if (nchildren == 0) { free(children); return; }
 
+    // Tabs: child[0] is the header strip (hstack of tab buttons, measured
+    // height at the top), child[1] is the content zstack (the pages) filling
+    // all remaining space. Any extra children (shouldn't happen) stack under.
+    if (sw->kind == WK_TABS) {
+        int header_h = 0;
+        {
+            int hh = handle_for_hwnd(children[0]);
+            Widget* hw = widget_at(hh);
+            int mw = 0;
+            if (hw) measure_widget(hw, &mw, &header_h);
+            if (header_h <= 0) header_h = 30;
+        }
+        SetWindowPos(children[0], NULL,
+                     sl->padding_left, sl->padding_top,
+                     avail_w, header_h, SWP_NOZORDER | SWP_NOACTIVATE);
+        int content_y = sl->padding_top + header_h + sl->spacing;
+        int content_h = (client.bottom - client.top) - content_y - sl->padding_bottom;
+        if (content_h < 0) content_h = 0;
+        for (int i = 1; i < nchildren; i++) {
+            SetWindowPos(children[i], NULL,
+                         sl->padding_left, content_y,
+                         avail_w, content_h, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        free(children);
+        return;
+    }
+
     // ZStack: overlay every child filling the client area.
     if (orientation == 2) {
         for (int i = 0; i < nchildren; i++) {
@@ -752,7 +786,12 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             Widget* cw = widget_at(ch);
             if (cw) {
                 if (cw->kind == WK_BUTTON && (code == BN_CLICKED || code == 0)) {
-                    if (!cw->sealed) invoke_closure(cw->on_click);
+                    // A tab-strip button selects its tab (no user on_click).
+                    int tab_idx = -1;
+                    TabsState* ts = tabs_state_for_button(ch, &tab_idx);
+                    if (ts) {
+                        if (!cw->sealed) tabs_do_select(ts, tab_idx, 1);
+                    } else if (!cw->sealed) invoke_closure(cw->on_click);
                 } else if (cw->kind == WK_TOGGLE && code == BN_CLICKED) {
                     if (!cw->sealed) invoke_closure(cw->on_change);
                 } else if ((cw->kind == WK_TEXTFIELD || cw->kind == WK_SECUREFIELD
@@ -1693,29 +1732,152 @@ int aether_ui_wrap_create(void) {
     return create_stack(0, 6);
 }
 
-// tabs stub: a vertical stack; each tab() appends its page. No tab strip,
-// no page switching yet (real Win32 = SysTabControl32 / a header of
-// buttons over a WK_ZSTACK) — pages just stack. Keeps the ABI + build
-// green; the composite is walkable so specs see the pages.
-int aether_ui_tabs_create(void* boxed_closure) {
-    (void)boxed_closure;
-    return create_stack(1, 0);  // vertical
+// tabs — a native tab strip over a page stack.
+//
+// GTK builds this from GtkStackSwitcher + GtkStack; AppKit uses NSTabView.
+// Win32 has no single control that draws a strip AND owns page views the way
+// the DSL needs (SysTabControl32 draws only the strip; you still manage the
+// pages), so we compose it from the primitives we already have: the tabs
+// widget is a vstack tagged WK_TABS holding
+//   child[0] = a header hstack of one push-button per tab (the strip), and
+//   child[1] = a zstack of page vstacks (only the selected page is shown).
+// stack_do_layout() special-cases WK_TABS to lay the strip on top and let the
+// page zstack fill the rest. Clicking a strip button selects that index;
+// tabs_select() does the same programmatically. Both drive tabs_do_select(),
+// which shows the page, restyles the strip, and fires on_change deduped
+// against the last index (matching GTK/AppKit).
+struct TabsState {
+    int        container_handle;  // the WK_TABS vstack
+    int        header_handle;     // the strip hstack
+    int        content_handle;    // the page zstack
+    int        page_count;
+    int        selected;
+    AeClosure* on_change;
+    int        btn_handles[64];   // strip button handle per page
+    int        page_handles[64];  // page vstack handle per page
+};
+
+static TabsState* tabs_states = NULL;
+static int tabs_state_count = 0;
+static int tabs_state_capacity = 0;
+
+static TabsState* tabs_state_for_handle(int container_handle) {
+    for (int i = 0; i < tabs_state_count; i++) {
+        if (tabs_states[i].container_handle == container_handle)
+            return &tabs_states[i];
+    }
+    return NULL;
 }
+
+// Map a strip-button HWND back to (its tabs, its index). Used by WM_COMMAND to
+// turn a button click into a tab selection without threading an index through
+// the button's closure ABI.
+static TabsState* tabs_state_for_button(int btn_handle, int* out_index) {
+    for (int i = 0; i < tabs_state_count; i++) {
+        for (int p = 0; p < tabs_states[i].page_count; p++) {
+            if (tabs_states[i].btn_handles[p] == btn_handle) {
+                if (out_index) *out_index = p;
+                return &tabs_states[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+// Show the selected page, hide the rest, mark the active strip button (bold),
+// and fire on_change if the index actually changed.
+static void tabs_do_select(TabsState* ts, int index, int fire) {
+    if (!ts || index < 0 || index >= ts->page_count) return;
+    for (int p = 0; p < ts->page_count; p++) {
+        Widget* pg = widget_at(ts->page_handles[p]);
+        if (pg) ShowWindow(pg->hwnd, p == index ? SW_SHOW : SW_HIDE);
+        // Active strip button gets a bold font as the visible selection cue.
+        Widget* bw = widget_at(ts->btn_handles[p]);
+        if (bw && bw->hwnd) {
+            HFONT base = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            if (p == index) {
+                LOGFONTW lf; GetObjectW(base, sizeof(lf), &lf);
+                lf.lfWeight = FW_BOLD;
+                HFONT bold = CreateFontIndirectW(&lf);
+                if (bw->custom_font) DeleteObject(bw->custom_font);
+                bw->custom_font = bold;
+                SendMessageW(bw->hwnd, WM_SETFONT, (WPARAM)bold, TRUE);
+            } else {
+                if (bw->custom_font) { DeleteObject(bw->custom_font); bw->custom_font = NULL; }
+                SendMessageW(bw->hwnd, WM_SETFONT, (WPARAM)base, TRUE);
+            }
+        }
+    }
+    int changed = (ts->selected != index);
+    ts->selected = index;
+    Widget* content = widget_at(ts->content_handle);
+    if (content) stack_do_layout(content->hwnd);
+    if (fire && changed) invoke_closure(ts->on_change);
+}
+
+int aether_ui_tabs_create(void* boxed_closure) {
+    int container = create_stack(1, 0);  // vertical: strip over content
+    Widget* cw = widget_at(container);
+    if (cw) cw->kind = WK_TABS;
+
+    int header = create_stack(0, 4);     // horizontal strip
+    int content = create_stack(2, 0);    // zstack of pages
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)container, header);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)container, content);
+
+    if (tabs_state_count >= tabs_state_capacity) {
+        tabs_state_capacity = tabs_state_capacity == 0 ? 8 : tabs_state_capacity * 2;
+        tabs_states = (TabsState*)realloc(tabs_states,
+                                          sizeof(TabsState) * tabs_state_capacity);
+    }
+    TabsState* ts = &tabs_states[tabs_state_count++];
+    ts->container_handle = container;
+    ts->header_handle = header;
+    ts->content_handle = content;
+    ts->page_count = 0;
+    ts->selected = 0;
+    ts->on_change = (AeClosure*)boxed_closure;
+    return container;
+}
+
 int aether_ui_tab_add(int tabs_handle, const char* title) {
-    (void)title;
-    // Return an inner vstack parented into the tabs stack, so the DSL
-    // block's children attach inside the page (matches the GTK contract).
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    if (!ts || ts->page_count >= 64) return 0;
+    int idx = ts->page_count;
+
+    // Strip button for this tab (click → select this index; wired in WM_COMMAND).
+    int btn = aether_ui_button_create_plain(title ? title : "");
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)ts->header_handle, btn);
+
+    // Page body is a vstack, so the tab's block children attach as in any vstack.
     int page = create_stack(1, 0);
-    aether_ui_widget_add_child_ctx((void*)(intptr_t)tabs_handle, page);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)ts->content_handle, page);
+
+    ts->btn_handles[idx] = btn;
+    ts->page_handles[idx] = page;
+    ts->page_count++;
+
+    // First page shows; later pages start hidden until selected.
+    Widget* pg = widget_at(page);
+    if (pg) ShowWindow(pg->hwnd, idx == 0 ? SW_SHOW : SW_HIDE);
+    if (idx == 0) tabs_do_select(ts, 0, 0);  // bold the first strip button
     return page;
 }
-int aether_ui_tabs_selected(int tabs_handle) { (void)tabs_handle; return -1; }
-int aether_ui_tabs_count(int tabs_handle)    { (void)tabs_handle; return 0; }
+
+int aether_ui_tabs_selected(int tabs_handle) {
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    return ts && ts->page_count > 0 ? ts->selected : -1;
+}
+int aether_ui_tabs_count(int tabs_handle) {
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    return ts ? ts->page_count : 0;
+}
 void aether_ui_tabs_select(int tabs_handle, int index) {
-    (void)tabs_handle; (void)index;
+    tabs_do_select(tabs_state_for_handle(tabs_handle), index, 1);
 }
 void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
-    (void)tabs_handle; (void)boxed_closure;
+    TabsState* ts = tabs_state_for_handle(tabs_handle);
+    if (ts) ts->on_change = (AeClosure*)boxed_closure;
 }
 
 int aether_ui_progressbar_create(double fraction) {
@@ -3715,6 +3877,7 @@ static const char* widget_kind_name(WidgetKind k) {
         case WK_WINDOW: return "window";
         case WK_SHEET: return "sheet";
         case WK_SCRIM: return "scrim";
+        case WK_TABS: return "tabs";
         default: return "widget";
     }
 }
@@ -3917,8 +4080,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             return 0;
         }
         if (ctx->action == AETHER_DRV_TAB_SELECT) {
-            // Win32 tabs is still a plain stack (no switching), so
-            // tabs_selected answers -1 — the honest "unwired" signal.
+            // Real tab strip: select the page and read the resulting index back.
             aether_ui_tabs_select(ctx->handle, ctx->ival);
             ctx->retval = aether_ui_tabs_selected(ctx->handle);
             ctx->result = 0;
