@@ -90,8 +90,16 @@ TEXT-kind PropBinding on a float cell.
   typed state; when that lands, an update to the list state calls
   today's explicit `each_update/table_update` internally. The explicit
   calls stay the primitive.
-- Two-way binding (textfield ⇄ string state) is out until a consumer
-  demands it; the change-callback idiom covers it.
+- ~~Two-way binding (textfield ⇄ string state) is out until a consumer
+  demands it~~ **DONE 2026-07-18.** `bind_value(widget, string_state)` +
+  the terse `textfield_bound(placeholder, state)` (SwiftUI
+  `TextField(text: $state)` idiom). State→widget is an `AEUI_BIND_VALUE`
+  PropBinding; widget→state is the field's change handler writing the
+  state. Both directions compare-first, which is what breaks the echo
+  loop. All three backends (GTK4 `changed` signal, win32 `EN_CHANGE` +
+  `Widget.bound_state`, macOS `controlTextDidChange` +
+  delegate `stateHandle`). Proven in `spec_bindings_demo` (7/7 on GTK4 +
+  win32; macOS peer-equivalence pending).
 - Computed/derived states: out; compose in app code.
 
 ## 6. Proving consumers (D3)

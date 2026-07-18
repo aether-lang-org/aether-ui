@@ -390,6 +390,22 @@ not "verified". Run these on the Mac agent and tick them off:
   and a New→1 / Save→2 / Undo→1 counter. If it isn't 4/4, the likely culprit is
   NSMenu build ordering vs. the shared store — not the routes.
 
+- **Two-way textfield binding** (landed 2026-07-18, commit 04e6023).
+  `bind_value` / `textfield_bound`. macOS impl is the
+  `AetherTextFieldDelegate.stateHandle` write-back in `controlTextDidChange`
+  + `AEUI_BIND_VALUE` in `apply_prop_binding` — mirrors the GTK4/win32 shape.
+  Compiles by construction; verify:
+  ```
+  ./build.sh examples/bindings_demo/bindings_demo.ae build/bindings_demo
+  AETHER_UI_TEST_PORT=9222 ./build/bindings_demo &      # keep_alive:true
+  UI_SPEC=bindings_demo/spec_bindings_demo tests/run_spec.sh   # expect 7/7
+  ```
+  The bit to watch on AppKit: `controlTextDidChange` must fire when the
+  driver's `/set_text` sets `stringValue` — if AppKit doesn't emit it for a
+  programmatic set, the field→state leg of the spec's two-way test won't
+  trip. If so, post the state directly in the driver's set-text path (as the
+  other backends' set_text naturally drives their change signal).
+
 ## macOS vs winbaz — the cheat sheet
 
 | | winbaz | Mac mini |

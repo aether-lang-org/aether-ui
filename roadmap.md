@@ -182,8 +182,10 @@ term in one result row — cosmetic, doesn't affect the spec.
   squeezed below their minimum), RTL.
 - **Bindings:** list-typed state (`each_bind`/`table_bind` — an update
   to a list state drives today's explicit `each_update`/`table_update`
-  internally), two-way binding (textfield ⇄ string state), computed/
-  derived state. Design notes in docs/design/reactivity-unification.md §5.
+  internally), ~~two-way binding (textfield ⇄ string state)~~ **DONE
+  2026-07-18** (`bind_value` / `textfield_bound`, 7/7 on GTK4 + win32),
+  computed/derived state. Design notes in
+  docs/design/reactivity-unification.md §5.
 - **Focus/shortcuts:** per-widget/conditional shortcut scopes, chorded
   shortcuts, auto menu↔shortcut binding (accel display exists; wiring
   is two lines by hand today).
