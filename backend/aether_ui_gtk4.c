@@ -103,7 +103,8 @@ typedef struct {
     char* str;    // string payload (owned)
 } StateCell;
 
-enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2 };
+enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
+       AEUI_BIND_VALUE = 3 };  // two-way: editable widget ⇄ string state
 typedef struct {
     int kind;
     int state_handle;
@@ -209,7 +210,16 @@ static int state_truthy(StateCell* c) {
 static void apply_prop_binding(PropBinding* b) {
     StateCell* c = state_cell(b->state_handle);
     if (!c) return;
-    if (b->kind == AEUI_BIND_TEXT) {
+    if (b->kind == AEUI_BIND_VALUE) {
+        // state → editable widget. Only set if different, so the widget's own
+        // "changed" write-back (which set the state that got us here) doesn't
+        // re-enter forever.
+        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
+        const char* want = (c->type == AEUI_STATE_STRING && c->str) ? c->str : "";
+        if (!cur || strcmp(cur, want) != 0) {
+            aether_ui_textfield_set_text(b->widget_handle, want);
+        }
+    } else if (b->kind == AEUI_BIND_TEXT) {
         char val[256];
         state_render_value(c, b->decimals, val, sizeof(val));
         char buf[512];
@@ -1217,6 +1227,30 @@ static void on_entry_changed(GtkEditable* editable, gpointer data) {
         const char* text = gtk_editable_get_text(editable);
         ((void(*)(void*, const char*))c->fn)(c->env, text ? text : "");
     }
+}
+
+// Two-way value binding: the editable widget's text writes back to a string
+// state cell (compare-first, so it doesn't fight the state→widget push).
+static void on_value_binding_changed(GtkEditable* editable, gpointer data) {
+    int state_handle = (int)(intptr_t)data;
+    StateCell* c = state_cell(state_handle);
+    if (!c || c->type != AEUI_STATE_STRING) return;
+    const char* text = gtk_editable_get_text(editable);
+    if (!text) text = "";
+    if (c->str && strcmp(c->str, text) == 0) return;  // no change → no echo
+    aether_ui_state_set_s(state_handle, text);
+}
+
+// bind_value(widget, string_state): typing updates the state; setting the
+// state updates the field. One verb, both directions, no callback.
+void aether_ui_bind_value(int state_handle, int widget_handle) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_VALUE, state_handle, widget_handle);
+    GtkWidget* w = aether_ui_get_widget(widget_handle);
+    if (w && GTK_IS_EDITABLE(w)) {
+        g_signal_connect(w, "changed", G_CALLBACK(on_value_binding_changed),
+                         (gpointer)(intptr_t)state_handle);
+    }
+    apply_prop_binding(b);  // seed the field from the state's initial value
 }
 
 int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {

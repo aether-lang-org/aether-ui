@@ -190,7 +190,8 @@ typedef struct {
     char* str;    // string payload (owned)
 } StateCell;
 
-enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2 };
+enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
+       AEUI_BIND_VALUE = 3 };  // two-way: editable widget ⇄ string state
 typedef struct {
     int kind;
     int state_handle;
@@ -296,6 +297,16 @@ static int state_truthy(StateCell* c) {
 static void apply_prop_binding(PropBinding* b) {
     StateCell* c = state_cell(b->state_handle);
     if (!c) return;
+    if (b->kind == AEUI_BIND_VALUE) {
+        // state → editable widget, compare-first to avoid re-setting the
+        // field mid-edit (which would also jump the caret).
+        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
+        const char* want = (c->type == AEUI_STATE_STRING && c->str) ? c->str : "";
+        if (!cur || strcmp(cur, want) != 0) {
+            aether_ui_textfield_set_text(b->widget_handle, want);
+        }
+        return;
+    }
     if (b->kind == AEUI_BIND_TEXT) {
         char val[256];
         state_render_value(c, b->decimals, val, sizeof(val));
@@ -1399,14 +1410,21 @@ int aether_ui_divider_create(void) {
 
 @interface AetherTextFieldDelegate : NSObject <NSTextFieldDelegate>
 @property (assign) AeClosure* closure;
+@property (assign) int stateHandle;   // >0 = two-way bind_value target
 @end
 
 @implementation AetherTextFieldDelegate
 - (void)controlTextDidChange:(NSNotification*)n {
     NSTextField* tf = [n object];
+    const char* cs = [[tf stringValue] UTF8String];
+    if (!cs) cs = "";
     if (self.closure && self.closure->fn) {
-        const char* cs = [[tf stringValue] UTF8String];
-        ((void(*)(void*, const char*))self.closure->fn)(self.closure->env, cs ? cs : "");
+        ((void(*)(void*, const char*))self.closure->fn)(self.closure->env, cs);
+    }
+    // Two-way bind_value: mirror the field into its state (compare-first via
+    // state_set_s → apply_prop_binding, which only re-sets on a real diff).
+    if (self.stateHandle > 0) {
+        aether_ui_state_set_s(self.stateHandle, cs);
     }
 }
 @end
@@ -1443,6 +1461,29 @@ const char* aether_ui_textfield_get_text(int handle) {
         return [[(NSTextField*)v stringValue] UTF8String];
     }
     return "";
+}
+
+// Two-way: editable widget ⇄ string state. State→widget is a VALUE
+// PropBinding; widget→state is the delegate's controlTextDidChange write-back,
+// keyed on stateHandle. Reuses the field's existing change-delegate if it has
+// one, else attaches a fresh delegate carrying just the state handle. (Defined
+// here, after the delegate class + retain_target, which it needs.)
+void aether_ui_bind_value(int state_handle, int widget_handle) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_VALUE, state_handle, widget_handle);
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(widget_handle);
+    if (v && [v isKindOfClass:[NSTextField class]]) {
+        NSTextField* field = (NSTextField*)v;
+        id existing = [field delegate];
+        if (existing && [existing isKindOfClass:[AetherTextFieldDelegate class]]) {
+            ((AetherTextFieldDelegate*)existing).stateHandle = state_handle;
+        } else {
+            AetherTextFieldDelegate* d = [[AetherTextFieldDelegate alloc] init];
+            d.stateHandle = state_handle;
+            [field setDelegate:d];
+            retain_target(d);
+        }
+    }
+    apply_prop_binding(b);  // seed the field from the state's initial value
 }
 
 int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {

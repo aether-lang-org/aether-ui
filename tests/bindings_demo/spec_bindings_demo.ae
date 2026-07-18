@@ -79,6 +79,25 @@ main() {
             aeocha.assert_true(ok, "count is 42")
         }
 
+        aeocha.it("two-way bind_value: state → field, and field → state") callback {
+            // The status field is bound two-way to string state 4.
+            fld = uidriver.widget_id_of("textfield", "")
+            aeocha.assert_gt(fld, 0, "the bound textfield exists")
+
+            // state → widget: set the state, the field's text follows.
+            uidriver.post_ok("/state/4/set?v=from-state", "set string state")
+            okf = uidriver.wait_body_contains("/widget/${fld}", "from-state", 20)
+            aeocha.assert_true(okf, "field text tracked the state")
+
+            // widget → state: type into the field, the state (and the label
+            // bound to it) follow — no callback wired, just bind_value.
+            uidriver.post_ok("/widget/${fld}/set_text?v=from-field", "type into field")
+            oks = uidriver.wait_body_contains("/state/4", "from-field", 20)
+            aeocha.assert_true(oks, "state tracked the field")
+            okl = uidriver.wait_body_contains("/widgets", "\"text\":\"from-field\"", 20)
+            aeocha.assert_true(okl, "the label bound to the same state also followed")
+        }
+
         aeocha.it("Stop restores every bound property") callback {
             s = uidriver.widget_id_by_text("Stop")
             uidriver.post_ok("/widget/${s}/click", "click Stop")

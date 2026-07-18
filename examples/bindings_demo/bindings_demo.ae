@@ -6,7 +6,7 @@
 // ordered: 1=float 2=int 3=bool 4=string (the driver spec uses these).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider,
+import ui (window, vstack, hstack, text, btn, divider, textfield_bound,
     ui_state, ui_set, ui_get, ui_state_i, ui_set_i, ui_get_i,
     ui_state_b, ui_set_b, ui_get_b, ui_state_s, ui_set_s,
     bind_text, bind_text_fmt, bind_enabled, bind_hidden,
@@ -28,6 +28,10 @@ main() {
             bind_text(t2, count)
             t3 = text("")
             bind_text(t3, status)
+            // Two-way in one line: this field ⇄ `status`. Typing updates
+            // status (so t3 above follows); ui_set_s(status, …) fills the
+            // field. No callback — the SwiftUI TextField(text: $state) idiom.
+            _sf = textfield_bound("status…", status)
             divider()
             run_btn = btn("Run") callback {
                 _b1 = ui_set_b(busy, 1)

@@ -22,12 +22,12 @@ exports (
     tabs, tab, on_tab_change, tab_select, tab_selected,
     nav_push, nav_pop,
     text, button, btn, spacer, divider,
-    textfield, securefield, toggle, toggle_group, slider, picker, picker_add,
+    textfield, textfield_bound, securefield, toggle, toggle_group, slider, picker, picker_add,
     textarea, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
     ui_state_b, ui_get_b, ui_set_b,
-    bind_text, bind_text_fmt, bind_enabled, bind_hidden,
+    bind_text, bind_text_fmt, bind_enabled, bind_hidden, bind_value,
     set_text, get_text, set_toggle, get_toggle,
     set_button_label, set_hidden, context_menu_item, context_menu_item_accel,
     shortcut, focus,
@@ -141,6 +141,7 @@ extern aether_ui_state_set_b(handle: int, value: int)
 extern aether_ui_bind_text_impl(state_handle: int, widget_handle: int, decimals: int)
 extern aether_ui_bind_enabled_impl(state_handle: int, widget_handle: int, invert: int)
 extern aether_ui_bind_hidden_impl(state_handle: int, widget_handle: int, invert: int)
+extern aether_ui_bind_value(state_handle: int, widget_handle: int)
 
 // Group 2: Input widgets
 extern aether_ui_textfield_create(placeholder: string, boxed_closure: ptr) -> int
@@ -753,6 +754,18 @@ textfield(_ctx: ptr, placeholder: string, on_change: fn) {
     return handle
 }
 
+// textfield_bound(placeholder, string_state): a field two-way bound to a
+// string state in one call — the SwiftUI `TextField("…", text: $state)` idiom.
+// Typing updates the state; ui_set_s(state, …) fills the field. No callback.
+textfield_bound(_ctx: ptr, placeholder: string, state_handle: int) {
+    handle = aether_ui_textfield_create(placeholder, 0)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    aether_ui_bind_value(state_handle, handle)
+    return handle
+}
+
 securefield(_ctx: ptr, placeholder: string, on_change: fn) {
     boxed = box_closure(on_change)
     handle = aether_ui_securefield_create(placeholder, boxed)
@@ -894,6 +907,16 @@ ui_set_b(handle: int, value: int) -> int {
 //   bind_hidden(w, bst, 0)        // hidden while truthy
 //
 // Truthiness: bool/int/float ≠ 0; string non-empty.
+// bind_value(field, string_state): two-way. Typing in the field updates the
+// state; setting the state updates the field. One line replaces the
+// change-callback + explicit set idiom. Field must be a textfield/securefield
+// (an editable), state must be a string cell (ui_state_s).
+//   name = ui_state_s("")
+//   f = textfield("Name…"); bind_value(f, name)
+//   // now ui_get_s(name) tracks the field, and ui_set_s(name, x) fills it.
+bind_value(widget: int, state_handle: int) {
+    aether_ui_bind_value(state_handle, widget)
+}
 bind_text(widget: int, state_handle: int) {
     aether_ui_bind_text_impl(state_handle, widget, 0 - 1)
 }

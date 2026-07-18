@@ -207,6 +207,7 @@ typedef struct {
     AeClosure* on_hover;
     AeClosure* on_double_click;
     AeClosure* on_change; // text/value change for input widgets
+    int bound_state;      // two-way bind_value target (0 = none)
 
     // Per-widget data (union over kind)
     union {
@@ -350,7 +351,8 @@ typedef struct {
     char* str;    // string payload (owned)
 } StateCell;
 
-enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2 };
+enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
+       AEUI_BIND_VALUE = 3 };  // two-way: editable widget ⇄ string state
 typedef struct {
     int kind;
     int state_handle;
@@ -456,6 +458,15 @@ static int state_truthy(StateCell* c) {
 static void apply_prop_binding(PropBinding* b) {
     StateCell* c = state_cell(b->state_handle);
     if (!c) return;
+    if (b->kind == AEUI_BIND_VALUE) {
+        // state → editable widget, compare-first to avoid the write-back echo.
+        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
+        const char* want = (c->type == AEUI_STATE_STRING && c->str) ? c->str : "";
+        if (!cur || strcmp(cur, want) != 0) {
+            aether_ui_textfield_set_text(b->widget_handle, want);
+        }
+        return;
+    }
     if (b->kind == AEUI_BIND_TEXT) {
         char val[256];
         state_render_value(c, b->decimals, val, sizeof(val));
@@ -548,6 +559,14 @@ void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert
 void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert) {
     PropBinding* b = prop_binding_new(AEUI_BIND_HIDDEN, state_handle, widget_handle);
     b->invert = invert;
+    apply_prop_binding(b);
+}
+// Two-way: editable widget ⇄ string state. State→widget is a VALUE
+// PropBinding; widget→state is the EN_CHANGE write-back keyed on bound_state.
+void aether_ui_bind_value(int state_handle, int widget_handle) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_VALUE, state_handle, widget_handle);
+    Widget* w = widget_at(widget_handle);
+    if (w) w->bound_state = state_handle;
     apply_prop_binding(b);
 }
 
@@ -797,6 +816,16 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 } else if ((cw->kind == WK_TEXTFIELD || cw->kind == WK_SECUREFIELD
                             || cw->kind == WK_TEXTAREA) && code == EN_CHANGE) {
                     if (!cw->sealed) invoke_closure(cw->on_change);
+                    // Two-way bind_value: mirror the field into its state
+                    // (compare-first, so the state→widget push doesn't echo).
+                    if (cw->bound_state > 0) {
+                        const char* t = aether_ui_textfield_get_text(ch);
+                        StateCell* sc = state_cell(cw->bound_state);
+                        if (sc && sc->type == AEUI_STATE_STRING
+                            && (!sc->str || strcmp(sc->str, t ? t : "") != 0)) {
+                            aether_ui_state_set_s(cw->bound_state, t ? t : "");
+                        }
+                    }
                 } else if (cw->kind == WK_PICKER && code == CBN_SELCHANGE) {
                     if (!cw->sealed) invoke_closure(cw->on_change);
                 }
