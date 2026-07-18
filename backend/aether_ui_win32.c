@@ -844,11 +844,12 @@ static void stack_do_layout(HWND stack_hwnd) {
         free(pinned);
     }
 
-    // Lay out. For an RTL hstack, start from the right edge and decrement.
+    // Lay out. Positions are computed LTR; for an RTL hstack each child's x is
+    // MIRRORED within the client width afterward (so child order reverses on
+    // screen regardless of the child-enumeration order).
     int rtl = (orientation == 0 && sl->rtl);
-    int cur = (orientation == 1) ? sl->padding_top
-            : rtl ? ((client.right - client.left) - sl->padding_right)
-                  : sl->padding_left;
+    int client_w = client.right - client.left;
+    int cur = (orientation == 1) ? sl->padding_top : sl->padding_left;
     for (int i = 0; i < nchildren; i++) {
         int x, y, w, h;
         if (orientation == 1) { // VStack
@@ -889,13 +890,11 @@ static void stack_do_layout(HWND stack_hwnd) {
             } else {
                 y = sl->padding_top + mc[i].margin_t;
             }
-            if (rtl) {
-                x = cur - mc[i].margin_r - w;
-                cur = x - mc[i].margin_l - sl->spacing;
-            } else {
-                x = cur + mc[i].margin_l;
-                cur = x + w + mc[i].margin_r + sl->spacing;
-            }
+            x = cur + mc[i].margin_l;
+            cur = x + w + mc[i].margin_r + sl->spacing;
+            // Mirror within the client width for RTL: the left edge x maps to
+            // (client_w - x - w), so a child near the left lands near the right.
+            if (rtl) x = client_w - x - w;
         }
         SetWindowPos(children[i], NULL, x, y, w, h,
                      SWP_NOZORDER | SWP_NOACTIVATE);
