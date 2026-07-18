@@ -849,8 +849,8 @@ static void stack_do_layout(HWND stack_hwnd) {
     // on-screen order relative to LTR deterministically (independent of the
     // child-enumeration order).
     // RTL hstack: lay out LTR as usual, then mirror each child's x within the
-    // client width — reversing on-screen order relative to LTR regardless of
-    // the child z-order enumeration (which is reverse-creation on win32).
+    // client width — the source-first child (now enumerated first, since
+    // add_child pushes to Z-bottom) lands rightmost.
     int rtl = (orientation == 0 && sl->rtl);
     int client_w = client.right - client.left;
     int cur = (orientation == 1) ? sl->padding_top : sl->padding_left;
@@ -1773,6 +1773,12 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     LONG_PTR st = GetWindowLongPtrW(c->hwnd, GWL_STYLE);
     SetWindowLongPtrW(c->hwnd, GWL_STYLE, st | WS_CHILD | WS_VISIBLE);
     ShowWindow(c->hwnd, SW_SHOW);
+    // SetParent inserts the child at the TOP of the sibling Z-order, so
+    // GetWindow(GW_CHILD) later enumerates children in REVERSE creation order
+    // (a row built A,B,C enumerates C,B,A) — which reversed stack layout order.
+    // Push each new child to the BOTTOM so enumeration matches creation order.
+    SetWindowPos(c->hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     if (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK) {
         stack_do_layout(p->hwnd);
     }
