@@ -15,6 +15,7 @@
 #import <CoreText/CoreText.h>     // text metrics (CTLine typographic bounds)
 #import <ImageIO/ImageIO.h>       // headless canvas_write_png
 #import <objc/runtime.h>          // objc_setAssociatedObject (dbl-click fire)
+#include <time.h>                  // clock_gettime (chord timeout)
 #include "aether_ui_backend.h"  // cross-platform backend ABI
 #include "aether_ui_system_extras.h"
 #include <stdint.h>
@@ -500,6 +501,14 @@ static AetherOverlayHost* overlay_host = nil;
 // first explicit resize, so window(w,h) is a starting size, not a cage.
 static NSLayoutConstraint* aeui_win_floor_w = nil;
 static NSLayoutConstraint* aeui_win_floor_h = nil;
+// An explicit /window/resize pins the content to that size (strong, not
+// required — required content mins still win). This BOUNDS the layout so
+// weight sharing has a fixed width to divide: a weighted child with a large
+// min clamps and its flexible sibling shrinks, instead of the near-required
+// share inflating the whole window to fit both. Without a bound the content
+// adopts its fitting size and the clamp has nothing to resolve against.
+static NSLayoutConstraint* aeui_win_cap_w = nil;
+static NSLayoutConstraint* aeui_win_cap_h = nil;
 
 @implementation AetherAppDelegate
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
@@ -880,6 +889,7 @@ static int aeui_ctx_menu_activate(int handle, int idx) {
 typedef struct {
     char       combo[64];   // canonical: "ctrl+shift+b"
     AeClosure* closure;
+    AeClosure* enabled;     // optional predicate |-> int (1=active); NULL = always
 } ShortcutEntry;
 
 static ShortcutEntry* shortcuts = NULL;
@@ -959,7 +969,14 @@ static int shortcut_fire(const char* canonical) {
     if (!canonical || !*canonical) return 0;
     for (int i = 0; i < shortcut_count; i++) {
         if (strcmp(shortcuts[i].combo, canonical) != 0) continue;
-        AeClosure* c = shortcuts[i].closure;
+        ShortcutEntry* s = &shortcuts[i];
+        // A conditional shortcut whose predicate returns 0 is inert: keep
+        // scanning (another binding of the same combo may be active), and if
+        // none fires the key propagates as if unbound.
+        if (s->enabled && s->enabled->fn) {
+            if (!((int(*)(void*))s->enabled->fn)(s->enabled->env)) continue;
+        }
+        AeClosure* c = s->closure;
         if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
         return 1;
     }
@@ -995,7 +1012,83 @@ static void event_to_combo(NSEvent* ev, char* out, int outsize) {
     combo_canonical(mods, key, out, outsize);
 }
 
-void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
+// ── Chorded shortcuts (two-key sequences, "Ctrl+K Ctrl+S") ──────────
+// Emacs/VSCode style: a prefix combo arms a pending state; the next combo,
+// within ~1.5s, completes the chord. Mirrors the GTK4 state machine, keyed off
+// the same canonical combo strings the rest of the shortcut layer uses.
+typedef struct {
+    char       prefix[64];   // canonical first combo
+    char       second[64];   // canonical second combo
+    AeClosure* closure;
+} ChordEntry;
+static ChordEntry* chords = NULL;
+static int chord_count = 0, chord_capacity = 0;
+static char chord_pending[64] = "";   // armed prefix, "" = none
+static double chord_armed_at = 0.0;   // CLOCK_MONOTONIC seconds when armed
+
+static double chord_mono_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+// Feed a canonical combo into the chord machine. Returns 1 if it consumed the
+// key (armed a prefix or completed a chord), 0 to fall through to shortcuts.
+static int chord_feed(const char* canonical) {
+    if (!canonical || !*canonical) return 0;
+    // Expire a stale prefix (mirrors GTK4's 1.5s g_timeout).
+    if (chord_pending[0] && (chord_mono_now() - chord_armed_at) > 1.5) {
+        chord_pending[0] = '\0';
+    }
+    if (chord_pending[0]) {
+        for (int i = 0; i < chord_count; i++) {
+            if (strcmp(chords[i].prefix, chord_pending) == 0 &&
+                strcmp(chords[i].second, canonical) == 0) {
+                AeClosure* c = chords[i].closure;
+                chord_pending[0] = '\0';
+                if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
+                return 1;
+            }
+        }
+        // Armed but not a valid completion — cancel and let it fall through.
+        chord_pending[0] = '\0';
+    }
+    // Not armed: does this key start a chord?
+    for (int i = 0; i < chord_count; i++) {
+        if (strcmp(chords[i].prefix, canonical) == 0) {
+            snprintf(chord_pending, sizeof(chord_pending), "%s", canonical);
+            chord_armed_at = chord_mono_now();
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// The single resolved-combo entry point: chord layer first (a prefix arms, a
+// completion fires), then plain/conditional shortcuts. Returns 1 if consumed.
+static int shortcut_dispatch(const char* canonical) {
+    if (chord_feed(canonical)) return 1;
+    return shortcut_fire(canonical);
+}
+
+// One local key-down monitor serves every accelerator AND the chord layer.
+// Swallow the event when consumed so the key doesn't also reach the focused
+// control (a Ctrl+B accelerator must not type "b" into the focused entry).
+static void ensure_shortcut_monitor(void) {
+    if (shortcut_monitor) return;
+    shortcut_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+        handler:^NSEvent*(NSEvent* ev) {
+            char canonical[64];
+            event_to_combo(ev, canonical, sizeof(canonical));
+            if (shortcut_dispatch(canonical)) return nil;  // consumed
+            return ev;
+        }];
+}
+
+// Conditional shortcut: `enabled_closure` (|-> int) gates the combo; 0 → inert
+// (key propagates). NULL predicate = always active (plain ui.shortcut).
+void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
+                                  void* enabled_closure) {
     if (!combo || !*combo) return;
     if (shortcut_count >= shortcut_capacity) {
         shortcut_capacity = shortcut_capacity == 0 ? 8 : shortcut_capacity * 2;
@@ -1006,37 +1099,32 @@ void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
     combo_normalize(combo, shortcuts[shortcut_count].combo,
                     sizeof(shortcuts[shortcut_count].combo));
     shortcuts[shortcut_count].closure = (AeClosure*)boxed_closure;
+    shortcuts[shortcut_count].enabled = (AeClosure*)enabled_closure;
     shortcut_count++;
-
-    // One monitor serves every accelerator. Swallow the event when it
-    // matches so the key doesn't also reach the focused control (a
-    // Ctrl+B accelerator must not type "b" into the focused entry).
-    if (!shortcut_monitor) {
-        shortcut_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
-            handler:^NSEvent*(NSEvent* ev) {
-                char canonical[64];
-                event_to_combo(ev, canonical, sizeof(canonical));
-                if (shortcut_fire(canonical)) return nil;  // consumed
-                return ev;
-            }];
-    }
+    ensure_shortcut_monitor();
 }
 
-// Conditional + chorded shortcuts. STUB on macOS for now (GTK4 is the verified
-// backend for these). The real impl mirrors GTK4: shortcut_when gates
-// shortcut_fire on the predicate; shortcut_chord adds a two-key state machine
-// keyed off event_to_combo. TODO for the Mac sibling — see the peer-
-// equivalence checklist.
-void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
-                                  void* enabled_closure) {
-    (void)enabled_closure;
-    // Degrade to a plain (always-on) shortcut so the combo still works.
-    aether_ui_shortcut_impl(combo, boxed_closure);
+void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
+    aether_ui_shortcut_when_impl(combo, boxed_closure, NULL);
 }
+
+// Chorded shortcut: `first_combo` then `second_combo` (within ~1.5s) fires cb.
 void aether_ui_shortcut_chord_impl(const char* first_combo,
                                    const char* second_combo,
                                    void* boxed_closure) {
-    (void)first_combo; (void)second_combo; (void)boxed_closure;
+    if (!first_combo || !*first_combo || !second_combo || !*second_combo) return;
+    if (chord_count >= chord_capacity) {
+        chord_capacity = chord_capacity == 0 ? 8 : chord_capacity * 2;
+        chords = (ChordEntry*)realloc(chords, sizeof(ChordEntry) * chord_capacity);
+        if (!chords) { chord_count = 0; chord_capacity = 0; return; }
+    }
+    combo_normalize(first_combo, chords[chord_count].prefix,
+                    sizeof(chords[chord_count].prefix));
+    combo_normalize(second_combo, chords[chord_count].second,
+                    sizeof(chords[chord_count].second));
+    chords[chord_count].closure = (AeClosure*)boxed_closure;
+    chord_count++;
+    ensure_shortcut_monitor();
 }
 
 // Explicit keyboard-focus grab. AppKit's equivalent of gtk_widget_grab_focus
@@ -1233,6 +1321,29 @@ static void aeui_apply_flex(NSStackView* stack) {
         int w = aeui_effective_weight(h);
         if (w <= 0) continue;   // unweighted: leave its natural size alone
         [child setContentHuggingPriority:1 forOrientation:orient];
+        // A weighted child's explicit size (via width()/height(), an == on the
+        // main axis) is a MINIMUM, not a fixed size — the proportional share
+        // fills above it and it clamps to the min when space is tight. Downgrade
+        // any such == to >= so it stops fighting the flex sharing (covers the
+        // width()-before-weight() order; set_width covers the reverse).
+        NSMutableArray* toMin = [NSMutableArray array];
+        for (NSLayoutConstraint* wc in [child constraints]) {
+            if (wc.firstAttribute == attr && wc.secondItem == nil
+                && wc.relation == NSLayoutRelationEqual && [wc isActive]
+                && ![[wc identifier] isEqualToString:@"aeui-flexmin"]) {
+                [toMin addObject:wc];
+            }
+        }
+        for (NSLayoutConstraint* wc in toMin) {
+            wc.active = NO;
+            NSLayoutConstraint* mn = [NSLayoutConstraint
+                constraintWithItem:child attribute:attr
+                         relatedBy:NSLayoutRelationGreaterThanOrEqual
+                            toItem:nil attribute:NSLayoutAttributeNotAnAttribute
+                        multiplier:1 constant:wc.constant];
+            [mn setIdentifier:@"aeui-flexmin"];
+            [mn setActive:YES];
+        }
         if (!ref) {
             ref = child;
             ref_weight = w;
@@ -1245,6 +1356,13 @@ static void aeui_apply_flex(NSStackView* stack) {
                                         multiplier:(CGFloat)w / (CGFloat)ref_weight
                                           constant:0];
         [c setIdentifier:@"aeui-flex"];
+        // Below the row-fill stretch (DefaultHigh, 750) AND the required
+        // min-width, so the equality YIELDS rather than inflating the content:
+        // a clamped child holds its min and the flexible sibling shrinks to fill
+        // the remainder, instead of both being dragged up to the larger min
+        // (which would grow the whole window). Still well above hugging (1), so
+        // with room the proportional share holds.
+        [c setPriority:700];
         [c setActive:YES];
     }
     [stack setNeedsLayout:YES];
@@ -2080,7 +2198,20 @@ void aether_ui_set_width(int handle, int width) {
         if ([drop count]) [p removeConstraints:drop];
     }
 
-    [v.widthAnchor constraintEqualToConstant:width].active = YES;
+    // On a weighted child, width() is a FLOOR (>=), not a fixed size: the flex
+    // share fills above it, clamping to this min only when space is tight. A
+    // fixed == would fight aeui_apply_flex's proportional sharing. (The reverse
+    // order — width() then weight() — is handled in aeui_apply_flex.)
+    int weighted = (handle >= 1 && handle <= widget_count
+                    && widget_weights[handle - 1] > 0);
+    if (weighted) {
+        NSLayoutConstraint* mn =
+            [v.widthAnchor constraintGreaterThanOrEqualToConstant:width];
+        [mn setIdentifier:@"aeui-flexmin"];
+        mn.active = YES;
+    } else {
+        [v.widthAnchor constraintEqualToConstant:width].active = YES;
+    }
 }
 
 void aether_ui_set_height(int handle, int height) {
@@ -4310,6 +4441,21 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 // the size the app was born with, in both directions.
                 aeui_win_floor_w.active = NO;
                 aeui_win_floor_h.active = NO;
+                // Pin the content to the requested size (strong, sub-required)
+                // so the layout is BOUNDED — otherwise it re-adopts its fitting
+                // size on the next pass and a resize to less than that is undone.
+                // A bounded width is also what lets weight min-clamp resolve.
+                NSView* host = [win contentView];
+                if (host) {
+                    aeui_win_cap_w.active = NO;
+                    aeui_win_cap_h.active = NO;
+                    aeui_win_cap_w = [host.widthAnchor constraintEqualToConstant:ctx->ival];
+                    aeui_win_cap_h = [host.heightAnchor constraintEqualToConstant:ctx->ival2];
+                    aeui_win_cap_w.priority = 800;
+                    aeui_win_cap_h.priority = 800;
+                    aeui_win_cap_w.active = YES;
+                    aeui_win_cap_h.active = YES;
+                }
                 // Size the CONTENT area (the GTK route's semantics), not the
                 // frame — a spec asserting w=600 means 600px of app, not 600
                 // minus the titlebar.
@@ -4329,7 +4475,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             // Registered accelerators win first; only then the built-ins.
             char canonical[64];
             combo_normalize(ctx->sval, canonical, sizeof(canonical));
-            ctx->retval = shortcut_fire(canonical) ? 1 : 0;
+            ctx->retval = shortcut_dispatch(canonical) ? 1 : 0;
             if (!ctx->retval && primary_window) {
                 if (strcmp(canonical, "tab") == 0) {
                     ctx->retval = aeui_tab_move(0);

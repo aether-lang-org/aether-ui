@@ -370,9 +370,9 @@ Without `keep_alive`, your backgrounded `build/testable &` is killed the instant
 
 The items below landed + were verified on GTK4/win32 first; this is the record
 of running them on the Mac and ticking them off. Full `tests/spec_matrix.sh` is
-**126/126 green** on macOS after this work. Only the two-way textfield binding
-needed an AppKit-specific fix; every other batch was correct by construction and
-this was a pure verification pass.
+**131/131 green** on macOS after this work. Most batches were correct by
+construction; the two-way binding, the weight min-clamp, and the scoped/chorded
+shortcuts each needed an AppKit-specific fix (detailed below).
 
 - **Native menu bar** (commits dcdb68f/61da9d3) — ✅ green, no code change, as
   predicted. `spec_menu` is 4/4 and `GET /menus` returns exactly
@@ -418,6 +418,30 @@ this was a pure verification pass.
 - **Tree mode + table delegate cells + table_bind** (commit 3e684db) — ✅ 3/2 on
   `tree_demo` / `tabledeleg_demo`, no code change. ALL pure module.ae — no
   backend/C, so macOS behaves identically to GTK4+win32.
+
+- **Scoped/conditional shortcuts + chords** (commit 5b5c43f) — ✅ 3/3 on
+  `shortcut_demo`, needed the real AppKit impl (the sibling left it a stub:
+  `shortcut_when` degraded to plain, `shortcut_chord` did nothing). Mirrors the
+  GTK4 state machine onto macOS's registry: `ShortcutEntry` gains an `enabled`
+  predicate that `shortcut_fire` gates on (`continue` on scope-off so the key
+  propagates); a `ChordEntry` table + `chord_feed` two-key state machine with a
+  1.5s `CLOCK_MONOTONIC` timeout; and one `shortcut_dispatch` funnel (chord layer
+  first, then shortcuts) that BOTH the `NSEvent` local monitor and the driver's
+  `/window/key` path call. The monitor install moved into `ensure_shortcut_monitor`
+  so a chord-only app still gets one.
+
+- **Weight min-clamp** (commit 5b5c43f) — ✅ 2/2 on `weightclamp_demo`, needed an
+  AppKit fix because macOS does weight via Auto Layout constraints (NSStackView),
+  not GTK4's manual `AeuiFlexLayout`. Three parts: (1) `width()` on a weighted
+  child now makes a `>=` (min) constraint, not a fixed `==`, so it stops fighting
+  the share; (2) the flex equality drops to priority 700 (below the row-fill
+  stretch and the required min) so it YIELDS — the clamped child holds its min and
+  the flexible sibling shrinks, instead of both inflating to the larger min; (3)
+  `/window/resize` now pins the content to the requested size (strong, sub-required)
+  so the layout is BOUNDED. Without (3) the content adopts its fitting size, the
+  window grows to fit both weighted children at the max min, and the clamp has no
+  fixed width to resolve against. Result: A clamps to 260, B fills 112, C/D split
+  186/186 in a 380px row.
 
 ## macOS vs winbaz — the cheat sheet
 
