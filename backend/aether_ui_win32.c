@@ -2849,13 +2849,29 @@ static LRESULT CALLBACK scrim_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+// Resolve an overlay's host window HWND. win_handle 0 = the primary app
+// window; otherwise the WK_WINDOW widget handle a window_create() returned (a
+// secondary window), so a secondary window's overlays land in IT, not the
+// primary. Falls back to the content widget's own top-level, then the primary.
+static HWND aeui_overlay_host_hwnd(int win_handle, Widget* content) {
+    if (win_handle > 0) {
+        Widget* w = widget_at(win_handle);
+        if (w && w->kind == WK_WINDOW && w->hwnd) return w->hwnd;
+    }
+    if (content && content->hwnd) {
+        HWND root = GetAncestor(content->hwnd, GA_ROOT);
+        if (root) return root;
+    }
+    return (app_count > 0) ? apps[0].hwnd : NULL;
+}
+
 int aether_ui_overlay_open_impl(int win_handle, int content_handle,
                                 int anchor, int dx, int dy, int modal) {
-    (void)win_handle;   // single-window today; overlays land on the primary
     ensure_win_init();
     Widget* content = widget_at(content_handle);
-    if (!content || app_count < 1 || !apps[0].hwnd) return 0;
-    HWND host = apps[0].hwnd;
+    if (!content) return 0;
+    HWND host = aeui_overlay_host_hwnd(win_handle, content);
+    if (!host) return 0;
 
     if (w32_overlay_count >= w32_overlay_capacity) {
         w32_overlay_capacity = w32_overlay_capacity == 0 ? 8 : w32_overlay_capacity * 2;

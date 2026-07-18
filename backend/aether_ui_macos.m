@@ -2577,7 +2577,12 @@ static OverlayEntry* overlay_at(int handle) {
 
 int aether_ui_overlay_open_impl(int win_handle, int content_handle,
                                 int anchor, int dx, int dy, int modal) {
-    (void)win_handle;   // single-window today; overlays land on the primary
+    // win_handle honoured for the KEY targets (win32 has full per-window
+    // overlays; GTK4 too). On AppKit the overlay host is currently interposed
+    // only on the primary window's contentView, so overlays still land there.
+    // TODO(multi-window §3): interpose a per-window AetherOverlayHost so a
+    // secondary window's overlays parent to IT. Sibling: see the peer note.
+    (void)win_handle;
     NSView* content = (__bridge NSView*)aether_ui_get_widget(content_handle);
     AetherOverlayHost* host = overlay_host;
     if (!content || !host) return 0;
@@ -3023,12 +3028,23 @@ void aether_ui_sheet_set_body_impl(int handle, int root_handle) {
     if (root) [sheet setContentView:root];
 }
 
+// The window a sheet should attach to: the app's KEY window (the one the user
+// is in — matters with multiple windows), falling back to the primary. A sheet
+// belongs to whichever window raised it, not always the main one.
+static NSWindow* aeui_sheet_parent_window(void) {
+    NSWindow* key = [NSApp keyWindow];
+    if (key == primary_window) return key;
+    if (extra_windows && [extra_windows containsObject:key]) return key;
+    return primary_window;
+}
+
 void aether_ui_sheet_present_impl(int handle) {
     if (aeui_is_headless()) return;  // sheet tracking needs an interactive runloop
     if (!sheet_windows || handle < 1 || handle > (int)[sheet_windows count]) return;
     NSWindow* sheet = sheet_windows[handle - 1];
-    if (primary_window) {
-        [primary_window beginSheet:sheet completionHandler:^(NSModalResponse r) { (void)r; }];
+    NSWindow* parent = aeui_sheet_parent_window();
+    if (parent) {
+        [parent beginSheet:sheet completionHandler:^(NSModalResponse r) { (void)r; }];
     } else {
         [sheet makeKeyAndOrderFront:nil];
     }
