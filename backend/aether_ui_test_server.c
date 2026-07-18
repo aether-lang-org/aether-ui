@@ -183,6 +183,21 @@ static void url_decode_keep_plus(char* s) {
 // ---------------------------------------------------------------------------
 // JSON emission + HTTP response send.
 // ---------------------------------------------------------------------------
+// Write the WHOLE buffer, looping over partial sends. A single send()/write()
+// may transfer fewer bytes than asked — especially on Windows loopback for a
+// large /widgets body — silently truncating the JSON so the spec's json.parse
+// sees a cut-off array and widget_id_by_text misses everything past the cut.
+// (The GTK4 embedded server learned this the hard way with its own write_all;
+// the shared server behind win32/macOS never had the loop.)
+static void send_all(aether_sock_t fd, const char* buf, int len) {
+    int off = 0;
+    while (off < len) {
+        int n = (int)aether_socket_send(fd, buf + off, len - off);
+        if (n <= 0) break;   // peer closed / fatal error — nothing more to do
+        off += n;
+    }
+}
+
 static void send_http(aether_sock_t fd, int status, const char* status_text,
                       const char* content_type, const char* body) {
     char header[512];
@@ -195,8 +210,8 @@ static void send_http(aether_sock_t fd, int status, const char* status_text,
         "Connection: close\r\n"
         "\r\n",
         status, status_text, content_type, bodylen);
-    aether_socket_send(fd, header, hlen);
-    if (body && bodylen > 0) aether_socket_send(fd, body, bodylen);
+    send_all(fd, header, hlen);
+    if (body && bodylen > 0) send_all(fd, body, bodylen);
 }
 
 static int widget_to_json(const AetherDriverHooks* h, int handle,
@@ -407,8 +422,8 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
                     "Content-Length: %zu\r\n"
                     "Access-Control-Allow-Origin: *\r\n"
                     "Connection: close\r\n\r\n", len);
-                aether_socket_send(client_fd, header, hlen);
-                aether_socket_send(client_fd, (const char*)data, (int)len);
+                send_all(client_fd, header, hlen);
+                send_all(client_fd, (const char*)data, (int)len);  // PNG can be large
                 free(data);
             } else {
                 send_http(client_fd, 500, "Error", "text/plain",
