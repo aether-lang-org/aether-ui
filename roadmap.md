@@ -199,14 +199,15 @@ term in one result row — cosmetic, doesn't affect the spec.
   its share would fall under it, iterated to a fixed point. GTK4
   (AeuiFlexLayout) AND win32 (the stack layout now flex-distributes too,
   same clamp) — 2/2 on both, identical widths. `weight()` is real on win32
-  now (was a no-op). ~~RTL~~ **DONE 2026-07-18 (GTK4 + macOS)** —
+  now (was a no-op). ~~RTL~~ **DONE 2026-07-18 (all three backends)** —
   `rtl(hstack, 1)` lays children right-to-left (GTK4
-  gtk_widget_set_direction / macOS NSStackView layout direction); polish
-  spec 3/3 on GTK4. win32 RTL is written (mirror-x) but blocked on a
-  PRE-EXISTING win32 quirk: hstack children enumerate/place in reverse
-  creation order (GetWindow(GW_CHILD) gave [C,B,A] for a row built A,B,C),
-  so the mirror lands them the wrong way. Tracked as a win32 gap (the LTR
-  child-order quirk is the real fix — separate from RTL).
+  gtk_widget_set_direction / macOS NSStackView / win32 mirror-x); polish
+  spec 3/3 on GTK4 AND win32. Fixing win32 RTL surfaced and fixed a
+  PRE-EXISTING win32 stack bug: SetParent inserts children at the TOP of
+  the sibling Z-order, so GetWindow(GW_CHILD) enumerated them in REVERSE
+  creation order — every stack laid its children out backwards (unnoticed
+  because most rows are symmetric). Fixed by pushing each new child to
+  HWND_BOTTOM. 7/7 layout-sensitive win32 specs pass, no regressions.
 - **Bindings:** ~~list-typed state (`each_bind`)~~ **DONE 2026-07-18**
   (`ui_state_list` + `each_bind`; a `ui_set_list` re-runs `each_update`
   via a generic state-observer primitive), ~~two-way binding~~ **DONE**
