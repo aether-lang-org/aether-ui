@@ -272,9 +272,14 @@ term in one result row — cosmetic, doesn't affect the spec.
   window-agnostic). `multiwindow_demo` + spec 5/5 on GTK4 AND win32 (open,
   list, per-widget tag, cross-window bump, close-leaves-primary-live).
   macOS coded (mirrors the pattern) — sibling verify. Design:
-  docs/design/multi-window.md. NB the ~50 single-window sites (overlays/
-  menus/sheets → primary) aren't yet per-window — a secondary window's
-  overlay still parents to the primary (design §3, a follow-up).
+  docs/design/multi-window.md. **§3 (per-window overlays/sheets) mostly
+  done:** GTK4 overlays were ALREADY per-window (the "~50 sites" was
+  overstated); win32 overlays now honour the target window (were hardcoded
+  to apps[0]) — verified, an overlay on window 2 carries window:2 on GTK4
+  AND win32 (6/6). macOS sheets now follow the KEY window. Remaining: the
+  macOS overlay host is still interposed only on the primary's contentView
+  (a per-window-host AppKit change) — explicit TODO + sibling note. Menus
+  are still primary-attached (per-window menu bar = separate item).
 - **Accessibility** — native widgets get GTK/AppKit a11y free; anything
   vg-DRAWN (the dropdown, a plan-B table) needs a semantics bridge
   eventually — this is the real cost of the drawn path, and why Flutter

@@ -478,3 +478,15 @@ References on the aeb side:
   server thread — AppKit -[NSWindow close] off the main thread is unsafe;
   marshal to the main thread (dispatch_async(dispatch_get_main_queue,...)) if
   the close assertion fails, like win32's PostMessage(WM_CLOSE) fix.
+
+- **Multi-window §3 (per-window overlays/sheets)** (2026-07-18/19). Two macOS
+  bits: (1) sheets now attach to the KEY window (aeui_sheet_parent_window) —
+  should just work; the multiwindow spec's overlay-in-w2 test covers the shape.
+  (2) The overlay host (AetherOverlayHost) is STILL interposed only on the
+  primary window's contentView, so a secondary window's overlays land on the
+  primary. TODO to close: interpose a per-window AetherOverlayHost (like
+  applicationDidFinishLaunching does for the primary) keyed by the target
+  window, and have aether_ui_overlay_open_impl resolve win_handle → that host.
+  win32 already does the equivalent (aeui_overlay_host_hwnd). The multiwindow
+  spec asserts window:2 on the toast — on macOS that test will fail until the
+  per-window host lands, which is the honest signal to fix it.
