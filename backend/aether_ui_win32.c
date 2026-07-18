@@ -196,6 +196,10 @@ typedef struct {
     int min_width;
     int min_height;
 
+    // Flutter-Expanded weight: >0 = share the parent stack's leftover main-axis
+    // space proportionally (0 = natural size). Mirrors the GTK4 flex layout.
+    int weight;
+
     // Margins (apply during parent layout)
     int margin_top, margin_right, margin_bottom, margin_left;
 
@@ -646,6 +650,9 @@ typedef struct {
     int measured_w;
     int measured_h;
     int is_spacer;
+    int weight;          // >0 = flex-weighted child
+    int min_primary;     // its minimum along the primary axis (for the clamp)
+    int flex_size;       // resolved primary size for weighted children
     int margin_t, margin_r, margin_b, margin_l;
 } MeasuredChild;
 
@@ -754,10 +761,11 @@ static void stack_do_layout(HWND stack_hwnd) {
         return;
     }
 
-    // Measure + identify spacers.
+    // Measure + identify spacers and weighted (flex) children.
     MeasuredChild* mc = (MeasuredChild*)calloc(nchildren, sizeof(MeasuredChild));
     int total_primary = 0;
     int spacer_count = 0;
+    int total_weight = 0;
     for (int i = 0; i < nchildren; i++) {
         int ch = handle_for_hwnd(children[i]);
         Widget* cw = widget_at(ch);
@@ -773,29 +781,80 @@ static void stack_do_layout(HWND stack_hwnd) {
             mc[i].margin_r = cw->margin_right;
             mc[i].margin_b = cw->margin_bottom;
             mc[i].margin_l = cw->margin_left;
+            mc[i].weight = cw->weight;
         } else {
             cw_w = 100; ch_h = 24;
         }
         mc[i].measured_w = cw_w;
         mc[i].measured_h = ch_h;
-        total_primary += (orientation == 1) ? (ch_h + mc[i].margin_t + mc[i].margin_b)
-                                            : (cw_w + mc[i].margin_l + mc[i].margin_r);
+        if (mc[i].weight > 0) {
+            // Weighted children take flex; reserve only their minimum (their
+            // pref/measured size along the primary axis IS the min request).
+            mc[i].min_primary = (orientation == 1) ? ch_h : cw_w;
+            total_weight += mc[i].weight;
+        } else {
+            total_primary += (orientation == 1) ? (ch_h + mc[i].margin_t + mc[i].margin_b)
+                                                : (cw_w + mc[i].margin_l + mc[i].margin_r);
+        }
     }
     int spacing_total = sl->spacing * (nchildren - 1);
     int primary_avail = (orientation == 1) ? avail_h : avail_w;
     int flex = primary_avail - total_primary - spacing_total;
     if (flex < 0) flex = 0;
-    int per_spacer = spacer_count > 0 ? (flex / spacer_count) : 0;
+    // Spacers only take flex when there are no weighted children (weighted
+    // children are the explicit flex mechanism; spacers are the implicit one).
+    int per_spacer = (spacer_count > 0 && total_weight == 0) ? (flex / spacer_count) : 0;
+
+    // Weight distribution with min-clamp: a weighted child whose proportional
+    // share would fall below its minimum is pinned to the min and removed from
+    // the pool, then the rest re-split. Iterate to a fixed point (mirrors the
+    // GTK4 AeuiFlexLayout). Pinned sizes + the remainder land in mc[].flex_size.
+    if (total_weight > 0) {
+        int clamp_flex = flex;
+        int clamp_weight = total_weight;
+        char* pinned = (char*)calloc(nchildren, 1);
+        int changed = 1;
+        while (changed && clamp_weight > 0) {
+            changed = 0;
+            for (int i = 0; i < nchildren; i++) {
+                if (mc[i].weight <= 0 || pinned[i]) continue;
+                int share = clamp_flex * mc[i].weight / clamp_weight;
+                if (share < mc[i].min_primary) {
+                    pinned[i] = 1;
+                    mc[i].flex_size = mc[i].min_primary;
+                    clamp_flex -= mc[i].min_primary;
+                    if (clamp_flex < 0) clamp_flex = 0;
+                    clamp_weight -= mc[i].weight;
+                    changed = 1;
+                }
+            }
+        }
+        // Distribute the remaining flex among unpinned weighted children; the
+        // last one absorbs the integer-division remainder.
+        int seen = 0, used = 0;
+        for (int i = 0; i < nchildren; i++) {
+            if (mc[i].weight <= 0 || pinned[i]) continue;
+            seen += mc[i].weight;
+            mc[i].flex_size = (seen == clamp_weight)
+                ? clamp_flex - used
+                : clamp_flex * mc[i].weight / clamp_weight;
+            used += mc[i].flex_size;
+        }
+        free(pinned);
+    }
 
     // Lay out.
     int cur = (orientation == 1) ? sl->padding_top : sl->padding_left;
     for (int i = 0; i < nchildren; i++) {
         int x, y, w, h;
         if (orientation == 1) { // VStack
-            int ch_size = mc[i].is_spacer ? per_spacer : mc[i].measured_h;
+            int ch_size = mc[i].is_spacer ? per_spacer
+                        : mc[i].weight > 0 ? mc[i].flex_size
+                        : mc[i].measured_h;
             h = ch_size;
             w = avail_w - mc[i].margin_l - mc[i].margin_r;
-            if (mc[i].measured_w > 0 && mc[i].measured_w < w && !mc[i].is_spacer) {
+            if (mc[i].measured_w > 0 && mc[i].measured_w < w
+                && !mc[i].is_spacer && mc[i].weight == 0) {
                 if (sl->alignment == 1)
                     x = sl->padding_left + mc[i].margin_l + (w - mc[i].measured_w) / 2;
                 else if (sl->alignment == 2)
@@ -809,10 +868,13 @@ static void stack_do_layout(HWND stack_hwnd) {
             y = cur + mc[i].margin_t;
             cur = y + h + mc[i].margin_b + sl->spacing;
         } else { // HStack
-            int ch_size = mc[i].is_spacer ? per_spacer : mc[i].measured_w;
+            int ch_size = mc[i].is_spacer ? per_spacer
+                        : mc[i].weight > 0 ? mc[i].flex_size
+                        : mc[i].measured_w;
             w = ch_size;
             h = avail_h - mc[i].margin_t - mc[i].margin_b;
-            if (mc[i].measured_h > 0 && mc[i].measured_h < h && !mc[i].is_spacer) {
+            if (mc[i].measured_h > 0 && mc[i].measured_h < h
+                && !mc[i].is_spacer && mc[i].weight == 0) {
                 if (sl->alignment == 1)
                     y = sl->padding_top + mc[i].margin_t + (h - mc[i].measured_h) / 2;
                 else if (sl->alignment == 2)
@@ -1507,21 +1569,100 @@ void aether_ui_context_menu_item_impl(int handle, const char* label,
     (void)handle; (void)label; (void)boxed_closure;
 }
 
-// Shortcuts + focus stubs (item 9) — keep the cross-platform ABI green;
-// real accelerators/focus wiring is follow-up work on this backend.
-void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
-    (void)combo; (void)boxed_closure;
-}
-// Conditional + chorded shortcuts: same stub status as plain shortcuts on
-// win32 (no accelerator wiring yet) — keep the ABI green.
+// Shortcuts (item 9). Real via the driver's /window/key path (the same route
+// GTK4/macOS use for headless key delivery): registered combos are matched
+// verbatim (the app and the driver use identical combo strings, so no
+// GTK-style normalization is needed here). shortcut_when adds a predicate;
+// shortcut_chord adds a two-key state machine. A future real-keyboard path
+// (a WM_KEYDOWN → combo translation feeding aeui_win32_fire_shortcut) would
+// reuse this same registry.
+typedef struct {
+    char* combo;             // as written ("Ctrl+E")
+    AeClosure* closure;
+    AeClosure* enabled;      // optional predicate |-> int; NULL = always
+} W32Shortcut;
+static W32Shortcut* w32_shortcuts = NULL;
+static int w32_shortcut_count = 0, w32_shortcut_cap = 0;
+
+typedef struct {
+    char* first;
+    char* second;
+    AeClosure* closure;
+} W32Chord;
+static W32Chord* w32_chords = NULL;
+static int w32_chord_count = 0, w32_chord_cap = 0;
+static char* w32_chord_pending = NULL;   // armed prefix (owned)
+
 void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
                                   void* enabled_closure) {
-    (void)combo; (void)boxed_closure; (void)enabled_closure;
+    if (!combo) return;
+    if (w32_shortcut_count >= w32_shortcut_cap) {
+        w32_shortcut_cap = w32_shortcut_cap == 0 ? 16 : w32_shortcut_cap * 2;
+        w32_shortcuts = (W32Shortcut*)realloc(w32_shortcuts,
+                                              sizeof(W32Shortcut) * w32_shortcut_cap);
+    }
+    W32Shortcut* s = &w32_shortcuts[w32_shortcut_count++];
+    s->combo = _strdup(combo);
+    s->closure = (AeClosure*)boxed_closure;
+    s->enabled = (AeClosure*)enabled_closure;
 }
+
+void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
+    aether_ui_shortcut_when_impl(combo, boxed_closure, NULL);
+}
+
 void aether_ui_shortcut_chord_impl(const char* first_combo,
                                    const char* second_combo,
                                    void* boxed_closure) {
-    (void)first_combo; (void)second_combo; (void)boxed_closure;
+    if (!first_combo || !second_combo) return;
+    if (w32_chord_count >= w32_chord_cap) {
+        w32_chord_cap = w32_chord_cap == 0 ? 8 : w32_chord_cap * 2;
+        w32_chords = (W32Chord*)realloc(w32_chords, sizeof(W32Chord) * w32_chord_cap);
+    }
+    W32Chord* ch = &w32_chords[w32_chord_count++];
+    ch->first = _strdup(first_combo);
+    ch->second = _strdup(second_combo);
+    ch->closure = (AeClosure*)boxed_closure;
+}
+
+// Feed a combo into the chord machine. Returns 1 if consumed (armed a prefix
+// or completed a chord).
+static int w32_chord_feed(const char* combo) {
+    if (w32_chord_pending) {
+        for (int i = 0; i < w32_chord_count; i++) {
+            if (strcmp(w32_chords[i].first, w32_chord_pending) == 0 &&
+                strcmp(w32_chords[i].second, combo) == 0) {
+                AeClosure* c = w32_chords[i].closure;
+                free(w32_chord_pending); w32_chord_pending = NULL;
+                invoke_closure(c);
+                return 1;
+            }
+        }
+        free(w32_chord_pending); w32_chord_pending = NULL;  // cancel; fall through
+    }
+    for (int i = 0; i < w32_chord_count; i++) {
+        if (strcmp(w32_chords[i].first, combo) == 0) {
+            w32_chord_pending = _strdup(combo);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Fire the shortcut(s) bound to `combo` (chords first). Returns 1 if handled.
+static int aeui_win32_fire_shortcut(const char* combo) {
+    if (w32_chord_feed(combo)) return 1;
+    int fired = 0;
+    for (int i = 0; i < w32_shortcut_count; i++) {
+        if (strcmp(w32_shortcuts[i].combo, combo) != 0) continue;
+        W32Shortcut* s = &w32_shortcuts[i];
+        if (s->enabled && s->enabled->fn) {
+            if (!((int(*)(void*))s->enabled->fn)(s->enabled->env)) continue;
+        }
+        invoke_closure(s->closure);
+        fired = 1;
+    }
+    return fired;
 }
 void aether_ui_focus_impl(int handle) {
     Widget* w = widget_at(handle);
@@ -1859,7 +2000,8 @@ void aether_ui_split_set_position_impl(int handle, int px) {
     (void)handle; (void)px;
 }
 void aether_ui_widget_weight_impl(int handle, int n) {
-    (void)handle; (void)n;
+    Widget* w = widget_at(handle);
+    if (w) w->weight = n;
 }
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
     (void)handle; (void)boxed_closure;
@@ -4199,10 +4341,18 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             return 0;
         }
         if (ctx->action == AETHER_DRV_WIN_KEY) {
-            // Tab / Shift+Tab move REAL focus (the same walk a dialog
-            // does). Combos report fired:false — win32 has no accelerator
-            // wiring yet, and a fake green here would lie about it.
+            // Tab / Shift+Tab move REAL focus; Escape dismisses an overlay;
+            // any other combo fires a registered shortcut / chord (scoped
+            // shortcuts honour their predicate).
             ctx->retval = 0;
+            if (strcmp(ctx->sval, "Escape") != 0 &&
+                strcmp(ctx->sval, "Tab") != 0 &&
+                strcmp(ctx->sval, "Shift+Tab") != 0) {
+                ctx->retval = aeui_win32_fire_shortcut(ctx->sval);
+                ctx->result = 0;
+                ctx->done = 1;
+                return 0;
+            }
             if (strcmp(ctx->sval, "Escape") == 0) {
                 // Escape dismisses the topmost live overlay (the same
                 // wiring GTK/macOS give it); unhandled when none is open.
