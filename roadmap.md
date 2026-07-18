@@ -199,10 +199,14 @@ term in one result row — cosmetic, doesn't affect the spec.
   its share would fall under it, iterated to a fixed point. GTK4
   (AeuiFlexLayout) AND win32 (the stack layout now flex-distributes too,
   same clamp) — 2/2 on both, identical widths. `weight()` is real on win32
-  now (was a no-op). ~~RTL~~ **DONE 2026-07-18** — `rtl(hstack, 1)` lays
-  children right-to-left (GTK4 gtk_widget_set_direction / win32 reversed
-  placement / macOS NSStackView userInterfaceLayoutDirection); 3/3 in the
-  polish spec (GTK4).
+  now (was a no-op). ~~RTL~~ **DONE 2026-07-18 (GTK4 + macOS)** —
+  `rtl(hstack, 1)` lays children right-to-left (GTK4
+  gtk_widget_set_direction / macOS NSStackView layout direction); polish
+  spec 3/3 on GTK4. win32 RTL is written (mirror-x) but blocked on a
+  PRE-EXISTING win32 quirk: hstack children enumerate/place in reverse
+  creation order (GetWindow(GW_CHILD) gave [C,B,A] for a row built A,B,C),
+  so the mirror lands them the wrong way. Tracked as a win32 gap (the LTR
+  child-order quirk is the real fix — separate from RTL).
 - **Bindings:** ~~list-typed state (`each_bind`)~~ **DONE 2026-07-18**
   (`ui_state_list` + `each_bind`; a `ui_set_list` re-runs `each_update`
   via a generic state-observer primitive), ~~two-way binding~~ **DONE**
