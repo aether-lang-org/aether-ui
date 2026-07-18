@@ -181,8 +181,15 @@ term in one result row — cosmetic, doesn't affect the spec.
   (`tree`/`tree_node`/`tree_add_child` — hierarchical rows, disclosure
   toggle, independent subtrees; 3/3). All pure module.ae (backend-
   agnostic); tree+delegate+table_bind verified GTK4+win32.
-- **Effects:** shadows on paths/text (rect+circle only today),
-  **backdrop blur** / materials (frosted scrim).
+- **Effects:** ~~shadows on paths/text~~ **DONE 2026-07-18** — vg.shadow
+  now covers `<path>` (silhouette follows the real outline via
+  fill_path_in_buffer_scaled + path_bounds, not a bbox rect) and `<text>`
+  (offset dark copy under the glyphs; crisp — a blurred glyph shadow needs
+  a glyph rasterizer vg lacks). test_effects 22 assertions. Remaining:
+  **backdrop blur** / materials (frosted scrim) — needs framebuffer
+  readback under a region (vg has none) or a native material
+  (NSVisualEffectView / win32 acrylic / GTK has no clean backdrop-filter);
+  a separate backend-heavy piece.
 - **Transitions:** enter/exit transitions on overlay ENTRIES (the
   chrome fade-ins exist; per-entry slide/fade doesn't).
 - **Layout:** weight-share min-clamping (weighted children can be
