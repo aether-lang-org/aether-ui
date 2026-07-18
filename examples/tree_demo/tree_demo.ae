@@ -1,0 +1,37 @@
+// Aether UI tree — hierarchical rows with expand/collapse.
+import ui
+import ui (window, vstack, text, btn,
+    tree, tree_node, tree_add_child, tree_refresh, tree_visible_count,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    // Documents/ (report.pdf, notes.txt)  +  Pictures/ (vacation.jpg)
+    docs = tree_node("Documents")
+    tree_add_child(docs, tree_node("report.pdf"))
+    tree_add_child(docs, tree_node("notes.txt"))
+    pics = tree_node("Pictures")
+    tree_add_child(pics, tree_node("vacation.jpg"))
+
+    roots = list.new()
+    _ = list.add(roots, docs as ptr)
+    _ = list.add(roots, pics as ptr)
+
+    window("tree demo", 380, 360) {
+        vstack(6) {
+            status = text("visible rows: 2")
+            t = tree(roots)
+            // Refresh the count readout for the spec.
+            _r = btn("count") callback {
+                aether_ui_text_set_string(status,
+                    string.concat("visible rows: ",
+                        string.from_int(tree_visible_count(t))))
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

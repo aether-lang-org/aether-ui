@@ -50,8 +50,11 @@ exports (
     listbox, listbox_multi, listbox_update, listbox_select, listbox_selected,
     listbox_is_selected, listbox_count, on_row_double_click,
     on_select, add_css_class, remove_css_class,
-    table_cols, table_col, table, table_update, table_select, table_selected,
-    table_count, table_on_select, on_sort,
+    table_cols, table_col, table_col_delegate, table, table_update,
+    table_select, table_selected, table_count, table_on_select, table_bind,
+    on_sort,
+    tree, tree_node, tree_add_child, tree_set_expanded, tree_refresh,
+    tree_visible_count,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_from_bytes, image_size,
     canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -1698,16 +1701,32 @@ remove_css_class(handle: int, cls: string) {
 //   table_update(t, my_list)
 // ---------------------------------------------------------------------------
 
-struct TableCol { title: string, w: int }
+struct TableCol { title: string, w: int, delegate: ptr }
 struct TableDef { cols: ptr, lb: ptr, cell: ptr, sort_cb: ptr }
 
 table_cols() -> ptr { return list.new() }
 
 table_col(cols: ptr, title: string, w: int) {
-    c = malloc(16) as *TableCol
+    c = malloc(24) as *TableCol
     c.title = title
     c.w = w
+    c.delegate = null
     _ = list.add(cols, c as ptr)
+}
+
+// table_col_delegate(cols, title, w, render): a column whose cells are built by
+// `render` (|item, i, cell| — build widgets into `cell`, a per-cell hstack)
+// instead of the string cell(). For %-bars, chips, buttons, anything custom.
+table_col_delegate(cols: ptr, title: string, w: int, render: fn) {
+    c = malloc(24) as *TableCol
+    c.title = title
+    c.w = w
+    c.delegate = box_closure(render)
+    _ = list.add(cols, c as ptr)
+}
+
+_table_invoke_delegate(cb: fn, item: ptr, i: int, cell: int) {
+    cb(item, i, cell)
 }
 
 _table_invoke_cell(cb: fn, item: ptr, c: int) -> string {
@@ -1739,7 +1758,9 @@ table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
         _w1 = width(hb, col.w)
         ci = ci + 1
     }
-    // Body: a listbox whose row template renders one sized text per column.
+    // Body: a listbox whose row template renders one cell per column. A plain
+    // column shows the string cell(); a delegate column gets a sized hstack the
+    // delegate renders widgets into.
     t.lb = listbox(wrap, 2) callback |item: ptr, i: int, row: int| {
         cf = unbox_closure(t.cell)
         cj = 0
@@ -1747,9 +1768,16 @@ table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
         while cj < n2 {
             cp2, _ce2 = list.get(t.cols, cj)
             col2 = cp2 as *TableCol
-            cell_s = _table_invoke_cell(cf, item, cj)
-            tx = text(row, cell_s)
-            _w2 = width(tx, col2.w)
+            if col2.delegate != null {
+                dcell = hstack(row, 4)
+                _wc = width(dcell, col2.w)
+                dg = unbox_closure(col2.delegate)
+                _table_invoke_delegate(dg, item, i, dcell)
+            } else {
+                cell_s = _table_invoke_cell(cf, item, cj)
+                tx = text(row, cell_s)
+                _w2 = width(tx, col2.w)
+            }
             cj = cj + 1
         }
     }
@@ -1790,10 +1818,122 @@ table_count(tp: ptr) -> int {
     return listbox_count(t.lb)
 }
 
+// ── Tree (hierarchical rows with expand/collapse) ───────────────────
+// Build a node model, then render it: each visible node is a row with an
+// indent + a disclosure control (▾ expanded / ▸ collapsed / blank leaf) that
+// toggles its subtree. The tree flattens the visible nodes into a listbox and
+// re-flattens on every toggle.
+//   root = tree_node("Documents")
+//   kid  = tree_node("report.pdf")
+//   tree_add_child(root, kid)
+//   roots = list.new(); list.add(roots, root as ptr)
+//   t = tree(roots)
+struct TreeNode { label: string, children: ptr, expanded: int }
+struct TreeDef  { roots: ptr, lb: ptr, flat: ptr }
+
+tree_node(label: string) -> ptr {
+    n = malloc(24) as *TreeNode
+    n.label = label
+    n.children = null
+    n.expanded = 0
+    return n as ptr
+}
+tree_add_child(parent: ptr, child: ptr) {
+    p = parent as *TreeNode
+    if p.children == null { p.children = list.new() }
+    _ = list.add(p.children, child)
+}
+
+// Depth-first flatten of visible nodes into t.flat; each entry is a boxed
+// (node, depth) pair. We store node ptr and depth in parallel via a small
+// struct so the row render knows how far to indent.
+struct TreeRow { node: ptr, depth: int }
+
+_tree_flatten_into(flat: ptr, nodes: ptr, depth: int) {
+    if nodes == null { return }
+    n = list.size(nodes)
+    i = 0
+    while i < n {
+        np, _e = list.get(nodes, i)
+        node = np as *TreeNode
+        tr = malloc(16) as *TreeRow
+        tr.node = np
+        tr.depth = depth
+        _ = list.add(flat, tr as ptr)
+        if node.expanded == 1 {
+            _tree_flatten_into(flat, node.children, depth + 1)
+        }
+        i = i + 1
+    }
+}
+
+_tree_reflatten(tp: ptr) {
+    t = tp as *TreeDef
+    t.flat = list.new()
+    _tree_flatten_into(t.flat, t.roots, 0)
+    listbox_update(t.lb, t.flat)
+}
+
+tree(_ctx: ptr, roots: ptr) -> ptr {
+    t = malloc(24) as *TreeDef
+    t.roots = roots
+    t.flat = null
+    tp = t as ptr
+    t.lb = listbox(_ctx, 2) callback |item: ptr, i: int, row: int| {
+        tr = item as *TreeRow
+        node = tr.node as *TreeNode
+        // Indent: one blank spacer-string per depth level.
+        pad = ""
+        d = 0
+        while d < tr.depth {
+            pad = string.concat(pad, "    ")
+            d = d + 1
+        }
+        _pad = text(row, pad)
+        // Disclosure: a real toggle for parents, blank for leaves.
+        has_kids = 0
+        if node.children != null { if list.size(node.children) > 0 { has_kids = 1 } }
+        if has_kids == 1 {
+            glyph = "▸"
+            if node.expanded == 1 { glyph = "▾" }
+            _dt = btn(row, glyph) callback {
+                if node.expanded == 1 { node.expanded = 0 } else { node.expanded = 1 }
+                _tree_reflatten(tp)
+            }
+        } else {
+            _lt = text(row, "  ")
+        }
+        _lbl = text(row, node.label)
+    }
+    _tree_reflatten(tp)
+    return tp
+}
+
+// Programmatic expand/collapse + a count of currently-visible rows.
+tree_set_expanded(node_p: ptr, expanded: int) {
+    n = node_p as *TreeNode
+    n.expanded = expanded
+}
+tree_refresh(tp: ptr) { _tree_reflatten(tp) }
+tree_visible_count(tp: ptr) -> int {
+    t = tp as *TreeDef
+    if t.flat == null { return 0 }
+    return list.size(t.flat)
+}
+
 // table_on_select(t) callback |i: int| — row selection (delegates to listbox).
 table_on_select(tp: ptr, cb: fn) {
     t = tp as *TableDef
     on_select(t.lb, cb)
+}
+
+// table_bind(t, list_state): the table tracks a LIST state — every ui_set_list
+// re-runs table_update. The each_bind sibling for tables. Seeds once.
+table_bind(tp: ptr, list_state: int) {
+    aether_ui_state_on_change(list_state, box_closure(|| {
+        table_update(tp, aether_ui_state_get_list(list_state))
+    }))
+    table_update(tp, aether_ui_state_get_list(list_state))
 }
 
 // Modal sheet

@@ -1,0 +1,56 @@
+// Aether UI table — a delegate column (custom widgets per cell) + table_bind
+// (the table tracks a list state; ui_set_list re-renders it).
+import ui
+import ui (window, vstack, text, btn, hstack,
+    table_cols, table_col, table_col_delegate, table, table_bind,
+    ui_state_list, ui_set_list, enable_test_server)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern malloc(size: int) -> ptr
+
+struct Row { name: string, pct: int }
+
+mk_row(name: string, pct: int) -> ptr {
+    r = malloc(24) as *Row
+    r.name = name
+    r.pct = pct
+    return r as ptr
+}
+
+rows_of(a: string, ap: int, b: string, bp: int) -> ptr {
+    l = list.new()
+    _ = list.add(l, mk_row(a, ap))
+    _ = list.add(l, mk_row(b, bp))
+    return l
+}
+
+main() {
+    data = ui_state_list(rows_of("alpha", 30, "beta", 60))
+
+    window("table delegate demo", 460, 340) {
+        vstack(8) {
+            cols = table_cols()
+            table_col(cols, "Name", 160)
+            // Delegate column: render a text "usage: N%" widget into each cell,
+            // plus a marker button so the driver can see the delegate ran.
+            table_col_delegate(cols, "Usage", 200) callback |item: ptr, i: int, cell: int| {
+                r = item as *Row
+                _u = text(cell, string.concat("usage: ",
+                    string.concat(string.from_int(r.pct), "%")))
+            }
+            t = table(cols) callback |item: ptr, c: int| {
+                r = item as *Row
+                if c == 0 { return r.name }
+                return ""   // delegate column supplies its own widgets
+            }
+            table_bind(t, data)
+
+            _swap = btn("swap data") callback {
+                ui_set_list(data, rows_of("gamma", 15, "delta", 90))
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

@@ -45,6 +45,8 @@ SUITES=(
   "typo|examples/typo_demo|typo_demo/spec_typo_demo|"
   "multiselect|examples/multiselect_demo|multiselect_demo/spec_multiselect_demo|"
   "dblclick|examples/dblclick_demo|dblclick_demo/spec_dblclick_demo|"
+  "tree|examples/tree_demo|tree_demo/spec_tree_demo|"
+  "tabledeleg|examples/tabledeleg_demo|tabledeleg_demo/spec_tabledeleg_demo|"
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
   "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"
   "rubiks_cube|apps/rubiks_cube|rubiks_cube/spec_rubiks_cube|"
