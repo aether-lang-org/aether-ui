@@ -849,9 +849,15 @@ static void stack_do_layout(HWND stack_hwnd) {
     // on-screen order relative to LTR deterministically (independent of the
     // child-enumeration order).
     int rtl = (orientation == 0 && sl->rtl);
-    if (getenv("AEUI_RTL_DEBUG") && orientation == 0)
-        fprintf(stderr, "[rtl-dbg] hstack layout: sl->rtl=%d nchildren=%d client_w=%ld\n",
-                sl->rtl, nchildren, (long)(client.right - client.left));
+    if (getenv("AEUI_RTL_DEBUG") && orientation == 0 && sl->rtl) {
+        fprintf(stderr, "[rtl-dbg] hstack rtl layout: nchildren=%d client_w=%ld order:",
+                nchildren, (long)(client.right - client.left));
+        for (int di = 0; di < nchildren; di++) {
+            wchar_t t[32] = L""; GetWindowTextW(children[di], t, 32);
+            fprintf(stderr, " [%d]=%ls", di, t);
+        }
+        fprintf(stderr, "\n");
+    }
     int cur = (orientation == 1) ? sl->padding_top
             : rtl ? ((client.right - client.left) - sl->padding_right)
                   : sl->padding_left;
