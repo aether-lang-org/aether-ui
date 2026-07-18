@@ -192,8 +192,11 @@ term in one result row — cosmetic, doesn't affect the spec.
   a separate backend-heavy piece.
 - **Transitions:** enter/exit transitions on overlay ENTRIES (the
   chrome fade-ins exist; per-entry slide/fade doesn't).
-- **Layout:** weight-share min-clamping (weighted children can be
-  squeezed below their minimum), RTL.
+- **Layout:** ~~weight-share min-clamping~~ **DONE 2026-07-18** (GTK4
+  AeuiFlexLayout: a weighted child is pinned to its min and pulled from
+  the weight pool when its share would fall under it, iterated to a fixed
+  point; 2/2). GTK4 only — win32 `weight()` is still a no-op stub. RTL
+  still open.
 - **Bindings:** ~~list-typed state (`each_bind`)~~ **DONE 2026-07-18**
   (`ui_state_list` + `each_bind`; a `ui_set_list` re-runs `each_update`
   via a generic state-observer primitive), ~~two-way binding~~ **DONE**
@@ -203,9 +206,13 @@ term in one result row — cosmetic, doesn't affect the spec.
   `AEUI_STATE_LIST` cell, in all three backends; 5/5 (rbind) + 7/7
   (bindings) on GTK4. `table_bind` still open (needs the same over
   table_update). Design notes in docs/design/reactivity-unification.md §5.
-- **Focus/shortcuts:** per-widget/conditional shortcut scopes, chorded
-  shortcuts, auto menu↔shortcut binding (accel display exists; wiring
-  is two lines by hand today).
+- **Focus/shortcuts:** ~~conditional shortcut scopes~~ **DONE 2026-07-18**
+  (`shortcut_when(combo, enabled, cb)` — predicate-gated; inert combo
+  propagates), ~~chorded shortcuts~~ **DONE** (`shortcut_chord(a, b, cb)`
+  — two-key sequence, 1.5s window; 3/3 GTK4). Both GTK4-real; win32
+  shortcuts are stubs so these are stubs there; macOS: shortcut_when
+  degrades to plain, chord stubbed (sibling TODO). Remaining:
+  per-widget scopes, auto menu↔shortcut binding.
 - **Menus:** ~~GTK4 native menu wiring (GMenu/GActionGroup) is still the
   recorded stub~~ **DONE 2026-07-18** — the GTK4 menu bar is real
   (GtkPopoverMenuBar over a GMenu model; each item backed by a
