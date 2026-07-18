@@ -45,8 +45,17 @@ main() {
         }
 
         aeocha.it("search populates the results list") callback {
-            // Type a term, click Search — the results each-list fills with the
-            // canned lis_net songs (title — artist rows + a Play button).
+            // The search box + results live on the Search tab. With a real tab
+            // strip (all three backends now), inactive pages are hidden, so we
+            // select the Search tab (index 1) before driving it — otherwise the
+            // results each-list fills a hidden page. tab_select goes straight to
+            // the tabs handle so we don't collide with the two "Search" labels
+            // (the strip button and the search-bar button).
+            tv = uidriver.widget_id_of("tabs", "")
+            aeocha.assert_gt(tv, 0, "tabs composite found")
+            uidriver.post_ok("/widget/${tv}/tab_select?i=1", "switch to Search tab")
+            // Type a term, click the search-bar Search — the results each-list
+            // fills with the canned lis_net songs (title — artist + Play button).
             tf = uidriver.widget_id_of("textfield", "")
             aeocha.assert_gt(tf, 0, "search textfield found")
             uidriver.post_ok("/widget/${tf}/set_text?v=lumiere", "type search term")
@@ -60,6 +69,9 @@ main() {
         }
 
         aeocha.it("a result Play button is clickable (drives the audio seam)") callback {
+            // Stay on / return to the Search tab so the result rows are live.
+            tv = uidriver.widget_id_of("tabs", "")
+            uidriver.post_ok("/widget/${tv}/tab_select?i=1", "switch to Search tab")
             p = uidriver.widget_id_by_text("Play")
             aeocha.assert_gt(p, 0, "a Play button is present")
             // Clicking must succeed (200); the seam logs + no-ops (no audio API).
