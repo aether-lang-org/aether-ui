@@ -4011,6 +4011,33 @@ static const char* widget_text_content(GtkWidget* w) {
     return "";
 }
 
+// JSON-escape SRC into DST (NUL-terminated, never overflows DST). Mirrors the
+// shared test server's escaper (aether_ui_test_server.c widget_to_json) so this
+// GTK4 embedded server produces byte-identical JSON: " \ \n \r \t plus any
+// other control char (U+0000–U+001F) as \u00XX. Without it a raw control byte
+// or quote in widget text (e.g. a search-result title) yields invalid JSON that
+// breaks client-side json.parse. (both-servers parity — found via LisMusic.)
+// A \uXXXX expansion is 6 bytes; the ei < dstsize-8 guard leaves the headroom.
+static void aeui_json_escape(const char* src, char* dst, int dstsize) {
+    static const char hex[] = "0123456789abcdef";
+    int ei = 0;
+    for (int i = 0; src[i] && ei < dstsize - 8; i++) {
+        unsigned char ch = (unsigned char)src[i];
+        if (ch == '"' || ch == '\\') { dst[ei++] = '\\'; dst[ei++] = (char)ch; }
+        else if (ch == '\n') { dst[ei++] = '\\'; dst[ei++] = 'n'; }
+        else if (ch == '\r') { dst[ei++] = '\\'; dst[ei++] = 'r'; }
+        else if (ch == '\t') { dst[ei++] = '\\'; dst[ei++] = 't'; }
+        else if (ch < 0x20) {
+            dst[ei++] = '\\'; dst[ei++] = 'u';
+            dst[ei++] = '0'; dst[ei++] = '0';
+            dst[ei++] = hex[(ch >> 4) & 0xF];
+            dst[ei++] = hex[ch & 0xF];
+        }
+        else dst[ei++] = (char)ch;
+    }
+    dst[ei] = '\0';
+}
+
 // Build JSON response for a single widget.
 static int widget_to_json(int handle, char* buf, int bufsize) {
     GtkWidget* w = aether_ui_get_widget(handle);
@@ -4019,6 +4046,8 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
     }
     const char* type = widget_type_name(w);
     const char* text = widget_text_content(w);
+    char text_esc[2560];
+    aeui_json_escape(text ? text : "", text_esc, (int)sizeof(text_esc));
     int visible = gtk_widget_get_visible(w) ? 1 : 0;
     int sealed = is_widget_sealed(handle) ? 1 : 0;
     int is_banner = (handle == banner_handle) ? 1 : 0;
@@ -4026,7 +4055,7 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
     int enabled = gtk_widget_get_sensitive(w) ? 1 : 0;
     int n = snprintf(buf, bufsize,
         "{\"id\":%d,\"type\":\"%s\",\"text\":\"%s\",\"visible\":%s,\"sealed\":%s,\"banner\":%s,\"enabled\":%s",
-        handle, type, text ? text : "",
+        handle, type, text_esc,
         visible ? "true" : "false",
         sealed ? "true" : "false",
         is_banner ? "true" : "false",
