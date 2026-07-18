@@ -30,8 +30,8 @@ main() {
             aeocha.assert_contains(b, "\"text\":\"row 0\"", "window starts at row 0")
             aeocha.assert_contains(b, "\"text\":\"row 9\"", "window ends at row 9")
             // Rows far outside the window are NOT realized.
-            far = string.contains(b, "\"text\":\"row 500\"")
-            aeocha.assert_eq(far, 0, "row 500 is not realized initially")
+            absent = string.contains(b, "\"text\":\"row 500\"")
+            aeocha.assert_eq(absent, 0, "row 500 is not realized initially")
         }
 
         aeocha.it("scrolling slides the window and recycles widgets") callback {
