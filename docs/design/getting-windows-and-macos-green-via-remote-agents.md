@@ -368,10 +368,11 @@ Without `keep_alive`, your backgrounded `build/testable &` is killed the instant
 
 ## Peer-equivalence checks — verified on the Mac (2026-07-18)
 
-Both items below landed + were verified on GTK4/win32 first; this is the record
+The items below landed + were verified on GTK4/win32 first; this is the record
 of running them on the Mac and ticking them off. Full `tests/spec_matrix.sh` is
-**108/108 green** on macOS after this work (was 103; +4 for the `menu` suite now
-running, +1 for the two-way binding assertion).
+**126/126 green** on macOS after this work. Only the two-way textfield binding
+needed an AppKit-specific fix; every other batch was correct by construction and
+this was a pure verification pass.
 
 - **Native menu bar** (commits dcdb68f/61da9d3) — ✅ green, no code change, as
   predicted. `spec_menu` is 4/4 and `GET /menus` returns exactly
@@ -398,50 +399,25 @@ running, +1 for the two-way binding assertion).
      driver `/set_text` reaches the write-back (the earlier raw path fired the
      field's *action*, never `controlTextDidChange` nor the write-back).
 
-- **Reactive bindings — each_bind + computed state** (landed 2026-07-18,
-  commit aa6c1a7). Backend-agnostic (the `aether_ui_state_on_change` observer
-  + `AEUI_STATE_LIST` cell, mirrored verbatim in `aether_ui_macos.m`).
-  Verified 5/5 on GTK4 + win32. On the Mac:
-  ```
-  ./build.sh examples/rbind_demo/rbind_demo.ae build/rbind_demo
-  AETHER_UI_TEST_PORT=9222 ./build/rbind_demo &        # keep_alive:true
-  UI_SPEC=rbind_demo/spec_rbind_demo tests/run_spec.sh # expect 5/5
-  ```
+- **Reactive bindings — each_bind + computed state** (commit aa6c1a7) — ✅ 5/5
+  on `rbind_demo`, no code change. Backend-agnostic (the
+  `aether_ui_state_on_change` observer + `AEUI_STATE_LIST` cell, mirrored
+  verbatim in `aether_ui_macos.m`).
 
-- **File dialogs — open_file / save_file** (landed 2026-07-18, commit
-  27b0ef2). macOS uses NSOpenPanel / NSSavePanel (both `aeui_is_headless`-
-  guarded). No spec (native modal); the check is that a headless click
-  doesn't hang and returns "". Build any app calling them and confirm it
-  links; a real pick needs a human at the Mac.
+- **File dialogs — open_file / save_file** (commit 27b0ef2) — ✅ implemented +
+  links. macOS uses `NSOpenPanel` / `NSSavePanel`, both `aeui_is_headless`-
+  guarded to `strdup("")` so a headless click returns "" without hanging on
+  `runModal`. No spec (native modal); a real pick needs a human at the Mac.
 
-- **Typography / multi-select / row double-click** (landed 2026-07-18, commit
-  06543a9). Verified 5+3+2 on GTK4 + win32. macOS mirrors: text_wrapped uses
-  `NSTextField wrappingLabelWithString` + a width constraint; multi-select is
-  pure module.ae (no backend); double-click's fire path uses
-  `objc_setAssociatedObject` (needs `#import <objc/runtime.h>`, added). Run:
-  ```
-  for d in typo_demo multiselect_demo dblclick_demo; do
-    ./build.sh examples/$d/$d.ae build/$d
-    AETHER_UI_TEST_PORT=9222 ./build/$d &        # keep_alive:true
-    UI_SPEC=$d/spec_$d tests/run_spec.sh          # expect 3 / 3 / 2
-    pkill -f build/$d
-  done
-  ```
-  Watch-out: the double-click fire is a plain closure invoke (no NSEvent), so
-  it's headless-safe; if it 0-fires, check the assoc-object key survived.
+- **Typography / multi-select / row double-click** (commit 06543a9) — ✅ 3/3/2
+  on `typo_demo` / `multiselect_demo` / `dblclick_demo`, no code change. macOS
+  mirrors: text_wrapped uses `NSTextField wrappingLabelWithString` + a width
+  constraint; multi-select is pure module.ae; double-click's fire path uses
+  `objc_setAssociatedObject` (a plain closure invoke, no NSEvent → headless-safe).
 
-- **Tree mode + table delegate cells + table_bind** (landed 2026-07-18, commit
-  3e684db). ALL pure module.ae — no backend/C, so macOS behaves identically to
-  GTK4+win32 (no per-backend failure mode). Verified 3+2 on GTK4+win32. A Mac
-  run is confirmation-only:
-  ```
-  for d in tree_demo tabledeleg_demo; do
-    ./build.sh examples/$d/$d.ae build/$d
-    AETHER_UI_TEST_PORT=9222 ./build/$d &        # keep_alive:true
-    UI_SPEC=$d/spec_$d tests/run_spec.sh          # expect 3 / 2
-    pkill -f build/$d
-  done
-  ```
+- **Tree mode + table delegate cells + table_bind** (commit 3e684db) — ✅ 3/2 on
+  `tree_demo` / `tabledeleg_demo`, no code change. ALL pure module.ae — no
+  backend/C, so macOS behaves identically to GTK4+win32.
 
 ## macOS vs winbaz — the cheat sheet
 
