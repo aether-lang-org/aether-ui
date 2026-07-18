@@ -134,8 +134,9 @@ reds map to: **the two cross-cutting bugs** (overlay pick, vg_tooltip
 hover), shortcuts (testable ×2, gp_scan_and_list ×4), splitview+layout
 (split 13), GDI metrics (text_metrics), ctx-menu driver actions + gio
 (context_menu, gp_fileops), toggle_group radio exclusivity
-(gp_legend), tabs strip (tabs 9 — honest stub), Tab order
-platform-native (testable 1).
+(gp_legend), Tab order platform-native (testable 1). (The tabs strip is
+no longer a stub — win32 tabs went real 2026-07-18; LisMusic's spec is
+5/5 on winbaz.)
 
 **Windows spec-matrix baseline (2026-07-14 evening, winbaz, post
 macOS-parity pull + timer fix):** `AEOCHA_DIR=... ./tests/spec_matrix.sh`
@@ -151,6 +152,20 @@ in spec_matrix.sh, and a REAL long-standing win32 bug — timers created
 before app_run ran as thread timers whose system-assigned id never
 matched ours, so ui.timer closures never fired (gp's scan pump was
 dead on Windows, likely forever).
+
+**Update 2026-07-18 — win32 tabs went real:** the tabs backend was a
+stub (a vstack that appended pages, no strip, no switching; tabs_selected
+= -1). It's now a real tab strip — a header hstack of one button per tab
+over a zstack of pages; stack_do_layout special-cases WK_TABS; a strip
+click or programmatic tab_select shows the page, bolds the active button,
+fires on_change deduped. Verified on winbaz: the LisMusic driver spec is
+5/5. Two harness bugs fixed in passing (both cross-backend): the
+test-server now JSON-escapes ALL control chars in widget text (a stray
+U+0001 in a search title was making the /widgets body invalid JSON, so
+client json.parse silently returned 0), and a widget_id_last_of driver
+helper disambiguates duplicate labels. Known residual (separate, not
+tabs): a win32 transient-widget-text glitch garbles the echoed search
+term in one result row — cosmetic, doesn't affect the spec.
 
 ## 2. Deferred from the ranked items (recorded at each closeout)
 

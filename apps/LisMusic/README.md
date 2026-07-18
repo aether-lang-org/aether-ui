@@ -89,7 +89,9 @@ A driver spec (`tests/LisMusic/spec_lismusic.ae`, ci Phase 7 / spec_matrix
 row `lismusic`) drives the running app over the AetherUIDriver and proves
 the real behaviours: the three-region shell renders, sidebar nav switches
 the right-page tab stack, search populates the results each-list, and the
-transport play/pause + result Play buttons are wired. 5/5.
+transport play/pause + result Play buttons are wired. 5/5 — on GTK4,
+AppKit, and Win32 (the win32 tab strip went real 2026-07-18; verified on
+winbaz).
 
 ## Build & run
 
