@@ -162,6 +162,7 @@ typedef enum {
     WK_SCRIM,     // overlay modal scrim (full-client click-eater)
     WK_TABS,      // native tab strip over a page stack
     WK_SPLITVIEW, // two panes + draggable divider (real since 2026-07-20)
+    WK_WRAP,      // flow layout — children wrap to new rows (real 2026-07-20)
 } WidgetKind;
 
 typedef struct {
@@ -268,6 +269,10 @@ typedef struct {
     int ctx_count, ctx_cap;
     // Toggle radio group id (0 = ungrouped).
     int radio_group;
+    // on_layout (GeometryReader): |w,h| closure + last-fired size (fire on
+    // CHANGE only, like GTK4).
+    AeClosure* on_layout;
+    int ol_last_w, ol_last_h;
 
     // CSS-class mirror (item 4/8 parity): win32 has no CSS, but the class
     // LIST is the driver's selection-visibility contract (.aui-row-selected)
@@ -726,10 +731,12 @@ typedef struct {
 // Containers/greedy widgets fill the CROSS axis of their parent stack (a
 // nested row spans its column's width, as on GTK) — only leaf widgets
 // shrink to their measured size for alignment.
+static void w32_note_layout(HWND hwnd, int w, int h);    // fwd (on_layout)
+
 static int w32_fills_cross(int kind) {
     return kind == WK_VSTACK || kind == WK_HSTACK || kind == WK_ZSTACK
         || kind == WK_TABS || kind == WK_SPLITVIEW || kind == WK_SCROLLVIEW
-        || kind == WK_CANVAS || kind == WK_DIVIDER;
+        || kind == WK_CANVAS || kind == WK_DIVIDER || kind == WK_WRAP;
 }
 
 // Measure a single widget's intrinsic size. STATIC/BUTTON use a minimal
@@ -929,6 +936,30 @@ static void stack_do_layout(HWND stack_hwnd) {
         return;
     }
 
+    // Wrap (flow layout): place children left-to-right at natural size,
+    // advance to a new row when the next child would overflow the width.
+    if (sw->kind == WK_WRAP) {
+        int cx = sl->padding_left, cy = sl->padding_top, row_h = 0;
+        for (int i = 0; i < nchildren; i++) {
+            int ch = handle_for_hwnd(children[i]);
+            Widget* cw = widget_at(ch);
+            int mw = 100, mh = 24;
+            if (cw) measure_widget(cw, &mw, &mh);
+            if (cx > sl->padding_left && cx + mw > sl->padding_left + avail_w) {
+                cx = sl->padding_left;
+                cy += row_h + sl->spacing;
+                row_h = 0;
+            }
+            SetWindowPos(children[i], NULL, cx, cy, mw, mh,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            w32_note_layout(children[i], mw, mh);
+            cx += mw + sl->spacing;
+            if (mh > row_h) row_h = mh;
+        }
+        free(children);
+        return;
+    }
+
     // Splitview: pane A gets [0, pos), a 6px divider band, pane B the rest.
     // Extra children (shouldn't happen) overlay pane B. The divider position
     // clamps so both panes keep >= 24px.
@@ -958,6 +989,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             if (chh < 0) chh = 0;
             SetWindowPos(children[i], NULL, x, y, cw, chh,
                          SWP_NOZORDER | SWP_NOACTIVATE);
+            w32_note_layout(children[i], cw, chh);
         }
         free(children);
         return;
@@ -969,6 +1001,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left, sl->padding_top,
                          avail_w, avail_h, SWP_NOZORDER | SWP_NOACTIVATE);
+            w32_note_layout(children[i], avail_w, avail_h);
         }
         free(children);
         return;
@@ -1120,6 +1153,7 @@ static void stack_do_layout(HWND stack_hwnd) {
         }
         SetWindowPos(children[i], NULL, x, y, w, h,
                      SWP_NOZORDER | SWP_NOACTIVATE);
+        w32_note_layout(children[i], w, h);
     }
 
     free(mc);
@@ -1134,6 +1168,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     switch (msg) {
         case WM_SIZE:
             stack_do_layout(hwnd);
+            w32_note_layout(hwnd, LOWORD(lp), HIWORD(lp));
             return 0;
 
         case WM_CONTEXTMENU: {
@@ -2409,11 +2444,34 @@ void aether_ui_set_rtl(int handle, int on) {
     }
 }
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
-    (void)handle; (void)boxed_closure;
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->on_layout = (AeClosure*)boxed_closure;
+    w->ol_last_w = -1;
+    w->ol_last_h = -1;
 }
+
+// Fire a widget's on_layout(|w,h|) when its allocation CHANGED — called from
+// every layout site (stack children + the stack's own WM_SIZE).
+static void w32_note_layout(HWND hwnd, int w, int h) {
+    int handle = handle_for_hwnd(hwnd);
+    Widget* wd = widget_at(handle);
+    if (!wd || !wd->on_layout || !wd->on_layout->fn) return;
+    if (w == wd->ol_last_w && h == wd->ol_last_h) return;
+    wd->ol_last_w = w;
+    wd->ol_last_h = h;
+    ((void(*)(void*, intptr_t, intptr_t))wd->on_layout->fn)(
+        wd->on_layout->env, (intptr_t)w, (intptr_t)h);
+}
+
 int aether_ui_wrap_create(void) {
-    // Stub: a horizontal stack (no wrapping).
-    return create_stack(0, 6);
+    // REAL flow layout (2026-07-20): children fill left-to-right and wrap to
+    // a new row when the width runs out (see the WK_WRAP branch in
+    // stack_do_layout). GTK4's GtkFlowBox twin.
+    int handle = create_stack(0, 6);
+    Widget* w = widget_at(handle);
+    if (w) w->kind = WK_WRAP;
+    return handle;
 }
 
 // tabs — a native tab strip over a page stack.
@@ -5066,6 +5124,7 @@ static const char* widget_kind_name(WidgetKind k) {
         case WK_SCRIM: return "scrim";
         case WK_TABS: return "tabs";
         case WK_SPLITVIEW: return "splitview";
+        case WK_WRAP: return "wrap";
         default: return "widget";
     }
 }
@@ -5373,7 +5432,11 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     HWND hit = NULL;
                     for (HWND c = GetWindow(cur, GW_CHILD); c;
                          c = GetWindow(c, GW_HWNDNEXT)) {
-                        if (!IsWindowVisible(c)) continue;
+                        // Own WS_VISIBLE bit, NOT IsWindowVisible: under a
+                        // hidden/headless toplevel the ancestor-chain check
+                        // reads the whole tree invisible (the documented
+                        // win32 lesson) and every pick would return none.
+                        if (!(GetWindowLongW(c, GWL_STYLE) & WS_VISIBLE)) continue;
                         RECT r;
                         GetWindowRect(c, &r);
                         POINT sp = pt;

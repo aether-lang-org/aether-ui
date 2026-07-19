@@ -116,7 +116,7 @@ case "$OS" in
             -o "$ACTUAL_OUT" \
             -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
             -lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi -luxtheme \
-            -lws2_32 -lbcrypt -pthread -lm
+            -lws2_32 -lbcrypt -lpcre2-8 -pthread -lm
         OUTPUT="$ACTUAL_OUT"
         ;;
     *)
