@@ -110,7 +110,6 @@ the suite (no lingering process, port freed).
 
 ## Still-open boundaries (deliberate)
 
-- `style_opacity` is not in the sheet (its CSS route is a win32 no-op).
 - No live re-matching, inheritance, pseudo-states, or descendant
   combinators — those would make AeCS a style *engine*; see the honest
   AeCS-vs-CSS comparison in the session notes.
