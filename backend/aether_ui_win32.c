@@ -1449,14 +1449,27 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         case WM_SIZE: {
-            // Resize the single root child to fill the client area.
-            HWND child = GetWindow(hwnd, GW_CHILD);
-            if (child) {
-                RECT r;
-                GetClientRect(hwnd, &r);
-                SetWindowPos(child, NULL, 0, 0,
-                             r.right - r.left, r.bottom - r.top,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+            // Resize EVERY root-level container (and any modal scrim) to the
+            // new client area — not just GetWindow(GW_CHILD): that's the
+            // TOPMOST child in Z, which is the driver banner or an overlay
+            // once those exist, so a /window/resize was resizing the banner
+            // and leaving the actual root at its startup size (masked for as
+            // long as specs only resized to at-or-below the initial size).
+            RECT r;
+            GetClientRect(hwnd, &r);
+            for (HWND c = GetWindow(hwnd, GW_CHILD); c;
+                 c = GetWindow(c, GW_HWNDNEXT)) {
+                int ch = handle_for_hwnd(c);
+                Widget* cw = widget_at(ch);
+                if (!cw) continue;
+                if (cw->kind == WK_VSTACK || cw->kind == WK_HSTACK
+                    || cw->kind == WK_ZSTACK || cw->kind == WK_TABS
+                    || cw->kind == WK_SPLITVIEW || cw->kind == WK_WRAP
+                    || cw->kind == WK_SCRIM) {
+                    SetWindowPos(c, NULL, 0, 0,
+                                 r.right - r.left, r.bottom - r.top,
+                                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                }
             }
             return 0;
         }
