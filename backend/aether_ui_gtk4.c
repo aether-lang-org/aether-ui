@@ -4403,6 +4403,41 @@ int aether_ui_fire_row_drop(int row_handle, int src_index) {
     return 1;
 }
 
+// ── vlist native scroll ─────────────────────────────────────────────
+// A GtkEventControllerScroll on the vlist container turns wheel/two-finger
+// scroll into on_scroll(dy) — dy = the rounded delta_y (down = +1 = toward the
+// end). The closure is stashed so the driver can fire a step headlessly.
+static gboolean on_vlist_scroll(GtkEventControllerScroll* c, double dx,
+                                double dy, gpointer data) {
+    (void)c; (void)dx;
+    AeClosure* cl = (AeClosure*)data;
+    int step = dy > 0 ? 1 : (dy < 0 ? -1 : 0);
+    if (step && cl && cl->fn)
+        ((void(*)(void*, intptr_t))cl->fn)(cl->env, (intptr_t)step);
+    return TRUE;
+}
+
+void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
+    GtkWidget* box = aether_ui_get_widget(container_handle);
+    if (!box) return;
+    GtkEventControllerScroll* sc = GTK_EVENT_CONTROLLER_SCROLL(
+        gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL));
+    g_signal_connect(sc, "scroll", G_CALLBACK(on_vlist_scroll), on_scroll);
+    gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(sc));
+    g_object_set_data(G_OBJECT(box), "aeui-vscroll", on_scroll);
+}
+
+// Driver hook: fire the container's on_scroll(dy) headlessly (a real wheel
+// event needs a seat). dy>0 scrolls toward the end.
+int aether_ui_fire_scroll(int container_handle, int dy) {
+    GtkWidget* box = aether_ui_get_widget(container_handle);
+    if (!box) return 0;
+    AeClosure* c = (AeClosure*)g_object_get_data(G_OBJECT(box), "aeui-vscroll");
+    if (!c || !c->fn) return 0;
+    ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)dy);
+    return 1;
+}
+
 // Click handler (single click on any widget, not just buttons)
 void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(handle);
@@ -5037,6 +5072,9 @@ static gboolean test_action_idle(gpointer data) {
             break;
         case 12: // drop — fire this row's on_drop(src_index)
             ta->retval = aether_ui_fire_row_drop(ta->handle, ta->ival);
+            break;
+        case 13: // scroll — fire the vlist container's on_scroll(dy)
+            ta->retval = aether_ui_fire_scroll(ta->handle, ta->ival);
             break;
     }
     ta->result = 0;
@@ -5772,6 +5810,11 @@ static void handle_test_request(int client_fd) {
                 ta.action = 12;
                 const char* v = extract_query_param(path, "src");
                 ta.ival = v ? atoi(v) : -1;
+            } else if (strncmp(action_part, "/scroll", 7) == 0) {
+                // POST /widget/{id}/scroll?dy=N — scroll the vlist by N rows.
+                ta.action = 13;
+                const char* v = extract_query_param(path, "dy");
+                ta.ival = v ? atoi(v) : 0;
             } else if (strncmp(action_part, "/click", 6) == 0) {
                 ta.action = 0;
             } else if (strncmp(action_part, "/set_text", 9) == 0) {

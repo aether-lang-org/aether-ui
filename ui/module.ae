@@ -60,6 +60,7 @@ exports (
     tree, tree_node, tree_add_child, tree_set_expanded, tree_refresh,
     tree_visible_count,
     vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
+    vlist_scrollable, vlist_container,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_from_bytes, image_size,
     canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -364,6 +365,7 @@ extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
 // Row drag-reorder: make `row` a drag source (carrying its index) + a drop
 // target; on drop of another row, fire on_drop(source_index).
 extern aether_ui_row_drag_reorder_impl(row_handle: int, index: int, on_drop: ptr)
+extern aether_ui_vlist_attach_scroll_impl(container_handle: int, on_scroll: ptr)
 extern aether_ui_on_click_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_animate_opacity_impl(handle: int, target: float, duration_ms: int)
 extern aether_ui_remove_child_impl(parent_handle: int, child_handle: int)
@@ -2209,6 +2211,26 @@ vlist_count(vp: ptr) -> int {
 vlist_window_first(vp: ptr) -> int {
     v = vp as *VList
     return v.first
+}
+
+// vlist_scrollable(v): wire NATIVE scroll (wheel / two-finger / drag) on the
+// vlist container to the window. Each scroll step slides the window by `dy`
+// rows via vlist_scroll_to (dy>0 = toward the end). The recycling core is
+// unchanged — this just feeds it real gestures. Headless, the driver drives a
+// step with POST /widget/{id}/scroll?dy=N (a real wheel can't be synthesised
+// off-thread), the same path a gesture takes.
+vlist_scrollable(vp: ptr) -> ptr {
+    v = vp as *VList
+    aether_ui_vlist_attach_scroll_impl(v.container, box_closure(|dy: int| {
+        vlist_scroll_to(vp, v.first + dy)
+    }))
+    return vp
+}
+
+// The container handle native scroll is attached to (for driver targeting).
+vlist_container(vp: ptr) -> int {
+    v = vp as *VList
+    return v.container
 }
 
 // table_on_select(t) callback |i: int| — row selection (delegates to listbox).

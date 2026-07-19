@@ -4197,6 +4197,32 @@ int aether_ui_fire_row_drop(int row_handle, int src_index) {
     return 1;
 }
 
+// vlist native scroll — store the on_scroll(dy) closure on the container. The
+// driver fires a step headlessly (fire_scroll); a real scrollWheel: gesture on
+// the container is the AppKit follow-up. Fire marshals to the main thread (the
+// closure re-renders via AppKit), like the row-drop path.
+void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(container_handle);
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui_vscroll",
+        [NSValue valueWithPointer:on_scroll], OBJC_ASSOCIATION_RETAIN);
+}
+
+int aether_ui_fire_scroll(int container_handle, int dy) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(container_handle);
+    if (!v) return 0;
+    NSValue* nv = objc_getAssociatedObject(v, "aeui_vscroll");
+    if (!nv) return 0;
+    AeClosure* c = (AeClosure*)[nv pointerValue];
+    if (!c || !c->fn) return 0;
+    void (^fire)(void) = ^{
+        ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)dy);
+    };
+    if ([NSThread isMainThread]) fire();
+    else dispatch_sync(dispatch_get_main_queue(), fire);
+    return 1;
+}
+
 void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;

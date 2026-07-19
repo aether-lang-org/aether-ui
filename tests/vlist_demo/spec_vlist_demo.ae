@@ -56,6 +56,29 @@ main() {
             b = uidriver.get_body("/widgets")
             aeocha.assert_contains(b, "\"text\":\"row 990\"", "window clamped to end")
         }
+
+        aeocha.it("a native scroll step slides + recycles the window") callback {
+            // Reset to the top, then drive a real scroll step through the
+            // container's native-scroll path: POST /widget/{container}/scroll.
+            // The container is the vstack parent of the row widgets.
+            t = uidriver.widget_id_by_text("top")
+            uidriver.post_ok("/widget/${t}/click", "reset to top")
+            okt = uidriver.wait_body_contains("/widgets", "\"text\":\"row 0\"", 20)
+            aeocha.assert_true(okt, "back at the top")
+
+            r0 = uidriver.widget_id_by_text("row 0")
+            container = uidriver.widget_int_field_by_id(r0, "parent")
+            aeocha.assert_gt(container, 0, "vlist container found")
+
+            // dy=1 → window slides forward one row: 0..9 becomes 1..10.
+            uidriver.post_ok("/widget/${container}/scroll?dy=1", "native scroll +1")
+            ok = uidriver.wait_body_contains("/widgets", "\"text\":\"row 10\"", 20)
+            aeocha.assert_true(ok, "row 10 realized after a native scroll step")
+            aeocha.assert_eq(row_count(), 10, "still bounded (10) — recycled, not grown")
+            b = uidriver.get_body("/widgets")
+            gone = string.contains(b, "\"text\":\"row 0\"")
+            aeocha.assert_eq(gone, 0, "row 0 scrolled out of the window")
+        }
     }
     aeocha.run_summary(fw)
 }

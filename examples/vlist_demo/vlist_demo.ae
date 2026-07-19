@@ -4,11 +4,12 @@
 import ui
 import ui (window, vstack, text, btn,
     vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
-    enable_test_server)
+    vlist_scrollable, vlist_container, enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.list
 
+extern aether_ui_text_set_string(handle: int, text: string)
 extern malloc(size: int) -> ptr
 
 struct Item { n: int }
@@ -29,15 +30,31 @@ main() {
 
     window("virtualized list", 300, 320) {
         vstack(8) {
+            first_lbl = text("first: 0")
             v = vlist("v", 10, |item: ptr, i: int, parent: int| {
                 it = item as *Item
                 _t = text(parent, string.concat("row ", string.from_int(it.n)))
             })
             vlist_set(v, items)
-            // Buttons scroll the window so a spec can drive it.
-            _top = btn("top") callback { vlist_scroll_to(v, 0) }
-            _mid = btn("to 500") callback { vlist_scroll_to(v, 500) }
-            _end = btn("to end") callback { vlist_scroll_to(v, 999) }
+            // Native scroll: wheel/drag on the container slides the window (and
+            // the driver can drive a step via /widget/{container}/scroll?dy=N).
+            _sc = vlist_scrollable(v)
+            // Buttons scroll the window so a spec can drive it too.
+            _top = btn("top") callback {
+                vlist_scroll_to(v, 0)
+                aether_ui_text_set_string(first_lbl,
+                    string.concat("first: ", string.from_int(vlist_window_first(v))))
+            }
+            _mid = btn("to 500") callback {
+                vlist_scroll_to(v, 500)
+                aether_ui_text_set_string(first_lbl,
+                    string.concat("first: ", string.from_int(vlist_window_first(v))))
+            }
+            _end = btn("to end") callback {
+                vlist_scroll_to(v, 999)
+                aether_ui_text_set_string(first_lbl,
+                    string.concat("first: ", string.from_int(vlist_window_first(v))))
+            }
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

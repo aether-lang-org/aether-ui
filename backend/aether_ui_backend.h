@@ -67,6 +67,13 @@ int aether_ui_fire_double_click(int handle);
  * headlessly (no seat). */
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop);
 int  aether_ui_fire_row_drop(int row_handle, int src_index);
+
+// vlist native scroll: attach an on_scroll(dy) closure to a container's native
+// scroll (wheel/drag) — dy>0 scrolls toward the end. fire_scroll drives it
+// headlessly (a real wheel can't be synthesised off-thread), mirroring the
+// row-drop fire path. DSL wrapper: vlist_scrollable() in ui/module.ae.
+void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll);
+int  aether_ui_fire_scroll(int container_handle, int dy);
 int aether_ui_button_create(const char* label, void* boxed_closure);
 int aether_ui_button_create_plain(const char* label);
 void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure);

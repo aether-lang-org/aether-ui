@@ -216,6 +216,7 @@ typedef struct {
     AeClosure* on_change; // text/value change for input widgets
     int bound_state;      // two-way bind_value target (0 = none)
     AeClosure* on_drop;   // row drag-reorder: on_drop(src_index)
+    AeClosure* on_scroll; // vlist native scroll: on_scroll(dy rows)
     int text_wrap;        // WK_TEXT: multi-line wrapping label
     int text_anchor;      // WK_TEXT: 0=start 1=middle 2=end
 
@@ -956,6 +957,22 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         case WM_SIZE:
             stack_do_layout(hwnd);
             return 0;
+
+        case WM_MOUSEWHEEL: {
+            // A vlist container carries an on_scroll(dy) closure — one wheel
+            // notch = one row step (wheel up = toward the start = -1).
+            int h = handle_for_hwnd(hwnd);
+            Widget* w = widget_at(h);
+            if (w && w->on_scroll && w->on_scroll->fn) {
+                int delta = GET_WHEEL_DELTA_WPARAM(wp);
+                int step = delta > 0 ? -1 : (delta < 0 ? 1 : 0);
+                if (step)
+                    ((void(*)(void*, intptr_t))w->on_scroll->fn)(
+                        w->on_scroll->env, (intptr_t)step);
+                return 0;
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
 
         case WM_ERASEBKGND: {
             int h = handle_for_hwnd(hwnd);
@@ -2724,6 +2741,21 @@ int aether_ui_fire_row_drop(int row_handle, int src_index) {
     Widget* w = widget_at(row_handle);
     if (!w || !w->on_drop || !w->on_drop->fn) return 0;
     ((void(*)(void*, intptr_t))w->on_drop->fn)(w->on_drop->env, (intptr_t)src_index);
+    return 1;
+}
+
+// vlist native scroll — store the on_scroll(dy) closure on the container. Real
+// WM_MOUSEWHEEL is handled in stack_wnd_proc (which fires this closure); the
+// driver drives a step headlessly via aether_ui_fire_scroll.
+void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
+    Widget* w = widget_at(container_handle);
+    if (w) w->on_scroll = (AeClosure*)on_scroll;
+}
+
+int aether_ui_fire_scroll(int container_handle, int dy) {
+    Widget* w = widget_at(container_handle);
+    if (!w || !w->on_scroll || !w->on_scroll->fn) return 0;
+    ((void(*)(void*, intptr_t))w->on_scroll->fn)(w->on_scroll->env, (intptr_t)dy);
     return 1;
 }
 

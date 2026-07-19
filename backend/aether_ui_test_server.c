@@ -540,6 +540,16 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
         send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/scroll")) {
+        // POST /widget/{id}/scroll?dy=N — scroll a vlist container by N rows
+        // (dy>0 toward the end). Fires the container's on_scroll(N) headlessly.
+        int id = extract_id_from_path(path, "/widget/");
+        const char* s = extract_query_param(path, "dy");
+        int fired = aether_ui_fire_scroll(id, s ? atoi(s) : 0);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
+        send_http(client_fd, 200, "OK", "application/json", body);
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/click")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_CLICK;
