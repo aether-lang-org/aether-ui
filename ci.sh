@@ -554,8 +554,11 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     run_server_test "$(EX_BIN wshortcut_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" wshortcut_demo || FAIL=$((FAIL + 1))
     UI_SPEC=multiwindow_demo/spec_multiwindow_demo \
-    run_server_test "$(EX_BIN multiwindow_demo winmenu_demo)" \
+    run_server_test "$(EX_BIN multiwindow_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" multiwindow_demo || FAIL=$((FAIL + 1))
+    UI_SPEC=winmenu_demo/spec_winmenu_demo \
+    run_server_test "$(EX_BIN winmenu_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" winmenu_demo || FAIL=$((FAIL + 1))
 fi
 
 echo "=== Phase 5l: AetherUIDriver game specs (falling_blocks / svg_tetris / rubiks_cube) ==="
