@@ -1,0 +1,7 @@
+// Dracula — draculatheme.com (MIT), exact published palette values.
+container.bg      = #282A36
+text.color        = #F8F8F2
+title.text.color  = #BD93F9
+title.text.weight = bold
+byline.text.color = #6272A4
+button.color      = #FF79C6

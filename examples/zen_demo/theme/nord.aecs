@@ -1,0 +1,7 @@
+// Nord — Arctic Ice Studio / Sven Greb (MIT), exact published palette values.
+container.bg      = #2E3440
+text.color        = #D8DEE9
+title.text.color  = #88C0D0
+title.text.weight = bold
+byline.text.color = #4C566A
+button.color      = #81A1C1

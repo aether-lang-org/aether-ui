@@ -1,0 +1,119 @@
+// spec_zen_demo.ae — the AeCS Zen Garden: one FIXED tree, many skins, all
+// asserted from backend readback with the palettes' PUBLISHED hex values
+// (Solarized/Dracula/Nord/water.css, MIT — see theme/README.md; Zen concept
+// credit Dave Shea). The identity assertion is the Zen move itself: the same
+// widget ids survive every reskin — restyle, never rebuild.
+//
+// Run via ci.sh / spec_matrix, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/zen_demo/bin/zen_demo &
+//   UI_SPEC=zen_demo/spec_zen_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+body_of(label: string) -> string {
+    h = uidriver.widget_id_by_text(label)
+    if h == 0 { return "" }
+    return uidriver.get_body("/widget/${h}")
+}
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "AeCS Zen Garden over AetherUIDriver") {
+        aeocha.it("Midnight: an in-code sheet skins the tree") callback {
+            m = uidriver.widget_id_by_text("Midnight")
+            aeocha.assert_gt(m, 0, "Midnight button found")
+            uidriver.post_ok("/widget/${m}/click", "apply midnight")
+            ok = uidriver.wait_body_contains("/widgets", "skin: midnight", 20)
+            aeocha.assert_true(ok, "midnight applied")
+            t = body_of("The Road Not Taken")
+            aeocha.assert_contains(t, "\"fg\":\"#7f9cf5\"", "title took midnight blue")
+            aeocha.assert_contains(t, "\"fontWeight\":\"bold\"", "title bold")
+            aeocha.assert_contains(t, "\"fontFamily\":\"monospace\"", "title mono")
+            b = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b, "\"bg\":\"#101018\"", "containers painted midnight")
+        }
+
+        aeocha.it("Paper reskins the SAME tree (the Zen identity move)") callback {
+            t1 = uidriver.widget_id_by_text("The Road Not Taken")
+            p = uidriver.widget_id_by_text("Paper")
+            uidriver.post_ok("/widget/${p}/click", "apply paper")
+            ok = uidriver.wait_body_contains("/widgets", "skin: paper", 20)
+            aeocha.assert_true(ok, "paper applied")
+            t2 = uidriver.widget_id_by_text("The Road Not Taken")
+            aeocha.assert_eq(t1, t2, "same widget id after the reskin — restyled, not rebuilt")
+            t = body_of("The Road Not Taken")
+            aeocha.assert_contains(t, "\"fg\":\"#8a3324\"", "title took paper rust")
+            aeocha.assert_contains(t, "\"fontFamily\":\"serif\"", "title serif now")
+        }
+
+        aeocha.it("Terminal: green-on-black + hint opacity") callback {
+            tb = uidriver.widget_id_by_text("Terminal")
+            uidriver.post_ok("/widget/${tb}/click", "apply terminal")
+            ok = uidriver.wait_body_contains("/widgets", "skin: terminal", 20)
+            aeocha.assert_true(ok, "terminal applied")
+            v = body_of("Two roads diverged in a yellow wood,")
+            aeocha.assert_contains(v, "\"fg\":\"#33ff66\"", "prose went phosphor green")
+            hnt = body_of("One tree. Many skins. (Concept: Dave Shea's CSS Zen Garden.)")
+            aeocha.assert_contains(hnt, "\"opacity\":0.70", "hint dimmed")
+        }
+
+        aeocha.it("water.css (classless, MIT) loads from .aecs files") callback {
+            wl = uidriver.widget_id_by_text("Water light")
+            uidriver.post_ok("/widget/${wl}/click", "water light")
+            ok = uidriver.wait_body_contains("/widgets", "skin: water-light", 20)
+            aeocha.assert_true(ok, "water light parsed + applied")
+            v = body_of("Two roads diverged in a yellow wood,")
+            aeocha.assert_contains(v, "\"fg\":\"#363636\"", "water.css text-main")
+            btn1 = body_of("Midnight")
+            aeocha.assert_contains(btn1, "\"fg\":\"#0076d1\"", "water.css link blue on buttons")
+            wd = uidriver.widget_id_by_text("Water dark")
+            uidriver.post_ok("/widget/${wd}/click", "water dark")
+            ok2 = uidriver.wait_body_contains("/widgets", "skin: water-dark", 20)
+            aeocha.assert_true(ok2, "water dark applied")
+            v2 = body_of("Two roads diverged in a yellow wood,")
+            aeocha.assert_contains(v2, "\"fg\":\"#dbdbdb\"", "dark text-main")
+        }
+
+        aeocha.it("Dracula and Nord land their published values") callback {
+            d = uidriver.widget_id_by_text("Dracula")
+            uidriver.post_ok("/widget/${d}/click", "dracula")
+            ok = uidriver.wait_body_contains("/widgets", "skin: dracula", 20)
+            aeocha.assert_true(ok, "dracula applied")
+            t = body_of("The Road Not Taken")
+            aeocha.assert_contains(t, "\"fg\":\"#bd93f9\"", "dracula purple title")
+            b = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b, "\"bg\":\"#282a36\"", "dracula background")
+            n = uidriver.widget_id_by_text("Nord")
+            uidriver.post_ok("/widget/${n}/click", "nord")
+            ok2 = uidriver.wait_body_contains("/widgets", "skin: nord", 20)
+            aeocha.assert_true(ok2, "nord applied")
+            v = body_of("Two roads diverged in a yellow wood,")
+            aeocha.assert_contains(v, "\"fg\":\"#d8dee9\"", "nord snow-storm text")
+            b2 = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b2, "\"bg\":\"#2e3440\"", "nord polar-night background")
+        }
+
+        aeocha.it("Solarized is a PAIR: flips with the OS appearance") callback {
+            sv = uidriver.widget_id_by_text("Solarized")
+            uidriver.post_ok("/widget/${sv}/click", "install solarized pair")
+            ok = uidriver.wait_body_contains("/widgets", "skin: solarized", 20)
+            aeocha.assert_true(ok, "pair installed (light first)")
+            b = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b, "\"bg\":\"#fdf6e3\"", "base3 light background")
+            v = body_of("Two roads diverged in a yellow wood,")
+            aeocha.assert_contains(v, "\"fg\":\"#657b83\"", "base00 light body text")
+            uidriver.post_ok("/appearance?dark=1", "OS goes dark")
+            ok2 = uidriver.wait_body_contains("/widgets", "\"bg\":\"#002b36\"", 20)
+            aeocha.assert_true(ok2, "base03 dark background after the flip")
+            v2 = body_of("Two roads diverged in a yellow wood,")
+            aeocha.assert_contains(v2, "\"fg\":\"#839496\"", "base0 dark body text")
+            uidriver.post_ok("/appearance?dark=0", "back to light")
+            ok3 = uidriver.wait_body_contains("/widgets", "\"bg\":\"#fdf6e3\"", 20)
+            aeocha.assert_true(ok3, "light again")
+        }
+    }
+    aeocha.run_summary(fw)
+}

@@ -1,0 +1,8 @@
+// water.css (light) — Kognise (MIT). A CLASSLESS framework: element-type
+// rules only, which is exactly AeCS's element-selector model. Values from
+// its published custom properties; the port table is in theme/README.md.
+container.bg      = #FFFFFF
+text.color        = #363636
+title.text.weight = bold
+button.color      = #0076D1
+button.radius     = 6

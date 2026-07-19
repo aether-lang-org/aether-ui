@@ -1,0 +1,6 @@
+// water.css (dark) — Kognise (MIT).
+container.bg      = #202B38
+text.color        = #DBDBDB
+title.text.weight = bold
+button.color      = #41ADFF
+button.radius     = 6

@@ -1,0 +1,7 @@
+// Solarized Dark — Ethan Schoonover (MIT), exact published palette values.
+container.bg      = #002B36
+text.color        = #839496
+title.text.color  = #B58900
+title.text.weight = bold
+byline.text.color = #586E75
+button.color      = #268BD2

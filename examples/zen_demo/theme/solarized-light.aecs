@@ -1,0 +1,8 @@
+// Solarized Light — Ethan Schoonover (MIT), exact published palette values.
+// https://ethanschoonover.com/solarized/
+container.bg      = #FDF6E3
+text.color        = #657B83
+title.text.color  = #B58900
+title.text.weight = bold
+byline.text.color = #93A1A1
+button.color      = #268BD2

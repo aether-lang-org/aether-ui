@@ -1,0 +1,149 @@
+// AeCS Zen Garden — one FIXED widget tree, many sheets (the CSS Zen Garden
+// concept, credit Dave Shea; our own sheets, no Zen Garden design assets).
+// Three in-code sheets (Midnight / Paper / Terminal) + real-world palettes
+// as .aecs FILES: Solarized light+dark (a use_styles_pair — it was designed
+// as a pair), Dracula, Nord, and water.css light/dark (the classless
+// framework whose element-only selectors match AeCS 1:1). Credits +
+// port table: examples/zen_demo/theme/README.md.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, listbox,
+    listbox_update, add_css_class,
+    create_styles, st_color, st_bg, st_weight, st_font_family, st_opacity,
+    st_radius, apply_styles, style_id, use_styles_pair, load_styles,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern aether_ui_text_set_string(handle: int, text: string)
+extern malloc(size: int) -> ptr
+
+struct Row { label: string }
+mk_row(s: string) -> ptr {
+    r = malloc(16) as *Row
+    r.label = s
+    return r as ptr
+}
+
+// ── the in-code Zen sheets (ours) ────────────────────────────────────
+midnight() -> ptr {
+    s = create_styles()
+    st_bg(s, "container", 0x101018)
+    st_color(s, "text", 0xC8C8DE)
+    st_color(s, "title.text", 0x7F9CF5)
+    st_weight(s, "title.text", 1)
+    st_font_family(s, "title.text", "monospace")
+    st_color(s, "byline.text", 0x6B7290)
+    st_color(s, "button", 0x9F7AEA)
+    st_opacity(s, "hint.text", 0.5)
+    return s
+}
+
+paper() -> ptr {
+    s = create_styles()
+    st_bg(s, "container", 0xFAF7F0)
+    st_color(s, "text", 0x3B3A36)
+    st_color(s, "title.text", 0x8A3324)
+    st_weight(s, "title.text", 1)
+    st_font_family(s, "title.text", "serif")
+    st_color(s, "byline.text", 0x8C8578)
+    st_color(s, "button", 0x6B4F3A)
+    st_opacity(s, "hint.text", 0.6)
+    return s
+}
+
+terminal() -> ptr {
+    s = create_styles()
+    st_font_family(s, "root", "monospace")
+    st_bg(s, "container", 0x000000)
+    st_color(s, "text", 0x33FF66)
+    st_color(s, "title.text", 0x33FF66)
+    st_weight(s, "title.text", 1)
+    st_color(s, "byline.text", 0x22AA44)
+    st_color(s, "button", 0x00CC44)
+    st_opacity(s, "hint.text", 0.7)
+    return s
+}
+
+apply_file(status: int, path: string, name: string) {
+    fsheet = load_styles(path)
+    if fsheet != null {
+        apply_styles(0, fsheet)
+        aether_ui_text_set_string(status, string.concat("skin: ", name))
+    }
+    if fsheet == null {
+        aether_ui_text_set_string(status, "skin: file-error")
+    }
+}
+
+main() {
+    window("AeCS Zen Garden", 560, 460) {
+        vstack(10) {
+            title = text("The Road Not Taken")
+            add_css_class(title, "title")
+            byline = text("Robert Frost, 1915")
+            add_css_class(byline, "byline")
+            status = text("skin: none")
+            style_id(status, "status")
+            divider()
+            _p1 = text("Two roads diverged in a yellow wood,")
+            _p2 = text("And sorry I could not travel both")
+            items = list.new()
+            _a1 = list.add(items, mk_row("And be one traveler, long I stood"))
+            _a2 = list.add(items, mk_row("And looked down one as far as I could"))
+            _a3 = list.add(items, mk_row("To where it bent in the undergrowth;"))
+            verses = listbox(2) callback |item: ptr, i: int, row: int| {
+                r = item as *Row
+                _t = text(row, r.label)
+            }
+            listbox_update(verses, items)
+            divider()
+            hstack(8) {
+                _m = btn("Midnight") callback {
+                    apply_styles(0, midnight())
+                    aether_ui_text_set_string(status, "skin: midnight")
+                }
+                _pp = btn("Paper") callback {
+                    apply_styles(0, paper())
+                    aether_ui_text_set_string(status, "skin: paper")
+                }
+                _tt = btn("Terminal") callback {
+                    apply_styles(0, terminal())
+                    aether_ui_text_set_string(status, "skin: terminal")
+                }
+            }
+            hstack(8) {
+                _d = btn("Dracula") callback {
+                    apply_file(status, "examples/zen_demo/theme/dracula.aecs", "dracula")
+                }
+                _n = btn("Nord") callback {
+                    apply_file(status, "examples/zen_demo/theme/nord.aecs", "nord")
+                }
+                _wl = btn("Water light") callback {
+                    apply_file(status, "examples/zen_demo/theme/water-light.aecs", "water-light")
+                }
+                _wd = btn("Water dark") callback {
+                    apply_file(status, "examples/zen_demo/theme/water-dark.aecs", "water-dark")
+                }
+                _sv = btn("Solarized") callback {
+                    // The designed-as-a-pair palette, from FILES, auto
+                    // re-theming on OS (or driver /appearance) mode flips.
+                    sl = load_styles("examples/zen_demo/theme/solarized-light.aecs")
+                    sd = load_styles("examples/zen_demo/theme/solarized-dark.aecs")
+                    if sl != null {
+                        if sd != null {
+                            use_styles_pair(sl, sd)
+                            aether_ui_text_set_string(status, "skin: solarized")
+                        }
+                    }
+                }
+            }
+            hint = text("One tree. Many skins. (Concept: Dave Shea's CSS Zen Garden.)")
+            add_css_class(hint, "hint")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
