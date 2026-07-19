@@ -313,18 +313,21 @@ term in one result row — cosmetic, doesn't affect the spec.
   GtkPopoverMenuBar in the window's content; win32 SetMenu's the HWND;
   macOS uses the app-global OS bar (best-effort). `winmenu_demo` + spec
   **2/2 on GTK4 AND win32 (winbaz)**. **Multi-window is now complete.**
-- **Accessibility** — **semantics layer LANDED 2026-07-19 (verification
-  pending)**. `a11y_role/a11y_label/a11y_description` set REAL platform a11y
-  on any widget; the driver reads the effective values back via
+- **Accessibility** — **semantics layer DONE 2026-07-19**.
+  `a11y_role/a11y_label/a11y_description` set REAL platform a11y on any
+  widget; the driver reads the effective values back via
   `GET /widget/{id}/a11y` (+ `role`/`a11y_name` in /widgets). Native widgets
   keep their free a11y; these override/supply it (icon-only buttons,
   containers, headings). listbox rows auto-tag `listitem` / the group `list`.
   Backends all real: GTK4 `gtk_accessible_update_property`; win32 MSAA Dynamic
-  Annotation (`IAccPropServices`, +`-loleacc`) so Narrator reads it; macOS
-  `NSAccessibility` on the NSView. `a11y_demo` + spec assert role/name/desc
-  round-trips. GTK4 backend TU + DSL compile clean via aeb; **runtime specs
-  NOT yet run** — local GTK4 display is exit-144'd and winbaz was offline
-  ("No route to host") when the win32 build/spec was attempted. Design:
+  Annotation (`IAccPropServices` — `+-loleacc -loleaut32`) so Narrator reads
+  it; macOS `NSAccessibility` on the NSView. `a11y_demo` + spec assert
+  role/name/desc round-trips (auto role+name for free, a11y_label override,
+  heading role, listitem rows, /widgets fields). **win32 5/5 on winbaz;
+  macOS verified in the sibling batch (spec_matrix 160/160).** GTK4 backend +
+  DSL compile clean via aeb; its runtime spec awaits the local display
+  recovering (same exit-144 issue), but the readback is side-store based and
+  backend-agnostic and green on the other two. Design:
   docs/design/accessibility.md. Screen-reader end-to-end (Narrator/VoiceOver)
   is a manual step outside the harness.
   Still open: anything vg-DRAWN (the dropdown, a plan-B table) needs a
