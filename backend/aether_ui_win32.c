@@ -720,7 +720,17 @@ typedef struct {
     int min_primary;     // its minimum along the primary axis (for the clamp)
     int flex_size;       // resolved primary size for weighted children
     int margin_t, margin_r, margin_b, margin_l;
+    int kind;            // WidgetKind — containers fill the cross axis
 } MeasuredChild;
+
+// Containers/greedy widgets fill the CROSS axis of their parent stack (a
+// nested row spans its column's width, as on GTK) — only leaf widgets
+// shrink to their measured size for alignment.
+static int w32_fills_cross(int kind) {
+    return kind == WK_VSTACK || kind == WK_HSTACK || kind == WK_ZSTACK
+        || kind == WK_TABS || kind == WK_SPLITVIEW || kind == WK_SCROLLVIEW
+        || kind == WK_CANVAS || kind == WK_DIVIDER;
+}
 
 // Measure a single widget's intrinsic size. STATIC/BUTTON use a minimal
 // heuristic (text extents + padding); custom widgets honor pref_width/height.
@@ -985,6 +995,12 @@ static void stack_do_layout(HWND stack_hwnd) {
             mc[i].margin_b = cw->margin_bottom;
             mc[i].margin_l = cw->margin_left;
             mc[i].weight = cw->weight;
+            mc[i].kind = (int)cw->kind;
+            // Greedy containers (splitview/scrollview) expand along the
+            // primary axis by default — GTK's paned/scrolled do the same.
+            if (mc[i].weight == 0 &&
+                (cw->kind == WK_SPLITVIEW || cw->kind == WK_SCROLLVIEW))
+                mc[i].weight = 1;
         } else {
             cw_w = 100; ch_h = 24;
         }
@@ -1065,7 +1081,8 @@ static void stack_do_layout(HWND stack_hwnd) {
             h = ch_size;
             w = avail_w - mc[i].margin_l - mc[i].margin_r;
             if (mc[i].measured_w > 0 && mc[i].measured_w < w
-                && !mc[i].is_spacer && mc[i].weight == 0) {
+                && !mc[i].is_spacer && mc[i].weight == 0
+                && !w32_fills_cross(mc[i].kind)) {
                 if (sl->alignment == 1)
                     x = sl->padding_left + mc[i].margin_l + (w - mc[i].measured_w) / 2;
                 else if (sl->alignment == 2)
@@ -1085,7 +1102,8 @@ static void stack_do_layout(HWND stack_hwnd) {
             w = ch_size;
             h = avail_h - mc[i].margin_t - mc[i].margin_b;
             if (mc[i].measured_h > 0 && mc[i].measured_h < h
-                && !mc[i].is_spacer && mc[i].weight == 0) {
+                && !mc[i].is_spacer && mc[i].weight == 0
+                && !w32_fills_cross(mc[i].kind)) {
                 if (sl->alignment == 1)
                     y = sl->padding_top + mc[i].margin_t + (h - mc[i].measured_h) / 2;
                 else if (sl->alignment == 2)
@@ -5345,11 +5363,24 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             ctx->retval = 0;
             ctx->ival2 = 0;
             if (app_count > 0 && apps[0].hwnd) {
+                // Manual top-to-bottom Z walk at each level. The API route
+                // (ChildWindowFromPointEx) skips WS_EX_LAYERED children —
+                // which is exactly what the modal scrim is — so the glass
+                // pane was invisible to picks and they fell through to the
+                // app beneath. GetWindow(GW_CHILD) starts at the TOP of Z.
                 HWND cur = apps[0].hwnd;
                 for (;;) {
-                    HWND hit = ChildWindowFromPointEx(cur, pt,
-                        CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
-                    if (!hit || hit == cur) break;
+                    HWND hit = NULL;
+                    for (HWND c = GetWindow(cur, GW_CHILD); c;
+                         c = GetWindow(c, GW_HWNDNEXT)) {
+                        if (!IsWindowVisible(c)) continue;
+                        RECT r;
+                        GetWindowRect(c, &r);
+                        POINT sp = pt;
+                        ClientToScreen(cur, &sp);
+                        if (PtInRect(&r, sp)) { hit = c; break; }
+                    }
+                    if (!hit) break;
                     MapWindowPoints(cur, hit, &pt, 1);
                     cur = hit;
                 }
