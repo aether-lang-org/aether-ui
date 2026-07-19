@@ -2574,11 +2574,13 @@ void aether_ui_a11y_set_description_impl(int handle, const char* desc) {
 static const char* w32_auto_role(WidgetKind k) {
     switch (k) {
         case WK_BUTTON:      return "button";
-        case WK_CHECKBOX:    return "checkbox";
-        case WK_TEXT:        return "heading";   // a static label
+        case WK_TOGGLE:      return "checkbox";
         case WK_TEXTFIELD:   return "textbox";
         case WK_SLIDER:      return "slider";
         case WK_PROGRESSBAR: return "progressbar";
+        // WK_TEXT is a plain static label — its auto role stays unset (empty)
+        // rather than "heading", which is only correct for a11y_role-tagged
+        // headings. So the driver reports "" until an author tags it.
         default:             return "";
     }
 }
