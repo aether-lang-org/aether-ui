@@ -4990,6 +4990,18 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
     [NSApp setMainMenu:mac_menus[bar_handle - 1].menu];
 }
 
+// Per-window menu bar: macOS has ONE OS-level menu bar (the top-of-screen
+// strip), reflecting the active app/window — there is no per-window menu bar
+// widget as on GTK4/win32. Best-effort: set this bar as the main menu (it
+// applies while any of our windows is active). A fully window-specific bar
+// would require swapping the main menu on window-focus changes.
+// TODO(multi-window): swap the main menu in windowDidBecomeKey per window.
+void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
+    (void)win_handle;
+    if (bar_handle < 1 || bar_handle > mac_menu_count) return;
+    [NSApp setMainMenu:mac_menus[bar_handle - 1].menu];
+}
+
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     if (menu_handle < 1 || menu_handle > mac_menu_count) return;
     // popUpMenuPositioningItem tracks the menu in its own loop until

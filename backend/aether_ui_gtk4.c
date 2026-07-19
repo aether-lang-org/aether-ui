@@ -4359,6 +4359,7 @@ static int banner_handle = 0;
 
 static const char* widget_type_name(GtkWidget* w) {
     if (!w) return "null";
+    if (GTK_IS_POPOVER_MENU_BAR(w)) return "menubar";
     if (GTK_IS_LABEL(w)) return "text";
     if (drawn_picker_of(w)) return "picker";   // drawn picker is a GtkButton
     if (GTK_IS_BUTTON(w)) return "button";
@@ -6026,6 +6027,55 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
     (void)app_handle;
     GtkMenuEntry* bar = gtk_menu_at(bar_handle);
     if (bar) gtk_pending_menubar = bar->model;
+}
+
+// Register a menu bar's queued item actions on the running app (so its items
+// fire). Idempotent-ish: re-registering the same action name replaces it.
+static void aeui_register_menu_actions(GtkApplication* app) {
+    if (!app) return;
+    for (int i = 0; i < gtk_menu_action_count; i++) {
+        if (g_action_map_lookup_action(G_ACTION_MAP(app),
+                                        gtk_menu_actions[i].action_name))
+            continue;  // already registered
+        GSimpleAction* act = g_simple_action_new(
+            gtk_menu_actions[i].action_name, NULL);
+        g_signal_connect(act, "activate", G_CALLBACK(gtk_menu_action_cb),
+                         gtk_menu_actions[i].closure);
+        g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(act));
+        g_object_unref(act);
+    }
+}
+
+// Per-window menu bar: a GtkPopoverMenuBar from the bar's GMenu, packed ABOVE
+// the window's content in a vbox. win_handle 1 = primary, 2.. = extras (the
+// unified driver numbering). Unlike the app menubar (one model for all
+// windows), this gives each window its OWN bar.
+void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
+    GtkMenuEntry* bar = gtk_menu_at(bar_handle);
+    if (!bar || !bar->model) return;
+    GtkWindow* win = NULL;
+    if (win_handle == 1) win = primary_window;
+    else if (win_handle - 2 >= 0 && win_handle - 2 < extra_window_count)
+        win = extra_windows[win_handle - 2].window;
+    if (!win) return;
+
+    GtkApplication* app = (app_count > 0) ? apps[0].gtk_app : NULL;
+    aeui_register_menu_actions(app);
+
+    GtkWidget* menubar = gtk_popover_menu_bar_new_from_model(
+        G_MENU_MODEL(bar->model));
+    aether_ui_register_widget(menubar);  // so the driver sees it (window:N tag)
+    GtkWidget* child = gtk_window_get_child(win);
+    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(box), menubar);
+    if (child) {
+        g_object_ref(child);
+        gtk_window_set_child(win, NULL);   // detach before re-parenting
+        gtk_widget_set_vexpand(child, TRUE);
+        gtk_box_append(GTK_BOX(box), child);
+        g_object_unref(child);
+    }
+    gtk_window_set_child(win, box);
 }
 
 // Register the queued item actions on the app and set the menubar. Called from

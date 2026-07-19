@@ -67,7 +67,7 @@ exports (
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
-    menu_bar_add, attach_menu_bar, menu_popup,
+    menu_bar_add, attach_menu_bar, attach_menu_bar_to_window, menu_popup,
     root_grid, grid, grid_place,
     tray_icon, tray_set_tooltip, tray_set_menu,
     tray_set_icon_for_state, tray_set_icon_template, tray_seal,
@@ -301,6 +301,7 @@ extern aether_ui_menu_add_item(menu_handle: int, label: string, boxed_closure: p
 extern aether_ui_menu_add_separator(menu_handle: int)
 extern aether_ui_menu_bar_add_menu(bar_handle: int, menu_handle: int)
 extern aether_ui_menu_bar_attach(app_handle: int, bar_handle: int)
+extern aether_ui_menu_bar_attach_window(win_handle: int, bar_handle: int)
 extern aether_ui_menu_popup(menu_handle: int, anchor_widget: int)
 
 // Grid layout — 2D container with (row, col) placement.
@@ -2350,6 +2351,16 @@ menu_bar_add(bar_handle: int, menu_handle: int) {
 // Attach a menu bar to an app window. Call before app_run.
 attach_menu_bar(app_handle: int, bar_handle: int) {
     aether_ui_menu_bar_attach(app_handle, bar_handle)
+}
+
+// attach_menu_bar_to_window(win_handle, bar_handle) — a per-window menu bar.
+// win_handle is the DRIVER window handle (1 = primary, 2.. = extras from
+// window_create). Each window can carry its OWN bar (GTK4: a GtkPopoverMenuBar
+// in the window's content; win32: SetMenu on that HWND). macOS's menu bar is
+// app-global (the OS menu bar), so there it's the active window's menu — a
+// documented platform difference.
+attach_menu_bar_to_window(win_handle: int, bar_handle: int) {
+    aether_ui_menu_bar_attach_window(win_handle, bar_handle)
 }
 
 // Pop up a context menu at the cursor position, anchored to a widget

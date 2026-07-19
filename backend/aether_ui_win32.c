@@ -3321,6 +3321,15 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
     e->pending_menu = bar->hmenu;
 }
 
+// Per-window menu bar: SetMenu on the target window's HWND (native, per-window).
+// win_handle 1 = primary, 2.. = extras (unified driver numbering).
+void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
+    MenuEntry* bar = menu_at(bar_handle);
+    if (!bar || win_handle < 1 || win_handle > w32_window_count) return;
+    HWND hwnd = w32_windows[win_handle - 1].hwnd;
+    if (hwnd) { SetMenu(hwnd, bar->hmenu); DrawMenuBar(hwnd); }
+}
+
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     // TrackPopupMenu runs its own modal message loop and only returns
     // when the menu is dismissed by a click or Escape. In headless
