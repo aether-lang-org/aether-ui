@@ -361,9 +361,14 @@ what natives do worst across our platforms (menus, dropdowns, overlays,
 maybe tables), keep native what they do best (entries, IME, a11y).
 The overlay, typography, and effects layers were deliberately built as
 the foundations of that hybrid, so this fork stays open without being
-committed to. If/when it's serious, it gets its own comparison-doc
-treatment first (the re-namespace plan's format: comparisons, verdict,
-phased ci-gated migration).
+committed to. **The comparison-doc treatment now exists:
+`docs/design/vg-drawn-controls.md`** — the four postures (native / full-
+drawn / hybrid / selective) scored against this codebase's constraints,
+the verdict (**hybrid C, reached by extending today's selective posture —
+never full-drawn B; IME and a11y are the disqualifiers for B**), and a
+phased ci-gated path if C is ever acted on. It stays NOT scheduled: keep
+native the default, promote to C only on a concrete driver (theming need,
+or compositor bugs the overlay layer can't absorb).
 
 ## House rules (policy, carried forward)
 
