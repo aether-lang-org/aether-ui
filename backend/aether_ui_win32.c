@@ -192,6 +192,9 @@ typedef struct {
     HFONT custom_font;
     double font_size;
     int font_bold;
+    int font_weight_set;      // 1 = bold/normal was EXPLICITLY set (readback)
+    wchar_t* font_family;     // face name for apply_font (owned; NULL default)
+    char* font_family_u8;     // utf8 twin for driver readback (owned)
 
     // Fixed sizing (0 = auto)
     int pref_width;
@@ -2411,6 +2414,10 @@ static void apply_font(Widget* w) {
         lf.lfHeight = -MulDiv((int)w->font_size, dpi, 72);
     }
     lf.lfWeight = w->font_bold ? FW_BOLD : FW_NORMAL;
+    if (w->font_family) {
+        wcsncpy(lf.lfFaceName, w->font_family, LF_FACESIZE - 1);
+        lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
+    }
     if (w->custom_font) DeleteObject(w->custom_font);
     w->custom_font = CreateFontIndirectW(&lf);
     SendMessageW(w->hwnd, WM_SETFONT, (WPARAM)w->custom_font, TRUE);
@@ -2427,7 +2434,32 @@ void aether_ui_set_font_bold(int handle, int bold) {
     Widget* w = widget_at(handle);
     if (!w) return;
     w->font_bold = bold;
+    w->font_weight_set = 1;   // explicit — the driver reads this back
     apply_font(w);
+}
+
+// Widget-level font family (AeCS v1.1). Passed verbatim into LOGFONT's face
+// name — prefer real Windows face names ("Consolas", "Segoe UI"); generic
+// CSS families fall through the font mapper's default matching.
+void aether_ui_set_font_family(int handle, const char* family) {
+    Widget* w = widget_at(handle);
+    if (!w || !family || !family[0]) return;
+    free(w->font_family);
+    free(w->font_family_u8);
+    w->font_family = _wcsdup(utf8_to_wide(family));
+    w->font_family_u8 = _strdup(family);
+    apply_font(w);
+}
+
+const char* aether_ui_styled_font_family_impl(int handle) {
+    Widget* w = widget_at(handle);
+    return (w && w->font_family_u8) ? w->font_family_u8 : "";
+}
+
+const char* aether_ui_styled_weight_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->font_weight_set) return "";
+    return w->font_bold ? "bold" : "normal";
 }
 
 void aether_ui_set_corner_radius(int handle, double radius) {

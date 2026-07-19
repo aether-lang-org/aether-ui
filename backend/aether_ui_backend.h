@@ -159,6 +159,13 @@ int aether_ui_widget_parent_impl(int handle);         // 0 = none/top
 const char* aether_ui_widget_classes_impl(int handle); // space-separated, "" none
 int aether_ui_styled_bg_impl(int handle);   // packed 0xRRGGBB or -1
 int aether_ui_styled_fg_impl(int handle);   // packed 0xRRGGBB or -1
+// Widget-level font family (closes the AeCS v1 gap): the family string is
+// handed to the platform verbatim — generic CSS families ("monospace",
+// "serif") resolve on GTK4/macOS; on win32 prefer real face names
+// ("Consolas"). styled_* read back what was explicitly set ("" = never).
+void aether_ui_set_font_family(int handle, const char* family);
+const char* aether_ui_styled_font_family_impl(int handle);   // "" unset
+const char* aether_ui_styled_weight_impl(int handle);        // ""/"bold"/"normal"
 
 void aether_ui_set_bg_color(int handle, double r, double g, double b, double a);
 void aether_ui_set_bg_gradient(int handle,

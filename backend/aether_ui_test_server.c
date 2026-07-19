@@ -291,6 +291,10 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         int fg = aether_ui_styled_fg_impl(handle);
         if (bg >= 0) n += snprintf(buf + n, bufsize - n, ",\"bg\":\"#%06x\"", bg);
         if (fg >= 0) n += snprintf(buf + n, bufsize - n, ",\"fg\":\"#%06x\"", fg);
+        const char* fam = aether_ui_styled_font_family_impl(handle);
+        const char* wt  = aether_ui_styled_weight_impl(handle);
+        if (fam[0]) n += snprintf(buf + n, bufsize - n, ",\"fontFamily\":\"%s\"", fam);
+        if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
     }
 
     // Accessibility: the widget's effective role + accessible name (auto when

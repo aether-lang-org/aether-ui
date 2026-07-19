@@ -17,7 +17,8 @@
 import ui
 import ui (window, vstack, hstack, text, btn, textfield, divider, listbox,
     listbox_update, add_css_class,
-    create_styles, st_color, st_bg, st_font_size, st_bold, apply_styles,
+    create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
+    st_font_family, apply_styles, style_id, styles_for_mode,
     enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -33,25 +34,33 @@ mk_row(s: string) -> ptr {
     return r as ptr
 }
 
-// swiby demo/banking/theme/blue_theme.rb
+// swiby demo/banking/theme/blue_theme.rb (+ v1.1 surface: id selector, root
+// font family — swiby's root :font_family => VERDANA analogue — and bold via
+// the two-valued weight)
 blue_theme() -> ptr {
     s = create_styles()
+    st_font_family(s, "root", "monospace")
     st_color(s, "text", 0x5C458A)
     st_color(s, "button", 0x5C458A)
     st_bg(s, "container", 0xD6CFE6)
-    st_bold(s, "header.text")            // table_header analogue, via class
+    st_weight(s, "header.text", 1)       // table_header analogue, via class
     st_color(s, "header.text", 0x6030BF)
+    st_color(s, "#status", 0x224488)     // id rule — beats class AND element
     return s
 }
 
-// swiby demo/banking/theme/green_theme.rb
+// swiby demo/banking/theme/green_theme.rb — deliberately a FULL restatement
+// (the reset-sheet convention: every property the blue theme set, this theme
+// sets too, so applying it genuinely reverts bold/family, not just colors).
 green_theme() -> ptr {
     s = create_styles()
+    st_font_family(s, "root", "serif")
     st_color(s, "text", 0x738040)
     st_color(s, "button", 0x738040)
     st_bg(s, "container", 0xE1E6CF)
-    st_bold(s, "header.text")
+    st_weight(s, "header.text", 0)       // UN-bold — v1.1's two-valued weight
     st_color(s, "header.text", 0xA3BF30)
+    st_color(s, "#status", 0x406030)
     return s
 }
 
@@ -59,8 +68,12 @@ main() {
     window("Banking (themable)", 520, 420) {
         vstack(10) {
             head = text("Accounts")
+            // TWO classes — "banner" (no rules) first, "header" second: the
+            // spec proves resolution reads past the first token (multi-class).
+            add_css_class(head, "banner")
             add_css_class(head, "header")
             status = text("theme: default")
+            style_id(status, "status")     // "#status" sheet rules target this
             divider()
 
             hstack(8) {
@@ -87,6 +100,11 @@ main() {
                 _g = btn("Green theme") callback {
                     apply_styles(0, green_theme())
                     aether_ui_text_set_string(status, "theme: green")
+                }
+                _a = btn("Auto (mode)") callback {
+                    // The dark/light pair: blue when light, green when dark.
+                    apply_styles(0, styles_for_mode(blue_theme(), green_theme()))
+                    aether_ui_text_set_string(status, "theme: auto")
                 }
             }
         }

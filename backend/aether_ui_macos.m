@@ -2180,7 +2180,11 @@ void aether_ui_set_font_size(int handle, double size) {
 
 void aether_ui_set_font_bold(int handle, int bold) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
-    if (v && [v isKindOfClass:[NSTextField class]]) {
+    if (!v) return;
+    // Stash the explicit weight for driver readback (AeCS re-theme proof).
+    objc_setAssociatedObject(v, "aeui_styled_weight",
+        @(bold ? 1 : 2), OBJC_ASSOCIATION_RETAIN);
+    if ([v isKindOfClass:[NSTextField class]]) {
         NSFont* font = [(NSTextField*)v font];
         CGFloat size = font ? [font pointSize] : 13.0;
         if (bold)
@@ -2188,6 +2192,41 @@ void aether_ui_set_font_bold(int handle, int bold) {
         else
             [(NSTextField*)v setFont:[NSFont systemFontOfSize:size]];
     }
+}
+
+// Widget-level font family (AeCS v1.1). Verbatim family name via NSFont —
+// generic CSS families map through userFixedPitch/system fallbacks.
+void aether_ui_set_font_family(int handle, const char* family) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || !family || !family[0]) return;
+    objc_setAssociatedObject(v, "aeui_styled_family",
+        [NSString stringWithUTF8String:family], OBJC_ASSOCIATION_RETAIN);
+    if ([v respondsToSelector:@selector(setFont:)]) {
+        NSFont* cur = [(id)v font];
+        CGFloat size = cur ? [cur pointSize] : 13.0;
+        NSFont* f = nil;
+        if (strcmp(family, "monospace") == 0)
+            f = [NSFont userFixedPitchFontOfSize:size];
+        else
+            f = [NSFont fontWithName:[NSString stringWithUTF8String:family]
+                                size:size];
+        if (f) [(id)v setFont:f];
+    }
+}
+
+const char* aether_ui_styled_font_family_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return "";
+    NSString* f = objc_getAssociatedObject(v, "aeui_styled_family");
+    return f ? f.UTF8String : "";
+}
+
+const char* aether_ui_styled_weight_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return "";
+    NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_weight");
+    if (!n) return "";
+    return [n intValue] == 1 ? "bold" : "normal";
 }
 
 void aether_ui_set_corner_radius(int handle, double radius) {

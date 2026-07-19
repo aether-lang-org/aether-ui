@@ -2136,7 +2136,16 @@ void aether_ui_set_font_size(int handle, double size) {
 
 void aether_ui_set_font_bold(int handle, int bold) {
     GtkWidget* w = aether_ui_get_widget(handle);
-    if (!w || !GTK_IS_LABEL(w)) return;
+    if (!w) return;
+    // Stash the explicit weight for driver readback (AeCS re-theme proof) —
+    // even for non-labels, where the visual is CSS-side.
+    g_object_set_data(G_OBJECT(w), "aeui-styled-weight",
+                      GINT_TO_POINTER(bold ? 1 : 2));
+    if (!GTK_IS_LABEL(w)) {
+        aether_ui_apply_css(handle, w,
+            bold ? "font-weight: bold;" : "font-weight: normal;");
+        return;
+    }
     PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
     if (!attrs) attrs = pango_attr_list_new();
     else attrs = pango_attr_list_copy(attrs);
@@ -2145,6 +2154,44 @@ void aether_ui_set_font_bold(int handle, int bold) {
     pango_attr_list_insert(attrs, attr);
     gtk_label_set_attributes(GTK_LABEL(w), attrs);
     pango_attr_list_unref(attrs);
+}
+
+// Widget-level font family (AeCS v1.1). Labels get a Pango family attribute
+// (composes with the size/weight attrs above); everything else goes through
+// per-widget CSS. The family string is stashed for driver readback.
+void aether_ui_set_font_family(int handle, const char* family) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !family || !family[0]) return;
+    g_object_set_data_full(G_OBJECT(w), "aeui-styled-family",
+                           g_strdup(family), g_free);
+    if (GTK_IS_LABEL(w)) {
+        PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
+        if (!attrs) attrs = pango_attr_list_new();
+        else attrs = pango_attr_list_copy(attrs);
+        pango_attr_list_insert(attrs, pango_attr_family_new(family));
+        gtk_label_set_attributes(GTK_LABEL(w), attrs);
+        pango_attr_list_unref(attrs);
+    } else {
+        char prop[192];
+        snprintf(prop, sizeof(prop), "font-family: %s;", family);
+        aether_ui_apply_css(handle, w, prop);
+    }
+}
+
+const char* aether_ui_styled_font_family_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return "";
+    const char* f = (const char*)g_object_get_data(G_OBJECT(w), "aeui-styled-family");
+    return f ? f : "";
+}
+
+const char* aether_ui_styled_weight_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return "";
+    int v = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-styled-weight"));
+    if (v == 1) return "bold";
+    if (v == 2) return "normal";
+    return "";
 }
 
 void aether_ui_set_corner_radius(int handle, double radius) {
@@ -4996,6 +5043,10 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
         int fg = aether_ui_styled_fg_impl(handle);
         if (bg >= 0) n += snprintf(buf + n, bufsize - n, ",\"bg\":\"#%06x\"", bg);
         if (fg >= 0) n += snprintf(buf + n, bufsize - n, ",\"fg\":\"#%06x\"", fg);
+        const char* fam = aether_ui_styled_font_family_impl(handle);
+        const char* wt  = aether_ui_styled_weight_impl(handle);
+        if (fam[0]) n += snprintf(buf + n, bufsize - n, ",\"fontFamily\":\"%s\"", fam);
+        if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
     }
 
     // Accessibility: effective role + accessible name (emitted only when
