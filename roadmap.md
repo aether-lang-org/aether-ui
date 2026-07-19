@@ -198,11 +198,18 @@ term in one result row — cosmetic, doesn't affect the spec.
   (winbaz — required rebuilding winbaz's aether toolchain WITH libpcre2:
   it lacked std.regex, so the SVG path parser returned no edges and path
   shadows silently no-op'd. Fixed the real cause — static libpcre2-8 on
-  MinGW needs -DPCRE2_STATIC, aether commit 1896e5f0). Remaining:
-  **backdrop blur** / materials (frosted scrim) — needs framebuffer
-  readback under a region (vg has none) or a native material
-  (NSVisualEffectView / win32 acrylic / GTK has no clean backdrop-filter);
-  a separate backend-heavy piece.
+  MinGW needs -DPCRE2_STATIC, aether commit 1896e5f0).
+  ~~**backdrop blur** / materials (frosted scrim)~~ **DONE 2026-07-19** —
+  `overlay_material(overlay, "dim"|"blur"|"tint")` on a modal scrim. A real
+  backdrop blur is only native on macOS (NSVisualEffectView, behindWindow
+  frost); win32 (can't blur behind a child HWND — acrylic/DWM are top-level
+  only) and GTK4 (no backdrop-filter) degrade "blur"→"tint" (a heavier/
+  lighter frosty scrim). `overlay_material_effective` + the `"material"` field
+  on `/overlays` report what the backend ACTUALLY applied, so the degrade is
+  asserted and nobody over-claims. `material_demo` + spec: a blur request must
+  degrade to "tint" on the drivable backends (never a silent "dim") — **3/3 on
+  GTK4 AND win32 (winbaz)**; macOS frosts for real (sibling). Design:
+  docs/design/backdrop-material.md.
 - **Transitions:** ~~enter/exit transitions on overlay ENTRIES~~
   **DONE 2026-07-19** — `transition_overlay(overlay, kind, ms)` declares a
   per-entry enter+exit animation (kind: fade / slide-up / slide-down /
