@@ -204,16 +204,19 @@ term in one result row — cosmetic, doesn't affect the spec.
   scale). Enter plays on open; on dismiss the exit tween plays and the entry
   is only removed AFTER it. Driver-visible: `/overlays` entries now carry
   `"exiting"` alongside `"live"` (open → live:1/exiting:0; dismiss →
-  exiting:1 during the tween; then live:0). GTK4 does it with CSS-keyframe
-  enter/-out classes + a `g_timeout` deferred detach; `AETHER_UI_NO_ANIMATION`
-  collapses exit to instant so suites stay deterministic. win32/macOS have no
-  keyframe layer yet → functional no-op (instant exit, exiting always 0 — same
-  end-state as NO_ANIMATION), native OLE/Core-Animation exit is the follow-up.
-  `overlaytr_demo` + spec: the spec adapts to launch mode — anim-off asserts
-  instant removal (the parity contract, **3/3 on winbaz**), anim-on asserts
-  exiting:1-then-gone (ci Phase 5h2). GTK4 tween pending local-runtime
-  recovery. Fixed a latent shared-server bug: TWO /overlays handlers existed
-  in one if-else chain (the reachable one was missing the new field) — deduped.
+  exiting:1 during the tween; then live:0). The exit tween is REAL on all
+  three backends: GTK4 CSS-keyframe enter/-out classes + a `g_timeout`
+  deferred detach; **win32 a layered-window alpha fade** (WS_EX_LAYERED + a
+  WM_TIMER stepping the content+scrim alpha 255→0 over trans_ms, holding
+  exiting:1, then detach — every kind renders as the fade for now, a real
+  slide is a follow-up); macOS NSAnimationContext (sibling). `AETHER_UI_NO_
+  ANIMATION` collapses exit to instant so suites stay deterministic.
+  `overlaytr_demo` + spec adapts to launch mode — anim-off asserts instant
+  removal (the parity contract), anim-on asserts exiting:1-then-gone (ci
+  Phase 5h2). **Verified anim-on 3/3 on GTK4 (local), win32 (winbaz), macOS
+  (spec_matrix 160/160).** Fixed a latent shared-server bug along the way:
+  TWO /overlays handlers in one if-else chain (the reachable one missing the
+  new field) — deduped.
 - **Layout:** ~~weight-share min-clamping~~ **DONE 2026-07-18** — a
   weighted child is pinned to its min and pulled from the weight pool when
   its share would fall under it, iterated to a fixed point. GTK4
