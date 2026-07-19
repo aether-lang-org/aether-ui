@@ -22,7 +22,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PORT=9222
-export AETHER_UI_HEADLESS=1
+# HEADLESS only where a hidden window still LAYS OUT: win32 (SW_HIDE children
+# get real rects) and macOS (Auto Layout runs unmapped). On GTK4, headless
+# realizes-but-never-presents, so NO allocation pass runs — every geometry
+# read is 0, picks miss, canvas coords are dead. Discovered on this script's
+# first-ever Linux run: 8 suites red purely from this flag; ci.sh (the Linux
+# harness) never sets it and the same suites are green there. Linux runs
+# mapped-under-Xvfb instead.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*|Darwin) export AETHER_UI_HEADLESS=1 ;;
+esac
 export AETHER_UI_NO_ANIMATION=1
 
 # suite | binary | spec | extra env

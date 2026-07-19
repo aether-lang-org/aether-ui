@@ -153,6 +153,31 @@ before app_run ran as thread timers whose system-assigned id never
 matched ours, so ui.timer closures never fired (gp's scan pump was
 dead on Windows, likely forever).
 
+**REFRESHED BASELINE 2026-07-19 (both drivable backends, full matrix):**
+
+- **GTK4 (Linux): 188 pass / 0 fail — ALL 44 suites green.** First-ever
+  full spec_matrix run on Linux. It initially showed 8 red suites — ALL
+  from one harness artifact, not regressions: spec_matrix exported
+  `AETHER_UI_HEADLESS=1` unconditionally, and GTK4's headless mode
+  realizes-but-never-PRESENTS the window, so no allocation pass runs and
+  every geometry read is 0 (win32 SW_HIDE and macOS Auto Layout still lay
+  out hidden windows, so the flag is harmless there). Fixed: the export is
+  now scoped to MINGW/MSYS/Darwin; Linux runs mapped under Xvfb.
+- **win32 (winbaz): 141 pass / 47 fail** (was 44/81 on 07-14 — pass count
+  ×3.2). All 23 of this week's feature suites are green on real Windows
+  (themes 13, multiwindow 6, zen 6, a11y 5, reorder 5, csssem 5, vlist 4,
+  material 3, overlaytr 3, …). The 10 genuinely red suites still map to
+  NAMED gaps, now confirmed current: **geometry h:0** (overlay picks —
+  the top cross-cutting fix), **canvas rescale stub** (vg_tooltip,
+  gp_hover), **splitview stub** (split 0/13), **GDI text metrics**
+  (text_metrics 1/5), **ctx-menu driver route** (context_menu 0/7,
+  gp_fileops 0/4), **shortcut-with-entry-focused + /window/key edges**
+  (testable 5/8, gp_scan 3/7), **toggle radio-group** (gp_legend 2/4),
+  plus Tab order (by-design Windows divergence). falling_blocks/
+  svg_tetris/rubiks_cube/lismusic are NOT failures — the vg-app exes are
+  simply unbuilt on that clone (manual build path; LisMusic needs the
+  sqlite 2-step).
+
 **Update 2026-07-18 — win32 tabs went real:** the tabs backend was a
 stub (a vstack that appended pages, no strip, no switching; tabs_selected
 = -1). It's now a real tab strip — a header hstack of one button per tab
