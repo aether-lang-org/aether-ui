@@ -1262,10 +1262,10 @@ style_tooltip(handle: int, text: string) -> int {
     return handle
 }
 
-// ── Stylesheet layer (the swiby-shaped CSS-alike) ────────────────────
-// A declarative, cascading styles model over the imperative style_* setters,
-// modelled on Swiby's create_styles/apply_styles (Jean Lazarou & the Swiby
-// committers, BSD — see docs/design/styling.md). Selectors are widget KINDS as
+// ── AeCS — Aether Cascading Styles ───────────────────────────────────
+// The stylesheet layer: a declarative, cascading styles model over the
+// imperative style_* setters, modelled on Swiby's create_styles/apply_styles
+// (Jean Lazarou & the Swiby committers, BSD — see docs/design/styling.md). Selectors are widget KINDS as
 // the driver reports them ("button", "text", "textfield", …), plus:
 //   "root"           — the fallback every unmatched property cascades to
 //   "container"      — alias matching vstack/hstack/zstack

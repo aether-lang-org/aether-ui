@@ -328,7 +328,7 @@ term in one result row — cosmetic, doesn't affect the spec.
   GtkPopoverMenuBar in the window's content; win32 SetMenu's the HWND;
   macOS uses the app-global OS bar (best-effort). `winmenu_demo` + spec
   **2/2 on GTK4 AND win32 (winbaz)**. **Multi-window is now complete.**
-- **Styling/theming (the swiby-shaped CSS-alike)** — **DONE 2026-07-19**
+- **AeCS — Aether Cascading Styles (the swiby-shaped CSS-alike)** — **DONE 2026-07-19**
   (was never on the ranked list; added after a gap-analysis against Swiby's
   banking demo). `create_styles()` + `st_color/st_bg/st_font_size/st_bold/
   st_radius` build a cascading sheet (selectors: `kind`, `class.kind`,

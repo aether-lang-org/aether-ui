@@ -148,7 +148,7 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle);
 void aether_ui_navstack_pop(int handle);
 
 // Styling (Group 4)
-// Stylesheet support (ui.create_styles / apply_styles — the swiby-shaped
+// Stylesheet support (ui.create_styles / apply_styles — AeCS, the swiby-shaped
 // CSS-alike layer; see docs/design/styling.md). The DSL walks the live widget
 // tree in-process and needs kind/parent/classes per widget; styled_bg/fg read
 // back the last EXPLICITLY-set colors (packed 0xRRGGBB, -1 = unset) so the

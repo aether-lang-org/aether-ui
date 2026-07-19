@@ -1,4 +1,4 @@
-// Aether UI stylesheet/theming example — the swiby banking demo's move,
+// Aether UI AeCS (Aether Cascading Styles) example — the swiby banking demo's move,
 // re-played on aether-ui (see docs/design/styling.md; themes lifted from
 // swiby's demo/banking/theme/*.rb, credit Jean Lazarou & the Swiby
 // committers, BSD).

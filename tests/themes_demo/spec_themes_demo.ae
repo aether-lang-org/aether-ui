@@ -1,4 +1,4 @@
-// spec_themes_demo.ae — the stylesheet/theming layer over the AetherUIDriver.
+// spec_themes_demo.ae — AeCS (Aether Cascading Styles) over the AetherUIDriver.
 // Proves the swiby-shaped CSS-alike (docs/design/styling.md):
 //   * a sheet's ELEMENT rule styles every widget of that kind ("text" →
 //     Owner: label), read back from the BACKEND ("fg" in the widget JSON is

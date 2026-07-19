@@ -1,8 +1,10 @@
-# Styling / theming — the swiby-shaped CSS-alike
+# AeCS — Aether Cascading Styles
 
-aether-ui's stylesheet layer: a declarative, cascading styles model over the
-imperative `style_*` setters, so a theme is a *document* and re-theming a
-running app is one call.
+**AeCS** is aether-ui's stylesheet layer: a declarative, cascading styles
+model over the imperative `style_*` setters, so a theme is a *document* and
+re-theming a running app is one call. The name follows the family convention
+(AeVG, aeb, Aeocha) and says what the layer actually does — the cascade
+(`class.kind → class → kind → container → root`) is the mechanism.
 
 ## Lineage (credit)
 
