@@ -4147,6 +4147,60 @@ int aether_ui_fire_double_click(int handle) {
     return 1;
 }
 
+// ── Row drag-reorder ────────────────────────────────────────────────
+// Each reorderable row is a GtkDragSource (its drag payload is its own index)
+// and a GtkDropTarget (accepting an int). On drop, the target row fires its
+// on_drop(source_index) closure — which the DSL wires to listbox_move. The
+// index each row carries is stashed as gobject data so the driver can fire a
+// drop headlessly (aether_ui_fire_row_drop).
+static GdkContentProvider* on_row_drag_prepare(GtkDragSource* src, double x,
+                                               double y, gpointer data) {
+    (void)src; (void)x; (void)y;
+    int index = GPOINTER_TO_INT(data);
+    GValue v = G_VALUE_INIT;
+    g_value_init(&v, G_TYPE_INT);
+    g_value_set_int(&v, index);
+    return gdk_content_provider_new_for_value(&v);
+}
+
+static gboolean on_row_drop(GtkDropTarget* target, const GValue* value,
+                            double x, double y, gpointer data) {
+    (void)target; (void)x; (void)y;
+    if (!G_VALUE_HOLDS_INT(value)) return FALSE;
+    int src_index = g_value_get_int(value);
+    AeClosure* c = (AeClosure*)data;
+    if (c && c->fn) ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)src_index);
+    return TRUE;
+}
+
+void aether_ui_row_drag_reorder_impl(int row_handle, int index,
+                                     void* on_drop_closure) {
+    GtkWidget* row = aether_ui_get_widget(row_handle);
+    if (!row) return;
+    // Drag source — payload is this row's index.
+    GtkDragSource* src = gtk_drag_source_new();
+    g_signal_connect(src, "prepare", G_CALLBACK(on_row_drag_prepare),
+                     GINT_TO_POINTER(index));
+    gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(src));
+    // Drop target — accepts an int (the dragged row's index) → on_drop.
+    GtkDropTarget* tgt = gtk_drop_target_new(G_TYPE_INT, GDK_ACTION_MOVE);
+    g_signal_connect(tgt, "drop", G_CALLBACK(on_row_drop), on_drop_closure);
+    gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(tgt));
+    // Stash for the headless driver-fire path.
+    g_object_set_data(G_OBJECT(row), "aeui-rowdrop", on_drop_closure);
+}
+
+// Driver hook: simulate dropping row `src_index` onto `row_handle` (fires that
+// row's on_drop). Real drag needs a seat; this drives it headlessly.
+int aether_ui_fire_row_drop(int row_handle, int src_index) {
+    GtkWidget* row = aether_ui_get_widget(row_handle);
+    if (!row) return 0;
+    AeClosure* c = (AeClosure*)g_object_get_data(G_OBJECT(row), "aeui-rowdrop");
+    if (!c || !c->fn) return 0;
+    ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)src_index);
+    return 1;
+}
+
 // Click handler (single click on any widget, not just buttons)
 void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(handle);
@@ -4764,6 +4818,9 @@ static gboolean test_action_idle(gpointer data) {
             break;
         case 11: // double_click — fire the widget's dbl-click closure
             ta->retval = aether_ui_fire_double_click(ta->handle);
+            break;
+        case 12: // drop — fire this row's on_drop(src_index)
+            ta->retval = aether_ui_fire_row_drop(ta->handle, ta->ival);
             break;
     }
     ta->result = 0;
@@ -5465,6 +5522,11 @@ static void handle_test_request(int client_fd) {
             ta.handle = atoi(path + 8);
             if (strncmp(action_part, "/double_click", 13) == 0) {
                 ta.action = 11;
+            } else if (strncmp(action_part, "/drop", 5) == 0) {
+                // POST /widget/{id}/drop?src=N — drop row N onto this row.
+                ta.action = 12;
+                const char* v = extract_query_param(path, "src");
+                ta.ival = v ? atoi(v) : -1;
             } else if (strncmp(action_part, "/click", 6) == 0) {
                 ta.action = 0;
             } else if (strncmp(action_part, "/set_text", 9) == 0) {

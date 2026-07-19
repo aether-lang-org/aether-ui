@@ -3986,6 +3986,29 @@ int aether_ui_fire_double_click(int handle) {
     return 1;
 }
 
+// Row drag-reorder. Native AppKit drag is a follow-up; store the drop closure
+// so the reorder works via the driver's /widget/{id}/drop (model reorder is
+// shared). (void)index — the row's index rides in the Aether closure.
+void aether_ui_row_drag_reorder_impl(int row_handle, int index,
+                                     void* on_drop_closure) {
+    (void)index;
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(row_handle);
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui_rowdrop",
+        [NSValue valueWithPointer:on_drop_closure], OBJC_ASSOCIATION_RETAIN);
+}
+
+int aether_ui_fire_row_drop(int row_handle, int src_index) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(row_handle);
+    if (!v) return 0;
+    NSValue* nv = objc_getAssociatedObject(v, "aeui_rowdrop");
+    if (!nv) return 0;
+    AeClosure* c = (AeClosure*)[nv pointerValue];
+    if (!c || !c->fn) return 0;
+    ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)src_index);
+    return 1;
+}
+
 void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;

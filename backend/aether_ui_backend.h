@@ -62,6 +62,11 @@ int aether_ui_text_get_wrap(int handle);
 int aether_ui_text_get_anchor(int handle);
 // Driver-invoke a widget's double-click closure (headless-safe). 1 if fired.
 int aether_ui_fire_double_click(int handle);
+/* Row drag-reorder: make `row` a drag source (index payload) + drop target;
+ * on drop of another row, fire on_drop(source_index). fire_row_drop drives it
+ * headlessly (no seat). */
+void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop);
+int  aether_ui_fire_row_drop(int row_handle, int src_index);
 int aether_ui_button_create(const char* label, void* boxed_closure);
 int aether_ui_button_create_plain(const char* label);
 void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure);

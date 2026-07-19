@@ -475,6 +475,16 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
         send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/drop")) {
+        // POST /widget/{id}/drop?src=N — drop row N onto this row (row
+        // drag-reorder). Fires the row's on_drop(N) closure headlessly.
+        int id = extract_id_from_path(path, "/widget/");
+        const char* s = extract_query_param(path, "src");
+        int fired = aether_ui_fire_row_drop(id, s ? atoi(s) : -1);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
+        send_http(client_fd, 200, "OK", "application/json", body);
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/click")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_CLICK;

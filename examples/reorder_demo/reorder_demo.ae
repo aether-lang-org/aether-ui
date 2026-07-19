@@ -1,0 +1,90 @@
+// Aether UI drag-reorder example — a listbox whose rows can be dragged to
+// reorder (item: Drag & drop / list reorder).
+//
+// listbox_reorderable() builds a listbox where each row is a native drag
+// source AND drop target (GTK4 GtkDragSource/GtkDropTarget). Dropping row
+// `src` onto row `i` calls listbox_move(src, i), which rebuilds the backing
+// list and re-renders. on_reorder(lb) fires after every move with (from, to).
+//
+// Headless, the driver drives a drop with POST /widget/{row}/drop?src=N (the
+// same move a real gesture triggers) and reads the new order from the row
+// JSON. The order label reflects the current list so a spec can assert it.
+//
+//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider,
+    listbox_reorderable, listbox_update, listbox_move, listbox_count,
+    listbox_items, on_reorder, enable_test_server, fill_height)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern aether_ui_text_set_string(handle: int, text: string)
+extern malloc(size: int) -> ptr
+
+struct Row { label: string }
+
+mk_row(s: string) -> ptr {
+    r = malloc(16) as *Row
+    r.label = s
+    return r as ptr
+}
+
+// Build "A > B > C > D" from the current list so a spec can read the order.
+order_string(items: ptr) -> string {
+    n = list.size(items)
+    out = ""
+    i = 0
+    while i < n {
+        it, _e = list.get(items, i)
+        r = it as *Row
+        if i > 0 { out = string.concat(out, " > ") }
+        out = string.concat(out, r.label)
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    items = list.new()
+    _ = list.add(items, mk_row("A"))
+    _ = list.add(items, mk_row("B"))
+    _ = list.add(items, mk_row("C"))
+    _ = list.add(items, mk_row("D"))
+
+    window("reorder demo", 480, 420) {
+        vstack(8) {
+            order = text("order: A > B > C > D")
+            divider()
+
+            rows = listbox_reorderable(4) callback |item: ptr, i: int, row: int| {
+                r = item as *Row
+                _t = text(row, r.label)
+            }
+            listbox_update(rows, items)
+
+            on_reorder(rows) callback |from: int, to: int| {
+                aether_ui_text_set_string(order,
+                    string.concat("order: ", order_string(listbox_items(rows))))
+            }
+
+            divider()
+            hstack(10) {
+                // Programmatic move: send the top item to the bottom.
+                _m = btn("Move A to end") callback {
+                    listbox_move(rows, 0, list.size(items) - 1)
+                }
+                _r = btn("Reverse (D first)") callback {
+                    listbox_move(rows, 3, 0)
+                }
+            }
+        }
+    }
+
+    port = os_getenv("AETHER_UI_TEST_PORT")
+    if string.length(port) > 0 {
+        pnum, _pe = string.to_int(port)
+        enable_test_server(pnum)
+    }
+}

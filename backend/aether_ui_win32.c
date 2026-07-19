@@ -213,6 +213,7 @@ typedef struct {
     AeClosure* on_double_click;
     AeClosure* on_change; // text/value change for input widgets
     int bound_state;      // two-way bind_value target (0 = none)
+    AeClosure* on_drop;   // row drag-reorder: on_drop(src_index)
     int text_wrap;        // WK_TEXT: multi-line wrapping label
     int text_anchor;      // WK_TEXT: 0=start 1=middle 2=end
 
@@ -2557,6 +2558,24 @@ int aether_ui_fire_double_click(int handle) {
     Widget* w = widget_at(handle);
     if (!w || !w->on_double_click || !w->on_double_click->fn) return 0;
     invoke_closure(w->on_double_click);
+    return 1;
+}
+
+// Row drag-reorder. Native OLE drag on win32 is follow-up; for now store the
+// drop closure so the reorder works via the driver's /widget/{id}/drop (the
+// model reorder is shared). (void)index — the row's index is captured in the
+// Aether closure the DSL passes.
+void aether_ui_row_drag_reorder_impl(int row_handle, int index,
+                                     void* on_drop_closure) {
+    (void)index;
+    Widget* w = widget_at(row_handle);
+    if (w) w->on_drop = (AeClosure*)on_drop_closure;
+}
+
+int aether_ui_fire_row_drop(int row_handle, int src_index) {
+    Widget* w = widget_at(row_handle);
+    if (!w || !w->on_drop || !w->on_drop->fn) return 0;
+    ((void(*)(void*, intptr_t))w->on_drop->fn)(w->on_drop->env, (intptr_t)src_index);
     return 1;
 }
 

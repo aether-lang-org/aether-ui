@@ -47,8 +47,10 @@ exports (
     transition,
     vg_tooltip_show, vg_tooltip_hide, vg_tooltip_drawn,
     each, each_update, each_count, each_parent,
-    listbox, listbox_multi, listbox_update, listbox_select, listbox_selected,
-    listbox_is_selected, listbox_count, on_row_double_click,
+    listbox, listbox_multi, listbox_reorderable, listbox_update, listbox_move,
+    listbox_items,
+    listbox_select, listbox_selected, listbox_is_selected, listbox_count,
+    on_row_double_click, on_reorder,
     on_select, add_css_class, remove_css_class,
     table_cols, table_col, table_col_delegate, table, table_update,
     table_select, table_selected, table_count, table_on_select, table_bind,
@@ -352,6 +354,9 @@ extern aether_ui_canvas_write_png_impl(canvas_id: int, path: string, width: int,
 
 extern aether_ui_on_hover_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
+// Row drag-reorder: make `row` a drag source (carrying its index) + a drop
+// target; on drop of another row, fire on_drop(source_index).
+extern aether_ui_row_drag_reorder_impl(row_handle: int, index: int, on_drop: ptr)
 extern aether_ui_on_click_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_animate_opacity_impl(handle: int, target: float, duration_ms: int)
 extern aether_ui_remove_child_impl(parent_handle: int, child_handle: int)
@@ -1532,7 +1537,9 @@ struct ListBox {
     user_render: ptr,  // boxed |item, i, row| row template
     multi: int,        // 0 = single-select, 1 = multi-select (toggle rows)
     sel_flags: ptr,    // multi: intarr of 0/1 per row, or null
-    on_dbl: ptr        // boxed |i: int| row double-click callback, or null
+    on_dbl: ptr,       // boxed |i: int| row double-click callback, or null
+    items: ptr,        // reorderable: the OWNED std.list, so move() can reorder
+    on_reorder: ptr    // boxed |from, to| move callback, or null
 }
 
 _listbox_invoke_render(cb: fn, item: ptr, i: int, row: int) {
@@ -1593,7 +1600,7 @@ listbox_multi(_ctx: ptr, spacing: int, render: fn) -> ptr {
 }
 
 _listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
-    lb = malloc(64) as *ListBox
+    lb = malloc(80) as *ListBox
     lb.rows = null
     lb.selected = 0 - 1
     lb.on_sel = null
@@ -1601,6 +1608,8 @@ _listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
     lb.multi = multi
     lb.sel_flags = null
     lb.on_dbl = null
+    lb.items = null
+    lb.on_reorder = null
     lbp = lb as ptr
     lb.group = each(_ctx, "v", spacing) callback |item: ptr, i: int, parent: int| {
         row = hstack(parent, 8)
@@ -1628,7 +1637,8 @@ on_row_double_click(lbp: ptr, cb: fn) {
     lb.on_dbl = box_closure(cb)
 }
 
-// listbox_update(lb, items) — re-render the rows; selection resets.
+// listbox_update(lb, items) — re-render the rows; selection resets. The list
+// is RETAINED (so a reorderable listbox's move() can reorder it in place).
 listbox_update(lbp: ptr, items: ptr) {
     lb = lbp as *ListBox
     if lb.rows != null { intarr_free(lb.rows) }
@@ -1641,7 +1651,94 @@ listbox_update(lbp: ptr, items: ptr) {
         if lb.sel_flags != null { intarr_free(lb.sel_flags) }
         lb.sel_flags = intarr_new_raw(sz)   // all 0 = nothing selected
     }
+    lb.items = items
     each_update(lb.group, items)
+}
+
+// listbox_reorderable(spacing, render): a listbox whose rows can be REORDERED.
+// listbox_move(from, to) moves an item and re-renders; a native drag gesture
+// (GTK4 drag source/target) calls the same move on drop. on_reorder(lb) is
+// notified of every move so the app can persist the new order.
+listbox_reorderable(_ctx: ptr, spacing: int, render: fn) -> ptr {
+    return _listbox_make_reorder(_ctx, spacing, render)
+}
+
+// on_reorder(lb) callback |from: int, to: int| — fires after a row moves.
+on_reorder(lbp: ptr, cb: fn) {
+    lb = lbp as *ListBox
+    lb.on_reorder = box_closure(cb)
+}
+
+_listbox_invoke_reorder(cb: fn, from: int, to: int) {
+    cb(from, to)
+}
+
+// Build a reorderable listbox: rows are native drag sources + drop targets, and
+// a drop calls listbox_move(source_index, target_index). The drag gesture is
+// backend C (GTK4 GtkDragSource/GtkDropTarget); the model reorder is shared.
+_listbox_make_reorder(_ctx: ptr, spacing: int, render: fn) -> ptr {
+    lb = malloc(80) as *ListBox
+    lb.rows = null
+    lb.selected = 0 - 1
+    lb.on_sel = null
+    lb.user_render = box_closure(render)
+    lb.multi = 0
+    lb.sel_flags = null
+    lb.on_dbl = null
+    lb.items = null
+    lb.on_reorder = null
+    lbp = lb as ptr
+    lb.group = each(_ctx, "v", spacing) callback |item: ptr, i: int, parent: int| {
+        row = hstack(parent, 8)
+        intarr_set_raw(lb.rows, i, row)
+        ur = unbox_closure(lb.user_render)
+        _listbox_invoke_render(ur, item, i, row)
+        _oc = on_click(row) callback { _listbox_row_clicked(lbp, i) }
+        // Make this row drag-reorderable: on drop of row `src` onto this row
+        // (index i), move src → i.
+        aether_ui_row_drag_reorder_impl(row, i, box_closure(|src: int| {
+            listbox_move(lbp, src, i)
+        }))
+    }
+    return lbp
+}
+
+// Move item `from` to index `to` in the listbox's list, re-render, notify.
+// std.list has no insert-at-index, so rebuild the list with the item
+// repositioned (the app's list is replaced by the reordered one).
+listbox_move(lbp: ptr, from: int, to: int) {
+    lb = lbp as *ListBox
+    if lb.items == null { return }
+    n = list.size(lb.items)
+    if from < 0 { return }
+    if from >= n { return }
+    if to < 0 { to = 0 }
+    if to >= n { to = n - 1 }
+    if from == to { return }
+    moved, _me = list.get(lb.items, from)
+    out = list.new()
+    // Walk the original order, skipping `from`, and splice `moved` in at `to`.
+    dst = 0
+    i = 0
+    while i < n {
+        if i == from {
+            i = i + 1
+            continue
+        }
+        if dst == to { _ = list.add(out, moved) }
+        it, _e = list.get(lb.items, i)
+        _ = list.add(out, it)
+        dst = dst + 1
+        i = i + 1
+    }
+    // If `to` is at/after the end, append.
+    if to >= dst { _ = list.add(out, moved) }
+    lb.items = out
+    listbox_update(lb as ptr, out)
+    if lb.on_reorder != null {
+        cb = unbox_closure(lb.on_reorder)
+        _listbox_invoke_reorder(cb, from, to)
+    }
 }
 
 // Multi-select: is row i currently selected? (0/1). Single-select listboxes
@@ -1666,6 +1763,14 @@ listbox_selected(lbp: ptr) -> int {
 listbox_count(lbp: ptr) -> int {
     lb = lbp as *ListBox
     return each_count(lb.group)
+}
+
+// listbox_items(lb) — the listbox's CURRENT backing list. After a reorder the
+// listbox owns a rebuilt list (listbox_move replaces it), so read it here
+// rather than the app's original list handle, which goes stale.
+listbox_items(lbp: ptr) -> ptr {
+    lb = lbp as *ListBox
+    return lb.items
 }
 
 // on_select(lb) callback |i: int| { … } — fires on click AND listbox_select.
