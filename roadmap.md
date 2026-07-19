@@ -341,10 +341,19 @@ term in one result row — cosmetic, doesn't affect the spec.
   `"bg"/"fg"` — specs prove the swap from the backend. `themes_demo`
   (accounts list + Blue/Green themes, values lifted from swiby's
   theme/*.rb, credited) + spec: element rule, class-beats-element,
-  container bg, live re-theme — **5/5 on GTK4 AND win32 (winbaz)**. v1
-  boundaries in docs/design/styling.md (one class/widget, no ids, no
-  un-bold, no widget font_family — the known gap). Also the front half of
-  any future vg-drawn-controls theming (see that doc's "concrete driver").
+  container bg, live re-theme — **5/5 on GTK4 AND win32 (winbaz)**.
+  **v1.1 (same day)** closed the cheap gaps: multi-class resolution (every
+  token), `style_id` + `"#name"` selectors (ride the class store as
+  `#`-tokens — zero new state, highest precedence), **widget-level
+  `font_family` on all three backends** (GTK4 Pango/CSS, win32 LOGFONT
+  face, macOS NSFont; closes the v1 known gap) + `st_font_family`,
+  two-valued `st_weight` (re-themes genuinely un-bold — makes the
+  documented reset-sheet convention real), `styles_for_mode(light, dark)`
+  dark/light pairs, and `fontFamily`/`fontWeight` driver readback — spec
+  now **9/9 on GTK4 AND win32 (winbaz)**. Still-open boundaries in
+  docs/design/styling.md (no live re-matching/inheritance/pseudo-states —
+  those would make AeCS a style engine). Also the front half of any future
+  vg-drawn-controls theming (see that doc's "concrete driver").
 - **Accessibility** — **semantics layer DONE 2026-07-19**.
   `a11y_role/a11y_label/a11y_description` set REAL platform a11y on any
   widget; the driver reads the effective values back via
