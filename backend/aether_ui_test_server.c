@@ -691,10 +691,11 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         int pos = snprintf(body, sizeof(body), "{\"count\":%d,\"overlays\":[", n);
         for (int i = 1; i <= n && pos < (int)sizeof(body) - 64; i++) {
             pos += snprintf(body + pos, sizeof(body) - pos,
-                            "%s{\"handle\":%d,\"modal\":%d,\"live\":%d}",
+                            "%s{\"handle\":%d,\"modal\":%d,\"live\":%d,\"exiting\":%d}",
                             i > 1 ? "," : "", i,
                             aether_ui_overlay_is_modal_impl(i),
-                            aether_ui_overlay_is_live_impl(i));
+                            aether_ui_overlay_is_live_impl(i),
+                            aether_ui_overlay_is_exiting_impl(i));
         }
         snprintf(body + pos, sizeof(body) - pos, "]}");
         send_http(client_fd, 200, "OK", "application/json", body);
@@ -978,25 +979,6 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         int r = aether_ui_notif_mark_dismissed(id);
         if (r == 0) send_http(client_fd, 200, "OK", "text/plain", "dismissed");
         else send_http(client_fd, 404, "Not Found", "text/plain", "notification not found");
-
-    // --- /overlays (in-window overlay layer) ---
-    // Win32 overlays are no-op stubs (the z-layer lands natively later), so
-    // this reports an empty/consistent list — the route exists so the driver
-    // surface matches the GTK4 backend rather than 404ing.
-    } else if (method == 0 && strcmp(path, "/overlays") == 0) {
-        char body[4096];
-        int n = aether_ui_overlay_count_impl();
-        int off = snprintf(body, sizeof(body), "{\"count\":%d,\"overlays\":[", n);
-        for (int i = 1; i <= n && off < (int)sizeof(body) - 64; i++) {
-            off += snprintf(body + off, sizeof(body) - off,
-                "%s{\"handle\":%d,\"modal\":%d,\"live\":%d,\"exiting\":%d}",
-                i > 1 ? "," : "", i,
-                aether_ui_overlay_is_modal_impl(i),
-                aether_ui_overlay_is_live_impl(i),
-                aether_ui_overlay_is_exiting_impl(i));
-        }
-        snprintf(body + off, sizeof(body) - off, "]}");
-        send_http(client_fd, 200, "OK", "application/json", body);
 
     } else {
         send_http(client_fd, 404, "Not Found", "text/plain",
