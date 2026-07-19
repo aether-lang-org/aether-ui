@@ -2522,6 +2522,10 @@ void aether_ui_open_url_impl(const char* url) {
 
 // Dark mode detection
 int aether_ui_dark_mode_check(void) {
+    // Driver override first (POST /appearance?dark=N) so headless specs can
+    // steer styles_for_mode without a settings daemon.
+    int ov = aether_ui_appearance_override_get();
+    if (ov >= 0) return ov;
     ensure_gtk_init();
     GtkSettings* settings = gtk_settings_get_default();
     if (!settings) return 0;
@@ -4582,7 +4586,54 @@ static void aeui_track_class(GtkWidget* w, const char* cls, int add) {
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !property_css || !property_css[0]) return;
+    // Stash an explicit opacity for driver readback (AeCS st_opacity proof) —
+    // style_opacity routes through here as "opacity: X;". +1 encoding so an
+    // explicit 0.0 differs from never-set.
+    if (strncmp(property_css, "opacity:", 8) == 0) {
+        double v = atof(property_css + 8);
+        g_object_set_data(G_OBJECT(w), "aeui-styled-opacity",
+                          GINT_TO_POINTER((int)(v * 100.0) + 1));
+    }
     aether_ui_apply_css(handle, w, property_css);
+}
+
+int aether_ui_styled_opacity_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return -1;
+    int v = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-styled-opacity"));
+    return v > 0 ? v - 1 : -1;
+}
+
+// ── AeCS appearance change (GTK4) ───────────────────────────────────
+// Real-OS path: GtkSettings' prefer-dark notify → invoke the registered
+// |dark| callback on the GTK thread. Driver path: fire_appearance sets the
+// override and marshals the invoke onto the GTK thread via idle.
+static void on_prefer_dark_notify(GObject* obj, GParamSpec* pspec, gpointer d) {
+    (void)obj; (void)pspec; (void)d;
+    aether_ui_appearance_invoke(aether_ui_dark_mode_check());
+}
+
+void aether_ui_watch_appearance_impl(void) {
+    static int watched = 0;
+    if (watched) return;
+    watched = 1;
+    ensure_gtk_init();
+    GtkSettings* settings = gtk_settings_get_default();
+    if (settings)
+        g_signal_connect(settings, "notify::gtk-application-prefer-dark-theme",
+                         G_CALLBACK(on_prefer_dark_notify), NULL);
+}
+
+static gboolean fire_appearance_idle(gpointer data) {
+    aether_ui_appearance_invoke(GPOINTER_TO_INT(data));
+    return G_SOURCE_REMOVE;
+}
+
+int aether_ui_fire_appearance(int dark) {
+    aether_ui_appearance_override_set(dark ? 1 : 0);
+    // The callback re-themes live widgets — GTK thread only.
+    g_idle_add(fire_appearance_idle, GINT_TO_POINTER(dark ? 1 : 0));
+    return 1;
 }
 
 void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
@@ -5047,6 +5098,8 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
         const char* wt  = aether_ui_styled_weight_impl(handle);
         if (fam[0]) n += snprintf(buf + n, bufsize - n, ",\"fontFamily\":\"%s\"", fam);
         if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
+        int op = aether_ui_styled_opacity_impl(handle);
+        if (op >= 0) n += snprintf(buf + n, bufsize - n, ",\"opacity\":%.2f", op / 100.0);
     }
 
     // Accessibility: effective role + accessible name (emitted only when
@@ -5542,6 +5595,20 @@ static void handle_test_request(int client_fd) {
         while (!rq.done) usleep(1000);
         send_response(client_fd, 200, "OK", "application/json", rq.out ? rq.out : "[]");
         free(rq.out);
+        close(client_fd);
+        return;
+    }
+
+    // POST /appearance?dark=N — steer the OS-appearance override headlessly:
+    // sets the dark_mode_check override and fires the registered appearance
+    // callback (marshalled to the GTK thread), so specs drive
+    // styles_for_mode re-theming without a settings daemon.
+    if (method == 1 && strncmp(path, "/appearance", 11) == 0) {
+        const char* v = extract_query_param(path, "dark");
+        int fired = aether_ui_fire_appearance(v ? atoi(v) : 0);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
+        send_response(client_fd, 200, "OK", "application/json", body);
         close(client_fd);
         return;
     }

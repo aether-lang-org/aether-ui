@@ -252,6 +252,7 @@ typedef struct {
     char* a11y_role;
     char* a11y_name;
     char* a11y_desc;
+    int styled_opacity_enc;   // explicit opacity readback: 0=unset, else v*100+1
 
     // CSS-class mirror (item 4/8 parity): win32 has no CSS, but the class
     // LIST is the driver's selection-visibility contract (.aui-row-selected)
@@ -1152,6 +1153,13 @@ static const wchar_t* GRID_CLASS = L"AetherUIGrid";
 
 static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case WM_SETTINGCHANGE: {
+            // OS light/dark flip ("ImmersiveColorSet") — tell the AeCS
+            // appearance callback, already on the UI thread.
+            if (lp && wcscmp((const wchar_t*)lp, L"ImmersiveColorSet") == 0)
+                aether_ui_appearance_invoke(aether_ui_dark_mode_check());
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
         case WM_SIZE: {
             // Resize the single root child to fill the client area.
             HWND child = GetWindow(hwnd, GW_CHILD);
@@ -2919,6 +2927,9 @@ void aether_ui_open_url_impl(const char* url) {
 }
 
 int aether_ui_dark_mode_check(void) {
+    // Driver override first (POST /appearance?dark=N — headless spec steer).
+    int ov = aether_ui_appearance_override_get();
+    if (ov >= 0) return ov;
     HKEY key;
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
         L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
@@ -3352,8 +3363,38 @@ int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
     }
     return handle;
 }
+// Raw-CSS is a GTK concept; win32 honours the ONE property AeCS routes here:
+// "opacity: X;" becomes a real layered-window alpha (the same WS_EX_LAYERED
+// child mechanism the overlay exit fade proved). Everything else is ignored.
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
-    (void)handle; (void)property_css;
+    if (!property_css) return;
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    if (strncmp(property_css, "opacity:", 8) == 0) {
+        double v = atof(property_css + 8);
+        if (v < 0) v = 0;
+        if (v > 1) v = 1;
+        w32_make_layered(w->hwnd);
+        SetLayeredWindowAttributes(w->hwnd, 0, (BYTE)(v * 255.0), LWA_ALPHA);
+        w->styled_opacity_enc = (int)(v * 100.0) + 1;
+    }
+}
+
+int aether_ui_styled_opacity_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || w->styled_opacity_enc <= 0) return -1;
+    return w->styled_opacity_enc - 1;
+}
+
+// AeCS appearance change (win32). The OS path is WM_SETTINGCHANGE in
+// app_wnd_proc; nothing extra to hook up.
+void aether_ui_watch_appearance_impl(void) { }
+
+int aether_ui_fire_appearance(int dark) {
+    aether_ui_appearance_override_set(dark ? 1 : 0);
+    // Direct invoke from the HTTP thread — same threading posture as the
+    // /drop fire path, which cross-thread SendMessages tolerate.
+    return aether_ui_appearance_invoke(dark ? 1 : 0);
 }
 void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
     Widget* w = widget_at(handle);

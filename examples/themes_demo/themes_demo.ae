@@ -18,8 +18,8 @@ import ui
 import ui (window, vstack, hstack, text, btn, textfield, divider, listbox,
     listbox_update, add_css_class,
     create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
-    st_font_family, apply_styles, style_id, styles_for_mode,
-    enable_test_server)
+    st_font_family, st_opacity, apply_styles, style_id, styles_for_mode,
+    use_styles, use_styles_pair, load_styles, enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.list
@@ -46,6 +46,7 @@ blue_theme() -> ptr {
     st_weight(s, "header.text", 1)       // table_header analogue, via class
     st_color(s, "header.text", 0x6030BF)
     st_color(s, "#status", 0x224488)     // id rule — beats class AND element
+    st_opacity(s, "hint.text", 0.55)     // v1.2: opacity in the sheet
     return s
 }
 
@@ -107,6 +108,38 @@ main() {
                     aether_ui_text_set_string(status, "theme: auto")
                 }
             }
+            hstack(10) {
+                // use_styles: the CURRENT sheet — widgets built afterwards
+                // (Add row) arrive already themed, no re-apply choreography.
+                _u = btn("Use blue (live)") callback {
+                    use_styles(blue_theme())
+                    aether_ui_text_set_string(status, "theme: blue-live")
+                }
+                _r2 = btn("Add row") callback {
+                    _added = list.add(items, mk_row("Deanna Troi — 004-5678901-23"))
+                    listbox_update(rows, items)
+                }
+                // Themes as FILES (swiby load_styles) — the purple theme
+                // ships as theme/purple.aecs, parsed at runtime.
+                _f = btn("File theme") callback {
+                    fsheet = load_styles("examples/themes_demo/theme/purple.aecs")
+                    if fsheet != null {
+                        apply_styles(0, fsheet)
+                        aether_ui_text_set_string(status, "theme: purple")
+                    }
+                    if fsheet == null {
+                        aether_ui_text_set_string(status, "theme: file-error")
+                    }
+                }
+                // The whole dark/light story: applies the mode pick AND
+                // re-themes on every OS (or driver /appearance) flip.
+                _p = btn("Pair (auto)") callback {
+                    use_styles_pair(blue_theme(), green_theme())
+                    aether_ui_text_set_string(status, "theme: pair")
+                }
+            }
+            hint = text("Themes cascade: id, class.kind, class, kind, container, root.")
+            add_css_class(hint, "hint")
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

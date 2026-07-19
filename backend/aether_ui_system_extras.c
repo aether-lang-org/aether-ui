@@ -367,3 +367,33 @@ void aether_ui_park_until_killed(void) {
     for (;;) sleep(60);
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// AeCS shared state (styles layer — docs/design/styling.md).
+// Lives here because this TU links into every backend build: the "current
+// sheet" (use_styles) that widget constructors consult, and the
+// appearance-change registry behind styles_for_mode auto re-theming.
+// ---------------------------------------------------------------------------
+
+// Opaque Aether-heap sheet ptr; the DSL owns it, C only holds it.
+static void* aecs_current_sheet = NULL;
+void aether_ui_current_sheet_set_impl(void* sheet) { aecs_current_sheet = sheet; }
+void* aether_ui_current_sheet_get_impl(void) { return aecs_current_sheet; }
+
+// Single-slot appearance callback (|dark: int| closure) + the driver's
+// override (-1 = follow the OS; 0/1 forced via POST /appearance).
+static void* appearance_boxed = NULL;
+static int appearance_override = -1;
+void aether_ui_appearance_register_impl(void* boxed) { appearance_boxed = boxed; }
+int aether_ui_appearance_override_get(void) { return appearance_override; }
+void aether_ui_appearance_override_set(int dark) { appearance_override = dark; }
+
+// Invoke the registered callback with the new mode. Backends call this from
+// their OS event ON THE UI THREAD; the driver's fire goes through the
+// per-backend aether_ui_fire_appearance, which owns thread marshalling.
+int aether_ui_appearance_invoke(int dark) {
+    AeClosureLocal* c = (AeClosureLocal*)appearance_boxed;
+    if (!c || !c->fn) return 0;
+    ((void (*)(void*, long long))c->fn)(c->env, (long long)dark);
+    return 1;
+}

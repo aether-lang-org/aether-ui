@@ -2612,6 +2612,9 @@ void aether_ui_open_url_impl(const char* url) {
 }
 
 int aether_ui_dark_mode_check(void) {
+    // Driver override first (POST /appearance?dark=N — headless spec steer).
+    int ov = aether_ui_appearance_override_get();
+    if (ov >= 0) return ov;
     if (@available(macOS 10.14, *)) {
         NSAppearance* a = [NSApp effectiveAppearance];
         NSAppearanceName name = [a bestMatchFromAppearancesWithNames:@[
@@ -2619,6 +2622,39 @@ int aether_ui_dark_mode_check(void) {
         return [name isEqualToString:NSAppearanceNameDarkAqua] ? 1 : 0;
     }
     return 0;
+}
+
+int aether_ui_styled_opacity_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_opacity");
+    if (!n || [n intValue] <= 0) return -1;
+    return [n intValue] - 1;
+}
+
+// AeCS appearance change (macOS). OS path: the distributed
+// AppleInterfaceThemeChangedNotification; driver path: fire marshals to the
+// main thread (the callback re-themes AppKit views).
+void aether_ui_watch_appearance_impl(void) {
+    static int watched = 0;
+    if (watched) return;
+    watched = 1;
+    [[NSDistributedNotificationCenter defaultCenter]
+        addObserverForName:@"AppleInterfaceThemeChangedNotification"
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification* note) {
+                    (void)note;
+                    aether_ui_appearance_invoke(aether_ui_dark_mode_check());
+                }];
+}
+
+int aether_ui_fire_appearance(int dark) {
+    aether_ui_appearance_override_set(dark ? 1 : 0);
+    void (^fire)(void) = ^{ aether_ui_appearance_invoke(dark ? 1 : 0); };
+    if ([NSThread isMainThread]) fire();
+    else dispatch_sync(dispatch_get_main_queue(), fire);
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -3200,7 +3236,12 @@ void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
     // nothing to act on, and every fade snaps.
     const char* o = strstr(property_css, "opacity:");
     if (o) {
-        aether_ui_set_opacity(handle, atof(o + 8));
+        double ov = atof(o + 8);
+        // Stash for driver readback (AeCS st_opacity proof; +1 encoding).
+        NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+        if (v) objc_setAssociatedObject(v, "aeui_styled_opacity",
+                   @((int)(ov * 100.0) + 1), OBJC_ASSOCIATION_RETAIN);
+        aether_ui_set_opacity(handle, ov);
         return;
     }
     // Any other CSS (box-shadow, colours…): no-op. AppKit styles through the

@@ -295,6 +295,8 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         const char* wt  = aether_ui_styled_weight_impl(handle);
         if (fam[0]) n += snprintf(buf + n, bufsize - n, ",\"fontFamily\":\"%s\"", fam);
         if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
+        int op = aether_ui_styled_opacity_impl(handle);
+        if (op >= 0) n += snprintf(buf + n, bufsize - n, ",\"opacity\":%.2f", op / 100.0);
     }
 
     // Accessibility: the widget's effective role + accessible name (auto when
@@ -549,6 +551,14 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         int id = extract_id_from_path(path, "/widget/");
         const char* s = extract_query_param(path, "src");
         int fired = aether_ui_fire_row_drop(id, s ? atoi(s) : -1);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
+        send_http(client_fd, 200, "OK", "application/json", body);
+    } else if (method == 1 && strncmp(path, "/appearance", 11) == 0) {
+        // POST /appearance?dark=N — steer the OS-appearance override
+        // headlessly (AeCS styles_for_mode re-theme; see the GTK4 twin).
+        const char* v = extract_query_param(path, "dark");
+        int fired = aether_ui_fire_appearance(v ? atoi(v) : 0);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
         send_http(client_fd, 200, "OK", "application/json", body);

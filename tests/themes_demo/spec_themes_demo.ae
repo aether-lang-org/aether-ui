@@ -102,6 +102,66 @@ main() {
                 "the id rule re-resolved to the green theme's value")
         }
 
+        aeocha.it("use_styles: widgets built later arrive already themed") callback {
+            u = uidriver.widget_id_by_text("Use blue (live)")
+            uidriver.post_ok("/widget/${u}/click", "use blue as current sheet")
+            ok = uidriver.wait_body_contains("/widgets", "theme: blue-live", 20)
+            aeocha.assert_true(ok, "current sheet installed")
+            a = uidriver.widget_id_by_text("Add row")
+            uidriver.post_ok("/widget/${a}/click", "build NEW widgets")
+            ok2 = uidriver.wait_body_contains("/widgets", "Deanna Troi", 20)
+            aeocha.assert_true(ok2, "new row rendered")
+            // The new row's text was styled AT CONSTRUCTION — no apply call.
+            d = uidriver.widget_id_by_text("Deanna Troi — 004-5678901-23")
+            b = uidriver.get_body("/widget/${d}")
+            aeocha.assert_contains(b, "\"fg\":\"#5c458a\"",
+                "construction-time styling from the current sheet")
+        }
+
+        aeocha.it("st_opacity flows to the backend (readback)") callback {
+            hword = uidriver.widget_id_by_text("Themes cascade: id, class.kind, class, kind, container, root.")
+            aeocha.assert_gt(hword, 0, "hint text found")
+            b = uidriver.get_body("/widget/${hword}")
+            aeocha.assert_contains(b, "\"opacity\":0.55",
+                "hint.text opacity applied for real")
+        }
+
+        aeocha.it("load_styles: a theme FILE parses and applies") callback {
+            f = uidriver.widget_id_by_text("File theme")
+            uidriver.post_ok("/widget/${f}/click", "load purple.aecs")
+            ok = uidriver.wait_body_contains("/widgets", "theme: purple", 20)
+            aeocha.assert_true(ok, "file theme parsed (not file-error)")
+            o = uidriver.widget_id_by_text("Owner:")
+            b = uidriver.get_body("/widget/${o}")
+            aeocha.assert_contains(b, "\"fg\":\"#bf608a\"",
+                "the file's element rule applied")
+            h = uidriver.widget_id_by_text("Accounts")
+            b2 = uidriver.get_body("/widget/${h}")
+            aeocha.assert_contains(b2, "\"fg\":\"#a6386e\"",
+                "the file's class rule applied")
+            s = uidriver.widget_id_by_text("theme: purple")
+            b3 = uidriver.get_body("/widget/${s}")
+            aeocha.assert_contains(b3, "\"fg\":\"#8a2e5c\"",
+                "the file's #id rule applied")
+        }
+
+        aeocha.it("use_styles_pair re-themes on an appearance flip") callback {
+            p = uidriver.widget_id_by_text("Pair (auto)")
+            uidriver.post_ok("/widget/${p}/click", "install the pair")
+            ok = uidriver.wait_body_contains("/widgets", "theme: pair", 20)
+            aeocha.assert_true(ok, "pair installed")
+            // Flip to dark via the driver: the registered callback must
+            // re-theme to the GREEN sheet (heading = green header color).
+            uidriver.post_ok("/appearance?dark=1", "OS goes dark")
+            h = uidriver.widget_id_by_text("Accounts")
+            ok2 = uidriver.wait_body_contains("/widget/${h}", "\"fg\":\"#a3bf30\"", 20)
+            aeocha.assert_true(ok2, "dark flip re-themed to the green sheet")
+            // And back to light -> blue sheet.
+            uidriver.post_ok("/appearance?dark=0", "OS back to light")
+            ok3 = uidriver.wait_body_contains("/widget/${h}", "\"fg\":\"#6030bf\"", 20)
+            aeocha.assert_true(ok3, "light flip re-themed to the blue sheet")
+        }
+
         aeocha.it("styles_for_mode picks a sheet for the OS appearance") callback {
             a = uidriver.widget_id_by_text("Auto (mode)")
             uidriver.post_ok("/widget/${a}/click", "apply mode-picked theme")

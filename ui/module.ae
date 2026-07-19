@@ -39,7 +39,10 @@ exports (
     style_bg_gradient, style_corner_radius, style_opacity,
     style_enabled, style_tooltip,
     create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
-    st_radius, st_font_family, apply_styles, style_id, styles_for_mode,
+    st_radius, st_font_family, st_opacity, st_gradient, st_insets,
+    apply_styles, style_id, styles_for_mode,
+    use_styles, current_styles, use_styles_pair, on_appearance_change,
+    load_styles,
     style_font_weight, style_font_family,
     a11y_role, a11y_label, a11y_description,
     edge_insets, width, height, distribution, alignment,
@@ -89,6 +92,7 @@ import std.list     // each_update walks the items list
 import std.os (os_getenv)   // transition honours AETHER_UI_NO_ANIMATION
 import std.intarr   // listbox row-handle tracking
 import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
+import std.fs      // load_styles (AeCS theme files)
 
 extern malloc(size: int) -> ptr   // EachGroup allocation (house pattern, vg/module.ae:84)
 
@@ -241,6 +245,10 @@ extern aether_ui_widget_count_impl() -> int
 extern aether_ui_widget_kind_impl(handle: int) -> string
 extern aether_ui_widget_parent_impl(handle: int) -> int
 extern aether_ui_widget_classes_impl(handle: int) -> string
+extern aether_ui_current_sheet_set_impl(sheet: ptr)
+extern aether_ui_current_sheet_get_impl() -> ptr
+extern aether_ui_appearance_register_impl(boxed_closure: ptr)
+extern aether_ui_watch_appearance_impl()
 extern aether_ui_a11y_set_role_impl(handle: int, role: string)
 extern aether_ui_a11y_set_label_impl(handle: int, name: string)
 extern aether_ui_a11y_set_description_impl(handle: int, desc: string)
@@ -574,6 +582,7 @@ vstack(_ctx: ptr, spacing: int) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -582,6 +591,7 @@ hstack(_ctx: ptr, spacing: int) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -754,6 +764,7 @@ text(_ctx: ptr, label: string) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -763,6 +774,7 @@ text_wrapped(_ctx: ptr, label: string, wrap_px: int) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -795,6 +807,7 @@ btn(_ctx: ptr, label: string, on_press: fn) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -811,6 +824,7 @@ divider(_ctx: ptr) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -822,6 +836,7 @@ textfield(_ctx: ptr, placeholder: string, on_change: fn) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -852,6 +867,7 @@ toggle(_ctx: ptr, label: string, on_change: fn) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -871,6 +887,7 @@ slider(_ctx: ptr, min_val: float, max_val: float, initial: float, on_change: fn)
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -880,6 +897,7 @@ picker(_ctx: ptr, on_change: fn) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -893,6 +911,7 @@ textarea(_ctx: ptr, placeholder: string, on_change: fn) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -901,6 +920,7 @@ progressbar(_ctx: ptr, fraction: float) {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
+    _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
 
@@ -1301,7 +1321,10 @@ struct StyleRule {
     has_bold: int, bold: int,       // font weight (1=bold 0=normal; two-valued
                                     //   since v1.1 so re-themes can un-bold)
     has_radius: int, radius: float, // corner radius
-    has_family: int, family: string // font family (verbatim to the platform)
+    has_family: int, family: string,// font family (verbatim to the platform)
+    has_opacity: int, opacity: float,
+    has_grad: int, grad1: int, grad2: int,   // vertical bg gradient (packed hex)
+    has_insets: int, in_t: float, in_r: float, in_b: float, in_l: float
 }
 
 struct StyleSheet { rules: ptr }    // std.list of *StyleRule
@@ -1330,7 +1353,7 @@ _style_rule_of(sp: ptr, sel: string) -> ptr {
     found = _style_find(sp, sel)
     if found != null { return found }
     s = sp as *StyleSheet
-    r = malloc(128) as *StyleRule
+    r = malloc(224) as *StyleRule
     r.sel = sel
     r.has_color = 0
     r.has_bg = 0
@@ -1338,6 +1361,9 @@ _style_rule_of(sp: ptr, sel: string) -> ptr {
     r.has_bold = 0
     r.has_radius = 0
     r.has_family = 0
+    r.has_opacity = 0
+    r.has_grad = 0
+    r.has_insets = 0
     _ = list.add(s.rules, r as ptr)
     return r as ptr
 }
@@ -1372,6 +1398,27 @@ st_font_family(sp: ptr, sel: string, family: string) {
     r.has_family = 1
     r.family = family
 }
+st_opacity(sp: ptr, sel: string, val: float) {
+    r = _style_rule_of(sp, sel) as *StyleRule
+    r.has_opacity = 1
+    r.opacity = val
+}
+// Vertical background gradient, top hex1 → bottom hex2.
+st_gradient(sp: ptr, sel: string, hex1: int, hex2: int) {
+    r = _style_rule_of(sp, sel) as *StyleRule
+    r.has_grad = 1
+    r.grad1 = hex1
+    r.grad2 = hex2
+}
+st_insets(sp: ptr, sel: string, top: float, right: float,
+          bottom: float, left: float) {
+    r = _style_rule_of(sp, sel) as *StyleRule
+    r.has_insets = 1
+    r.in_t = top
+    r.in_r = right
+    r.in_b = bottom
+    r.in_l = left
+}
 st_radius(sp: ptr, sel: string, radius: float) {
     r = _style_rule_of(sp, sel) as *StyleRule
     r.has_radius = 1
@@ -1379,7 +1426,7 @@ st_radius(sp: ptr, sel: string, radius: float) {
 }
 
 // Property codes for the generic first-match scan.
-// 0=color 1=bg 2=font_size 3=weight 4=radius 5=family
+// 0=color 1=bg 2=font_size 3=weight 4=radius 5=family 6=opacity 7=grad 8=insets
 _rule_has(rp: ptr, prop: int) -> int {
     r = rp as *StyleRule
     if prop == 0 { return r.has_color }
@@ -1387,7 +1434,10 @@ _rule_has(rp: ptr, prop: int) -> int {
     if prop == 2 { return r.has_fs }
     if prop == 3 { return r.has_bold }
     if prop == 4 { return r.has_radius }
-    return r.has_family
+    if prop == 5 { return r.has_family }
+    if prop == 6 { return r.has_opacity }
+    if prop == 7 { return r.has_grad }
+    return r.has_insets
 }
 
 // A candidate selector defines `prop`? (empty selector never matches)
@@ -1518,6 +1568,37 @@ _style_apply_one(sp: ptr, h: int, kind: string) {
         r6 = rm as *StyleRule
         _ = style_font_family(h, r6.family)
     }
+    ro = _style_resolve(sp, 6, cls, kind, alias)
+    if ro != null {
+        r7 = ro as *StyleRule
+        _ = style_opacity(h, r7.opacity)
+    }
+    rg = _style_resolve(sp, 7, cls, kind, alias)
+    if rg != null {
+        r8 = rg as *StyleRule
+        g1 = r8.grad1
+        g2 = r8.grad2
+        _ = style_bg_gradient(h,
+            ((g1 / 65536) % 256) / 255.0, ((g1 / 256) % 256) / 255.0,
+            (g1 % 256) / 255.0,
+            ((g2 / 65536) % 256) / 255.0, ((g2 / 256) % 256) / 255.0,
+            (g2 % 256) / 255.0, 1)
+    }
+    ri = _style_resolve(sp, 8, cls, kind, alias)
+    if ri != null {
+        r9 = ri as *StyleRule
+        _ = edge_insets(h, r9.in_t, r9.in_r, r9.in_b, r9.in_l)
+    }
+}
+
+// Style a JUST-CREATED widget from the current sheet (use_styles). Element/
+// container/root rules land here; class and id rules land when
+// add_css_class/style_id run (see the re-apply hook there).
+_style_on_create(h: int) {
+    cur = aether_ui_current_sheet_get_impl()
+    if cur == null { return }
+    kind = aether_ui_widget_kind_impl(h)
+    if string.length(kind) > 0 { _style_apply_one(cur, h, kind) }
 }
 
 // style_id(w, "submit") — name a widget for "#submit" sheet rules (highest
@@ -1566,6 +1647,122 @@ apply_styles(target: int, sp: ptr) {
         }
         h = h + 1
     }
+}
+
+// use_styles(s) — apply the sheet now AND make it the CURRENT sheet, so
+// widgets built afterwards arrive already styled (constructors consult it;
+// class/id rules land when add_css_class/style_id run). The swiby
+// use_styles, but automatic for new subtrees.
+use_styles(sp: ptr) {
+    aether_ui_current_sheet_set_impl(sp)
+    apply_styles(0, sp)
+}
+
+current_styles() -> ptr {
+    return aether_ui_current_sheet_get_impl()
+}
+
+// on_appearance_change(cb) — cb(|dark: int|) fires when the OS flips
+// light/dark (GTK settings notify / win32 WM_SETTINGCHANGE / macOS theme
+// notification), or when the driver POSTs /appearance?dark=N. ONE slot:
+// the latest registration wins (use_styles_pair claims it).
+on_appearance_change(cb: fn) {
+    aether_ui_appearance_register_impl(box_closure(cb))
+    aether_ui_watch_appearance_impl()
+}
+
+
+// use_styles_pair(light, dark) — the whole dark/light story in one call:
+// applies the sheet for the CURRENT mode (as the current sheet) and
+// re-themes automatically on every OS mode flip.
+use_styles_pair(light: ptr, dark: ptr) {
+    use_styles(styles_for_mode(light, dark))
+    on_appearance_change(|isdark: int| {
+        if isdark == 1 { use_styles(dark) }
+        if isdark == 0 { use_styles(light) }
+    })
+}
+
+// ── load_styles: themes as FILES (swiby's load_styles) ──────────────
+// A minimal line format, one declaration per line:
+//   // comment
+//   text.color       = #5C458A
+//   container.bg     = #D6CFE6
+//   root.size        = 11
+//   header.text.weight = bold        (selector may itself contain dots —
+//   #status.color    = #224488        the LAST dot splits off the property)
+//   root.family      = monospace
+//   hint.text.opacity = 0.6
+// Props: color bg size weight radius family opacity. Unknown lines are
+// skipped (forward compatibility). Returns a sheet, or null on read error.
+_hex6(s: string) -> int {
+    hx = s
+    if string.string_index_of(hx, "#") == 0 {
+        hx = string.string_substring(hx, 1, string.length(hx))
+    }
+    v, _e = string.to_int_radix(hx, 16)
+    return v
+}
+
+_style_line(sp: ptr, line: string) {
+    l = string.trim(line)
+    if string.length(l) == 0 { return }
+    if string.string_index_of(l, "//") == 0 { return }
+    eq = string.string_index_of(l, "=")
+    if eq < 1 { return }
+    lhs = string.trim(string.string_substring(l, 0, eq))
+    rhs = string.trim(string.string_substring(l, eq + 1, string.length(l)))
+    // The LAST dot splits selector from property (selectors carry dots).
+    dot = 0 - 1
+    i = 0
+    n = string.length(lhs)
+    while i < n {
+        c = string.string_substring(lhs, i, i + 1)
+        if string.equals(c, ".") == 1 { dot = i }
+        i = i + 1
+    }
+    if dot < 1 { return }
+    sel = string.string_substring(lhs, 0, dot)
+    prop = string.string_substring(lhs, dot + 1, n)
+    if string.equals(prop, "color") == 1 { st_color(sp, sel, _hex6(rhs)) }
+    if string.equals(prop, "bg") == 1 { st_bg(sp, sel, _hex6(rhs)) }
+    if string.equals(prop, "size") == 1 {
+        v, _e1 = string.to_float(rhs)
+        st_font_size(sp, sel, v)
+    }
+    if string.equals(prop, "weight") == 1 {
+        b = 0
+        if string.equals(rhs, "bold") == 1 { b = 1 }
+        st_weight(sp, sel, b)
+    }
+    if string.equals(prop, "radius") == 1 {
+        v2, _e2 = string.to_float(rhs)
+        st_radius(sp, sel, v2)
+    }
+    if string.equals(prop, "family") == 1 { st_font_family(sp, sel, rhs) }
+    if string.equals(prop, "opacity") == 1 {
+        v3, _e3 = string.to_float(rhs)
+        st_opacity(sp, sel, v3)
+    }
+}
+
+load_styles(path: string) -> ptr {
+    content, err = fs.read(path)
+    if string.length(err) > 0 { return null }
+    sp = create_styles()
+    rest = content
+    guard = 0
+    while guard < 4096 {
+        nl = string.string_index_of(rest, "\n")
+        if nl < 0 {
+            _style_line(sp, rest)
+            return sp
+        }
+        _style_line(sp, string.string_substring(rest, 0, nl))
+        rest = string.string_substring(rest, nl + 1, string.length(rest))
+        guard = guard + 1
+    }
+    return sp
 }
 
 // ── Accessibility (semantics layer) ──────────────────────────────────
@@ -2213,6 +2410,9 @@ canvas_read_pixel(canvas_id: int, px: int, py: int, w: int, h: int) -> int {
 
 add_css_class(handle: int, cls: string) {
     aether_ui_widget_add_css_class_impl(handle, cls)
+    // Class (and #id) rules from the CURRENT sheet land the moment the class
+    // is attached — construction-time styling only saw element/root rules.
+    _style_on_create(handle)
 }
 remove_css_class(handle: int, cls: string) {
     aether_ui_widget_remove_css_class_impl(handle, cls)

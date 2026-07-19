@@ -166,6 +166,20 @@ int aether_ui_styled_fg_impl(int handle);   // packed 0xRRGGBB or -1
 void aether_ui_set_font_family(int handle, const char* family);
 const char* aether_ui_styled_font_family_impl(int handle);   // "" unset
 const char* aether_ui_styled_weight_impl(int handle);        // ""/"bold"/"normal"
+int aether_ui_styled_opacity_impl(int handle);               // 0..100, -1 unset
+
+// AeCS v1.2 — current sheet (use_styles: constructors consult it) +
+// appearance-change registry (styles_for_mode auto re-theme). The holders
+// live in aether_ui_system_extras.c (linked into every build); watch/fire
+// are per-backend (OS event hookup / driver fire with thread marshalling).
+void aether_ui_current_sheet_set_impl(void* sheet);
+void* aether_ui_current_sheet_get_impl(void);
+void aether_ui_appearance_register_impl(void* boxed_closure);
+int aether_ui_appearance_override_get(void);
+void aether_ui_appearance_override_set(int dark);
+int aether_ui_appearance_invoke(int dark);
+void aether_ui_watch_appearance_impl(void);   // idempotent OS-event hookup
+int aether_ui_fire_appearance(int dark);      // driver: override + invoke
 
 void aether_ui_set_bg_color(int handle, double r, double g, double b, double a);
 void aether_ui_set_bg_gradient(int handle,

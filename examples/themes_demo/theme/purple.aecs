@@ -1,0 +1,10 @@
+// AeCS theme file — values from swiby demo/banking/theme/purple_theme.rb
+// (Jean Lazarou & the Swiby committers, BSD). One declaration per line;
+// the LAST dot splits selector.property.
+text.color        = #BF608A
+button.color      = #BF608A
+container.bg      = #FFE6F1
+header.text.weight = bold
+header.text.color = #A6386E
+#status.color     = #8A2E5C
+root.family       = serif
