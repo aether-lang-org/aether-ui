@@ -1081,6 +1081,15 @@ static void stack_do_layout(HWND stack_hwnd) {
     int spacing_total = sl->spacing * (nchildren - 1);
     int primary_avail = (orientation == 1) ? avail_h : avail_w;
     int flex = primary_avail - total_primary - spacing_total;
+    if (getenv("AEUI_LAYOUT_DEBUG")) {
+        fprintf(stderr, "[layout] stack=%d kind=%d orient=%d avail=%dx%d nch=%d flex=%d tw=%d\n",
+                h, (int)sw->kind, orientation, avail_w, avail_h, nchildren, flex, total_weight);
+        for (int i = 0; i < nchildren; i++)
+            fprintf(stderr, "  child[%d] h=%d kind=%d w=%d meas=%dx%d min=%d\n",
+                    i, handle_for_hwnd(children[i]), mc[i].kind, mc[i].weight,
+                    mc[i].measured_w, mc[i].measured_h, mc[i].min_primary);
+        fflush(stderr);
+    }
     if (flex < 0) flex = 0;
     // Spacers only take flex when there are no weighted children (weighted
     // children are the explicit flex mechanism; spacers are the implicit one).
