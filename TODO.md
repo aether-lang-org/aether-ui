@@ -1,0 +1,36 @@
+# aether-ui — open follow-ons
+
+Tracked items not yet built. Backends are at full spec-matrix parity
+(GTK4 188/0, win32 188/0, macOS per its sibling cadence); these are the
+next layers. Fuller context: the toolkit-inspired backlog in roadmap.md.
+
+## Golden-image tests (Flutter-style visual regression)
+
+Screenshot-based regression over the existing driver `/screenshot` route:
+per-suite golden PNGs, checked in per platform (`tests/goldens/gtk4/…`,
+`tests/goldens/win32/…`), compared with an MAE tolerance gate — the
+librsvg-parity philosophy (vg/test/svg-compare-aevg.py) applied to
+widgets. Motivation: the win32 h:0 era — every widget rendered 0-tall for
+weeks while click-driven specs stayed green; only a pixel gate catches
+silent visual breakage. Sketch:
+- `tests/golden_check.sh <suite>`: launch app (fixed size via
+  /window/resize), GET /screenshot, compare vs golden (MAE < ~3 good,
+  regenerate with `--bless`).
+- Start with a handful of stable suites (calculator, themes_demo skins,
+  splitview); grow as fonts/AA differences per box are understood (may
+  need per-host goldens or a tolerance bump — be honest about flake).
+
+## Widget Inspector (Flutter DevTools-style)
+
+A live widget-tree browser over the AetherUIDriver — the protocol already
+exists; the inspector is just a client (and can itself be an aether-ui
+app: dogfood). Connect to any running app's port and:
+- browse the tree (GET /widgets: type/text/geometry/classes/fg/bg/
+  fontFamily/role/a11y_name, windows, overlays);
+- click a node → flash the live widget (style_bg_color pulse or a
+  temporary class via the existing routes);
+- inspect panel: raw widget JSON + a11y (GET /widget/{id}/a11y) +
+  live re-poll;
+- bonus: /window/pick under a crosshair mode ("what widget is here?").
+No new backend surface required for v1; anything missing (e.g. a
+subscribe/poll diff) becomes a driver follow-up.
