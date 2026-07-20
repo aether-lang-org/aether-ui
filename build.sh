@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build an Aether UI application.
 # Usage: ./build.sh <source.ae> [output_binary]
 
