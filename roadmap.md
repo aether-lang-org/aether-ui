@@ -96,13 +96,11 @@ picker (combobox + driver set_value + default selection, `962ed0e`),
 toast/modal-scrim/tooltip, append-only `/overlays`, Escape-dismiss,
 deep `/window/pick`; toast lifecycle proven green), and now everything
 the shared server gained above.
-Still stubbed: **splitview** (plain stack, no divider — `split_position`
-honestly answers -1), **shortcuts** (`/window/key` answers
-`fired:false` honestly), **text metrics** (GDI), **weight / on_layout /
-wrap**.
+*(Historical, ALL CLOSED 2026-07-20 — see FINAL BASELINE below.)*
+~~Still stubbed: splitview, shortcuts edge-cases, text metrics (GDI),
+weight / on_layout / wrap.~~ All real now.
 
-**Two cross-cutting win32 bugs now block several suites (NOT feature
-stubs — fix these next, they unlock overlay + vg_tooltip + gp):**
+**~~Two cross-cutting win32 bugs~~ (both fixed 2026-07-20):**
 - **widget geometry reports `h:0`.** Every widget's driver rect has
   height 0 (the calculator shows it too — it's green only because its
   specs don't read geometry). This makes `/window/pick` at a widget's
