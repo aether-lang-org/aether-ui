@@ -422,12 +422,18 @@ term in one result row — cosmetic, doesn't affect the spec.
 
 Surveyed after win32 parity. Tier 1 (fits current architecture):
 
-- **QML States on AeCS** — named states per widget/subtree, each an AeCS
-  sheet fragment; `set_state` applies through the transition layer so
-  declared properties animate. *(IN PROGRESS)*
-- **Undo/Redo (Swing UndoManager)** — undoable-edit stack: explicit
-  `undoable(label, do, undo)`, Ctrl+Z/Ctrl+Shift+Z, driver /undo /redo
-  /undo_state. Text-field auto-enrolment is the follow-up. *(IN PROGRESS)*
+- ~~**QML States on AeCS**~~ **DONE 2026-07-20** — `ui_states/add_state/
+  set_state/current_state`: named states per widget/subtree, each an AeCS
+  sheet fragment applied via apply_styles(target); declared ui.transition
+  properties animate between states; current state driver-visible as an
+  `st-<name>` marker class. `states_demo` 3/3 GTK4 AND win32.
+- ~~**Undo/Redo (Swing UndoManager)**~~ **DONE 2026-07-20** —
+  `undoable(label, do, undo)` + undo/redo/depths/label +
+  `enable_undo_shortcuts()` (Ctrl+Z/Ctrl+Shift+Z); shared edit stack in
+  system_extras; redo-tail truncation on new edits; driver POST /undo,
+  POST /redo, GET /undo_state on both servers (per-platform marshalled
+  fires). `undo_demo` 5/5 GTK4 AND win32. Follow-up: text-field
+  auto-enrolment (coalesced edits).
 - **Widget Inspector (Flutter DevTools)** — a live tree browser over the
   existing AetherUIDriver; itself an aether-ui app. The protocol already
   exists; the inspector is a client.
