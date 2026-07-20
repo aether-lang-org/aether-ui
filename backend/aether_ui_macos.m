@@ -5539,29 +5539,105 @@ void aether_ui_tray_seal_impl(int tray_id) {
 }
 
 // ---------------------------------------------------------------------------
-// Desktop notifications (Group 7b) — registry-only stub.
+// Desktop notifications (Group 7b) — NSUserNotification.
 //
-// Real implementation should use UNUserNotificationCenter (modern;
-// requires a real .app bundle and UNUserNotificationCenter
-// requestAuthorizationWithOptions on first use) or NSUserNotification
-// (deprecated since 10.14, still works in un-bundled CLI tools).
-// On user click, the delegate's userNotificationCenter:didReceive:
-// handler should call aether_ui_notif_emit_click(id).
+// NSUserNotification is deprecated since 10.14, but it is the only
+// notification API that works from an un-bundled CLI tool:
+// UNUserNotificationCenter requires a real signed .app bundle, which the
+// aether-ui apps aren't. It is exactly what the win32/toast + gtk4/libnotify
+// paths are the peers of. The whole section is wrapped in a deprecation
+// pragma so the -Werror build stays green.
+//
+// The registry (aether_ui_notify_register_full) owns the per-notification
+// state and the click closure; we register first (mirroring the gtk4 path:
+// register -> show), then deliver an NSUserNotification carrying its id in
+// userInfo. On activation the delegate resolves that id and calls
+// aether_ui_notif_emit_click, which invokes the stored closure on the main
+// thread (delegate callbacks are delivered on the main thread).
 // ---------------------------------------------------------------------------
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+@interface AeUINotifDelegate : NSObject <NSUserNotificationCenterDelegate>
+@end
+@implementation AeUINotifDelegate
+// AppKit suppresses a notification when our process is frontmost; force it
+// to show so behaviour matches libnotify/toast (which always surface).
+- (BOOL)userNotificationCenter:(NSUserNotificationCenter*)center
+     shouldPresentNotification:(NSUserNotification*)notification {
+    (void)center; (void)notification;
+    return YES;
+}
+- (void)userNotificationCenter:(NSUserNotificationCenter*)center
+       didActivateNotification:(NSUserNotification*)notification {
+    (void)center;
+    NSNumber* aeid = [notification.userInfo objectForKey:@"aeid"];
+    if (aeid) aether_ui_notif_emit_click((int)[aeid intValue]);
+}
+@end
+
+// NSUserNotificationCenter.delegate is a weak reference, so the delegate must
+// be owned elsewhere or ARC frees it immediately. This static strong ref
+// keeps the single shared delegate alive for the process lifetime.
+static AeUINotifDelegate* g_ae_notif_delegate = nil;
+
+// Deliver one NSUserNotification for a registry id, on the main thread
+// (NSUserNotificationCenter is main-thread-only). Convert every C string to
+// an NSString HERE, on the calling thread, before the async hop: the caller's
+// `const char*`s may be freed the moment we return, so the block must capture
+// ARC-retained NSStrings (which copy the bytes), never the raw pointers.
+// Fire-and-forget: async is fine because the id was already assigned
+// synchronously by the caller.
+static void aeui_deliver_notification(int notif_id, const char* title,
+                                      const char* body, const char* icon_path,
+                                      const char* tag) {
+    NSString* ns_title = title ? [NSString stringWithUTF8String:title] : @"";
+    NSString* ns_body  = body  ? [NSString stringWithUTF8String:body]  : @"";
+    NSString* ns_icon  = (icon_path && *icon_path)
+                             ? [NSString stringWithUTF8String:icon_path] : nil;
+    NSString* ns_tag   = (tag && *tag)
+                             ? [NSString stringWithUTF8String:tag] : nil;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSUserNotificationCenter* center =
+            [NSUserNotificationCenter defaultUserNotificationCenter];
+        if (!g_ae_notif_delegate) {
+            g_ae_notif_delegate = [[AeUINotifDelegate alloc] init];
+            center.delegate = g_ae_notif_delegate;
+        }
+        NSUserNotification* un = [[NSUserNotification alloc] init];
+        un.title = ns_title;
+        un.informativeText = ns_body;
+        if (ns_icon) {
+            NSImage* img = [[NSImage alloc] initWithContentsOfFile:ns_icon];
+            if (img) un.contentImage = img;
+        }
+        // A same-tag notification replaces the prior one via the identifier,
+        // mirroring the registry's tag-based slot reuse.
+        if (ns_tag) un.identifier = ns_tag;
+        un.userInfo = @{ @"aeid": [NSNumber numberWithInt:notif_id] };
+        [center deliverNotification:un];
+    });
+}
+
 int aether_ui_notify_impl(const char* title, const char* body) {
-    return aether_ui_notify_register(title, body);
+    int id = aether_ui_notify_register(title, body);
+    if (id > 0) aeui_deliver_notification(id, title, body, NULL, NULL);
+    return id;
 }
 int aether_ui_notify_full_impl(const char* title, const char* body,
                                 const char* icon_path, const char* tag,
                                 void* boxed_click) {
-    return aether_ui_notify_register_full(title, body, icon_path, tag, boxed_click);
+    int id = aether_ui_notify_register_full(title, body, icon_path, tag, boxed_click);
+    if (id > 0) aeui_deliver_notification(id, title, body, icon_path, tag);
+    return id;
 }
 int aether_ui_notify_request_permission_impl(void) {
-    // Real macOS: UNUserNotificationCenter requestAuthorization. Until
-    // then return granted so app code doesn't deadlock waiting for a
-    // permission decision that never arrives.
+    // NSUserNotification needs no runtime permission grant (unlike
+    // UNUserNotificationCenter); report granted so app code doesn't block.
     return aether_ui_notify_request_permission();
 }
+
+#pragma clang diagnostic pop
 
 // app_run_headless on macOS: park until killed. A future native
 // NSStatusItem implementation should call [NSApp run] here when
