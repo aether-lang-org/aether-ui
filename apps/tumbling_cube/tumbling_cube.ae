@@ -12,10 +12,12 @@
 // perspective-projected (f = SC/(DIST-z)). The faces are TRANSLUCENT
 // (vg.opacity), so instead of culling back faces we painter-sort all six
 // far→near by rotated face-normal depth and draw the lot — the far sides
-// (and the writing, mirrored) read through the glass. The letters are
-// stroke-font line segments in face-local coords on the z=+1 plane,
-// projected point-by-point — so the writing foreshortens and tumbles WITH
-// the face — no affine-text special case needed in the backend.
+// (and the writing, mirrored) read through the glass. The writing is a real
+// typeface extracted IN PURE AETHER: vg.font parses the vendored TrueType
+// file (fonts/DejaVuSans-Bold.ttf) at startup, and the word's flattened
+// glyph outlines are projected point-by-point on the z=+1 plane — so the
+// writing foreshortens and tumbles WITH the face; no platform text API, no
+// offline generator, no backend special case.
 //
 // Run: DISPLAY=:0 ./target/build/apps/tumbling_cube/bin/tumbling_cube
 //   Drag to tumble. Release with speed to throw.
@@ -30,7 +32,7 @@ import std.math
 import std.string
 import std.os
 import std.os (os_getenv)
-import word_outline (word_path)
+import vg.font
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
@@ -56,9 +58,10 @@ struct Spin {
     drags: int         // completed drags (drives the status label + spec)
     lbl: int
     frozen: int        // AEVG_FREEZE=1 — hold the pose (screenshots / goldens)
+    word: ptr          // the writing's Outl (vg.font), null if no font found
 }
 mk_spin() -> *Spin {
-    s = malloc(96) as *Spin
+    s = malloc(112) as *Spin
     s.ax = 0.0 - 0.42
     s.ay = 0.62
     s.vx = 0.35
@@ -68,6 +71,7 @@ mk_spin() -> *Spin {
     s.drags = 0
     s.lbl = 0
     s.frozen = 0
+    s.word = null
     if os_getenv("AEVG_FREEZE") != null { s.frozen = 1 }
     return s
 }
@@ -175,7 +179,7 @@ draw_one_face(rn: ptr, st: *Spin, f: int) {
     // The writing rides its face: drawn right after it in depth order, so
     // nearer translucent faces glaze over it — correct through-glass look
     // (mirrored when the lettered face is at the back).
-    if f == 0 { draw_writing(rn, st.ax, st.ay) }
+    if f == 0 { draw_writing(rn, st.ax, st.ay, st.word) }
 }
 
 draw_scene(rn: ptr, st: *Spin) {
@@ -202,13 +206,71 @@ draw_scene(rn: ptr, st: *Spin) {
     }
 }
 
-// ─── The writing: "AeVG" in a real typeface (DejaVu Sans Bold) ───────────────
-// word_outline.ae is GENERATED (gen_word_outline.py): the word's glyph
-// outlines flattened to face-local points; word_path projects every point
-// through the same rotate+perspective pipeline as the cube and returns one
-// compound SVG path — nonzero fill renders the counters (A/e holes).
-draw_writing(rn: ptr, ax: float, ay: float) {
-    p = vg.path(rn, word_path(ax, ay))
+// ─── The writing: "AeVG" in a real typeface, extracted in pure Aether ────────
+// vg.font parses the vendored TrueType file at startup and hands back the
+// word's glyph outlines flattened + normalized to face-local coords
+// ([-1,1]², y down). Per frame every outline point rides the same
+// rotate+perspective pipeline as the cube into one compound SVG path —
+// nonzero fill renders the counters (A/e holes).
+
+// The vendored font, with an env override and system fallbacks (the app is
+// normally run from the repo root, where fonts/ sits).
+load_word_font() -> ptr {
+    envp = os_getenv("AEVG_FONT")
+    if envp != null {
+        f = font.font_load(envp)
+        if font.font_ok(f) == 1 { return f }
+    }
+    f = font.font_load("fonts/DejaVuSans-Bold.ttf")
+    if font.font_ok(f) == 1 { return f }
+    f = font.font_load("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+    if font.font_ok(f) == 1 { return f }
+    f = font.font_load("/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf")
+    return f
+}
+
+// One-decimal float → string ("123.4") for path coords.
+f1(v: float) -> string {
+    n = lrint(v * 10.0) as int
+    whole = n / 10
+    frac = n % 10
+    if frac < 0 { frac = 0 - frac }
+    if n < 0 && whole == 0 {
+        return string.concat("-0.", string.from_int(frac))
+    }
+    return string.concat(string.concat(string.from_int(whole), "."),
+                         string.from_int(frac))
+}
+
+// "<cmd> x y" for face-local (u, v) projected at the cube's orientation.
+wseg(cmd: string, u: float, v: float, ax: float, ay: float) -> string {
+    sx, sy = proj(u, v, 1.0, ax, ay)
+    a = string.concat(cmd, " ")
+    a = string.concat(a, f1(sx))
+    a = string.concat(a, " ")
+    return string.concat(a, f1(sy))
+}
+
+draw_writing(rn: ptr, ax: float, ay: float, ow: ptr) {
+    if ow == null { return }
+    if font.outl_ok(ow) == 0 { return }
+    s = ""
+    start = 0
+    ci = 0
+    while ci < font.outl_nctrs(ow) {
+        last = font.outl_ctr_end(ow, ci)
+        j = start
+        while j <= last {
+            cmd = " L"
+            if j == start { cmd = "M" }
+            s = string.concat(s, wseg(cmd, font.outl_px(ow, j), font.outl_py(ow, j), ax, ay))
+            j = j + 1
+        }
+        s = string.concat(s, " Z ")
+        start = last + 1
+        ci = ci + 1
+    }
+    p = vg.path(rn, s)
     vg.fill(p, "#f2f5f8")
 }
 
@@ -287,10 +349,21 @@ refresh_label(st: *Spin) {
 // ─── App ─────────────────────────────────────────────────────────────────────
 main() {
     st = mk_spin()
+    wf = load_word_font()
+    type_desc = "type: unavailable"
+    if font.font_ok(wf) == 1 {
+        st.word = font.font_text_outlines_norm(wf, "AeVG", 4, 1.76)
+        nctrs = font.outl_nctrs(st.word)
+        type_desc = "type: ${nctrs} contours"
+    }
 
     window("AeVG — tumbling cube", 470, 560) {
         vstack(6) {
             st.lbl = text("Drags: 0")
+            // Bare text(var) doesn't codegen in a builder block (the same
+            // quirk as `_ =` discards) — bind the handle, then set the text.
+            tlbl = text("type: pending")
+            aether_ui_text_set_string(tlbl, type_desc)
 
             vg(view_box(0, 0, 420, 420), 440, 440) {
                 anchor = rect(0, 0, 0, 0)

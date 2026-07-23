@@ -20,6 +20,9 @@ main() {
             aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
             aeocha.assert_contains(body, "Drags: 0", "no drags yet")
             aeocha.assert_contains(body, "Drag the cube", "hint present")
+            // The writing: vg.font parsed the vendored TrueType file and
+            // extracted "AeVG" as 6 outline contours (A:2, e:2, V:1, G:1).
+            aeocha.assert_contains(body, "type: 6 contours", "typeface outlines loaded")
         }
 
         aeocha.it("a press→drag→release tumbles the cube and counts the drag") callback {

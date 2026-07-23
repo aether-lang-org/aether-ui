@@ -1,0 +1,125 @@
+// vg/test/test_font.ae — unit test for vg/font.ae (pure-Aether TrueType
+// outline extraction), against the vendored fonts/DejaVuSans-Bold.ttf.
+//
+// Headless, pure Aether. Run from the repo root (the font path is relative):
+//   aetherc --lib . vg/test/test_font.ae /tmp/t.c && gcc /tmp/t.c \
+//     vg/test/text_metrics_stub.c $(ae cflags) -o /tmp/t && /tmp/t
+
+import vg.font
+import std.math
+
+extern exit(code: int)
+
+assert_eq(label: string, got: int, want: int) {
+    if got == want {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+assert_gt(label: string, got: int, floor: int) {
+    if got > floor {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got}, want > ${floor}")
+        exit(1)
+    }
+}
+assert_near(label: string, got: float, want: float, eps: float) {
+    if math.abs_float(got - want) < eps {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+main() {
+    println("test_font: load")
+    f = font.font_load("fonts/DejaVuSans-Bold.ttf")
+    assert_eq("font loads", font.font_ok(f), 1)
+    assert_eq("units per em", font.font_upem(f), 2048)
+    assert_gt("has glyphs", font.font_nglyphs(f), 1000)
+
+    println("test_font: cmap")
+    gid_a = font.font_glyph_index(f, 65)      // 'A'
+    gid_e = font.font_glyph_index(f, 101)     // 'e'
+    assert_gt("glyph id for A", gid_a, 0)
+    assert_gt("glyph id for e", gid_e, 0)
+    if gid_a == gid_e {
+        println("  FAIL: A and e map to the same glyph")
+        exit(1)
+    }
+    println("  PASS: A and e distinct")
+    assert_eq("unmapped codepoint -> 0 (.notdef)", font.font_glyph_index(f, 64976), 0)
+
+    println("test_font: metrics")
+    assert_gt("advance of A", font.font_glyph_advance(f, gid_a), 500)
+
+    println("test_font: simple glyph outlines")
+    oa = font.font_glyph_outlines(f, gid_a, 4)
+    assert_eq("outline ok", font.outl_ok(oa), 1)
+    assert_eq("A has 2 contours (outer + counter)", font.outl_nctrs(oa), 2)
+    assert_gt("A flattened points", font.outl_npts(oa), 10)
+    font.outl_free(oa)
+
+    // Space: an advance but no outline.
+    gid_sp = font.font_glyph_index(f, 32)
+    osp = font.font_glyph_outlines(f, gid_sp, 4)
+    assert_eq("space has no contours", font.outl_nctrs(osp), 0)
+    assert_gt("space still advances", font.font_glyph_advance(f, gid_sp), 0)
+    font.outl_free(osp)
+
+    println("test_font: composite glyph (é = e + acute)")
+    gid_ea = font.font_glyph_index(f, 233)    // U+00E9
+    assert_gt("glyph id for e-acute", gid_ea, 0)
+    oea = font.font_glyph_outlines(f, gid_ea, 4)
+    assert_eq("e-acute contours (2 of e + 1 accent)", font.outl_nctrs(oea), 3)
+    font.outl_free(oea)
+
+    println("test_font: text run, normalized")
+    ow = font.font_text_outlines_norm(f, "AeVG", 4, 1.76)
+    assert_eq("word ok", font.outl_ok(ow), 1)
+    // A: outer+counter, e: bowl+counter, V: 1, G: 1.
+    assert_eq("AeVG contour count", font.outl_nctrs(ow), 6)
+    assert_gt("AeVG flattened points", font.outl_npts(ow), 100)
+    // Normalized: bbox exactly target_w wide, centred on the origin.
+    n = font.outl_npts(ow)
+    minx = font.outl_px(ow, 0)
+    maxx = minx
+    miny = font.outl_py(ow, 0)
+    maxy = miny
+    i = 1
+    while i < n {
+        x = font.outl_px(ow, i)
+        y = font.outl_py(ow, i)
+        if x < minx { minx = x }
+        if x > maxx { maxx = x }
+        if y < miny { miny = y }
+        if y > maxy { maxy = y }
+        i = i + 1
+    }
+    assert_near("normalized width", maxx - minx, 1.76, 0.001)
+    assert_near("centred x", minx + maxx, 0.0, 0.001)
+    assert_near("centred y", miny + maxy, 0.0, 0.001)
+    // Contour ends are strictly increasing and the last covers all points.
+    ok_ends = 1
+    prev = 0 - 1
+    ci = 0
+    while ci < font.outl_nctrs(ow) {
+        e = font.outl_ctr_end(ow, ci)
+        if e <= prev { ok_ends = 0 }
+        prev = e
+        ci = ci + 1
+    }
+    assert_eq("contour ends strictly increasing", ok_ends, 1)
+    assert_eq("last contour end is last point", prev, n - 1)
+    font.outl_free(ow)
+
+    println("test_font: missing file")
+    fbad = font.font_load("fonts/no-such-font.ttf")
+    assert_eq("missing font -> not ok", font.font_ok(fbad), 0)
+
+    println("ALL PASS")
+}
