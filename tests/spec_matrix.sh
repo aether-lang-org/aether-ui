@@ -330,11 +330,37 @@ for gp in "${GP_SPECS[@]}"; do
     out="$(AEVG_DIR="$fix_app" GP_FIXTURE="$fix_app" UI_SPEC="grand_perspective/spec_${gp}" \
            tests/run_spec.sh 2>&1)"
     teardown "$pid" "$GP_BIN"
-    rm -rf "$fix" "$log"
 
     pass=$(printf '%s' "$out" | grep -oE '[0-9]+ passing' | grep -oE '[0-9]+' | head -1)
     fail=$(printf '%s' "$out" | grep -oE '[0-9]+ failing' | grep -oE '[0-9]+' | head -1)
     pass=${pass:-0}; fail=${fail:-0}
+    retried=""
+    if [ "$pass" -eq 0 ] && [ "$fail" -eq 0 ]; then
+        # Nothing ran — the spec-launch flake (same class as the widget
+        # loop's retry). The spec never touched the fixture, so it's still
+        # pristine: relaunch the app against it and retry once.
+        sleep 2
+        port_free || { echo "port $PORT still busy; aborting"; exit 1; }
+        aui_launch AETHER_UI_TEST_PORT=$PORT AEVG_DIR="$fix_app" GP_FIXTURE="$fix_app" \
+            -- "$GP_BIN" >"$log" 2>&1 &
+        pid=$!
+        ready=0
+        for _ in $(seq 1 40); do
+            if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets"; then ready=1; break; fi
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.25
+        done
+        if [ "$ready" -eq 1 ]; then
+            out="$(AEVG_DIR="$fix_app" GP_FIXTURE="$fix_app" UI_SPEC="grand_perspective/spec_${gp}" \
+                   tests/run_spec.sh 2>&1)"
+            retried=" (retried)"
+        fi
+        teardown "$pid" "$GP_BIN"
+        pass=$(printf '%s' "$out" | grep -oE '[0-9]+ passing' | grep -oE '[0-9]+' | head -1)
+        fail=$(printf '%s' "$out" | grep -oE '[0-9]+ failing' | grep -oE '[0-9]+' | head -1)
+        pass=${pass:-0}; fail=${fail:-0}
+    fi
+    rm -rf "$fix" "$log"
     TOTAL_PASS=$((TOTAL_PASS + pass))
     TOTAL_FAIL=$((TOTAL_FAIL + fail))
     if [ "$fail" -gt 0 ] || { [ "$pass" -eq 0 ] && [ "$fail" -eq 0 ]; }; then
@@ -343,7 +369,7 @@ for gp in "${GP_SPECS[@]}"; do
         printf '%s\n' "$out" | grep -E '✗|FAIL|not ok' | head -6 \
             | sed 's/^/                              | /'
     else
-        printf "%-14s %6s %6s   %s\n" "gp_$gp" "$pass" "$fail" "green"
+        printf "%-14s %6s %6s   %s\n" "gp_$gp" "$pass" "$fail" "green$retried"
     fi
 done
 
