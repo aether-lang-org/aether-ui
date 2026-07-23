@@ -30,6 +30,7 @@ import std.math
 import std.string
 import std.os
 import std.os (os_getenv)
+import word_outline (word_path)
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
@@ -201,54 +202,14 @@ draw_scene(rn: ptr, st: *Spin) {
     }
 }
 
-// ─── The writing: "AEVG" as stroke-font segments on the z=+1 face ────────────
-// Letter-local coords are a [0,1]² box, y DOWN (3D +y projects downward on
-// screen, so letter y maps straight onto face y). Each segment is projected
-// through the same rotate+project as the cube — perspective for free.
-lseg(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float,
-     x1: float, y1: float, x2: float, y2: float) {
-    sx1, sy1 = proj(ox + x1 * w, oy + y1 * h, 1.0, ax, ay)
-    sx2, sy2 = proj(ox + x2 * w, oy + y2 * h, 1.0, ax, ay)
-    n = vg.line(rn, sx1, sy1, sx2, sy2)
-    vg.stroke(n, "#f2f5f8", 3.0)
-}
-
-draw_A(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 1.0, 0.5, 0.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.5, 0.0, 1.0, 1.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.25, 0.58, 0.75, 0.58)
-}
-draw_E(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.0, 0.0, 1.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.0, 1.0, 0.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.5, 0.75, 0.5)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 1.0, 1.0, 1.0)
-}
-draw_V(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.0, 0.5, 1.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.5, 1.0, 1.0, 0.0)
-}
-draw_G(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
-    lseg(rn, ax, ay, ox, oy, w, h, 1.0, 0.22, 0.62, 0.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.62, 0.0, 0.3, 0.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.3, 0.0, 0.0, 0.3)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.3, 0.0, 0.7)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.7, 0.3, 1.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.3, 1.0, 0.62, 1.0)
-    lseg(rn, ax, ay, ox, oy, w, h, 0.62, 1.0, 1.0, 0.78)
-    lseg(rn, ax, ay, ox, oy, w, h, 1.0, 0.78, 1.0, 0.52)
-    lseg(rn, ax, ay, ox, oy, w, h, 1.0, 0.52, 0.55, 0.52)
-}
-
+// ─── The writing: "AeVG" in a real typeface (DejaVu Sans Bold) ───────────────
+// word_outline.ae is GENERATED (gen_word_outline.py): the word's glyph
+// outlines flattened to face-local points; word_path projects every point
+// through the same rotate+perspective pipeline as the cube and returns one
+// compound SVG path — nonzero fill renders the counters (A/e holes).
 draw_writing(rn: ptr, ax: float, ay: float) {
-    // 4 letter boxes across the [-1,1] face: width 0.34, gap 0.12.
-    w = 0.34
-    h = 0.56
-    oy = 0.0 - 0.28
-    draw_A(rn, ax, ay, 0.0 - 0.86, oy, w, h)
-    draw_E(rn, ax, ay, 0.0 - 0.40, oy, w, h)
-    draw_V(rn, ax, ay, 0.06, oy, w, h)
-    draw_G(rn, ax, ay, 0.52, oy, w, h)
+    p = vg.path(rn, word_path(ax, ay))
+    vg.fill(p, "#f2f5f8")
 }
 
 // ─── Physics: integrate spin each frame; damp toward a lazy idle tumble ──────
