@@ -1,0 +1,55 @@
+// spec_tumbling_cube.ae — drives the tumbling cube over the AetherUIDriver:
+// chrome present, then a real press→drag→release canvas gesture lands as a
+// completed drag with the yaw/pitch readout updated. Proves the gesture layer
+// (canvas_on_click/move/release → Spin state → label) is wired end-to-end.
+//
+// Run via ci.sh Phase 5l / tests/spec_matrix.sh, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/apps/tumbling_cube/bin/tumbling_cube &
+//   UI_SPEC=tumbling_cube/spec_tumbling_cube tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "tumbling_cube over AetherUIDriver") {
+        aeocha.it("shows the chrome (canvas + drag counter + hint)") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
+            aeocha.assert_contains(body, "Drags: 0", "no drags yet")
+            aeocha.assert_contains(body, "Drag the cube", "hint present")
+        }
+
+        aeocha.it("a press→drag→release tumbles the cube and counts the drag") callback {
+            cwf = uidriver.canvas_w() * 1.0
+            chf = uidriver.canvas_h() * 1.0
+            x0 = cwf / 2.0
+            y0 = chf / 2.0
+            x1 = cwf * 3.0 / 4.0
+            uidriver.click(x0, y0)                                    // press (grab)
+            uidriver.move_to(x1, y0)                                  // drag right
+            uidriver.post_ok("/canvas/1/release?x=${x1}&y=${y0}", "canvas release")
+            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Drags: 1", 20),
+                "the drag completed and was counted")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "yaw ", "yaw readout present")
+            aeocha.assert_contains(body, "pitch ", "pitch readout present")
+        }
+
+        aeocha.it("a second gesture keeps counting") callback {
+            cwf = uidriver.canvas_w() * 1.0
+            chf = uidriver.canvas_h() * 1.0
+            x0 = cwf / 2.0
+            y0 = chf / 2.0
+            y1 = chf * 3.0 / 4.0
+            uidriver.click(x0, y0)                                    // press
+            uidriver.move_to(x0, y1)                                  // drag down
+            uidriver.post_ok("/canvas/1/release?x=${x0}&y=${y1}", "canvas release")
+            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Drags: 2", 20),
+                "second drag counted")
+        }
+    }
+    aeocha.run_summary(fw)
+}

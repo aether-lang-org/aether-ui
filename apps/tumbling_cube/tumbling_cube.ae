@@ -1,0 +1,339 @@
+// tumbling_cube.ae — a solid 3D cube with writing on one face, tumbling in
+// perspective; grab it with the mouse to throw it around.
+//
+// The AeVG showcase for INTERACTIVE 3D: where aevg_live's cube is a
+// wireframe on autopilot, this one has solid painter-culled faces, vector
+// lettering ("AEVG") projected onto the front face through the same 3D
+// pipeline as the geometry, and a drag-to-tumble gesture layer
+// (canvas_on_click/move/release) with momentum — release mid-drag and the
+// cube keeps spinning with your throw, decaying to a lazy idle tumble.
+//
+// 3D is 30 lines of plain math: 8 verts at ±1 rotated around Y then X,
+// perspective-projected (f = SC/(DIST-z)). Face culling needs no sorting:
+// a cube is convex, so a face is visible iff its rotated outward normal
+// points at the camera (nz > 1/DIST), and visible faces never overlap.
+// The letters are stroke-font line segments in face-local coords on the
+// z=+1 plane, projected point-by-point — so the writing foreshortens and
+// tumbles WITH the face — no affine-text special case needed in the backend.
+//
+// Run: DISPLAY=:0 ./target/build/apps/tumbling_cube/bin/tumbling_cube
+//   Drag to tumble. Release with speed to throw.
+
+import ui
+import ui (window, vstack, text, enable_test_server,
+    canvas_on_click, canvas_on_move, canvas_on_release)
+import vg.live (vg, canvas_region)
+import vg
+import vg (view_box, rect, fill)
+import std.math
+import std.string
+import std.os
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+extern aether_ui_text_set_string(handle: int, text: string)
+
+// ─── Projection constants ────────────────────────────────────────────────────
+CANVAS() -> float { return 420.0 }
+CX() -> float { return 210.0 }     // screen centre (viewBox space)
+CY() -> float { return 210.0 }
+SC() -> float { return 170.0 }     // projected scale
+DIST() -> float { return 3.0 }     // camera distance (cube half-widths)
+
+// ─── Spin state (heap struct — closures share it across events + frames) ─────
+struct Spin {
+    ax: float          // pitch (rotation around X)
+    ay: float          // yaw   (rotation around Y)
+    vx: float          // pitch rate, rad/s
+    vy: float          // yaw rate, rad/s
+    last_t: float
+    dragging: int
+    lx: float          // last pointer position (viewBox coords)
+    ly: float
+    drags: int         // completed drags (drives the status label + spec)
+    lbl: int
+    frozen: int        // AEVG_FREEZE=1 — hold the pose (screenshots / goldens)
+}
+mk_spin() -> *Spin {
+    s = malloc(96) as *Spin
+    s.ax = 0.0 - 0.42
+    s.ay = 0.62
+    s.vx = 0.35
+    s.vy = 0.6
+    s.last_t = 0.0 - 1.0
+    s.dragging = 0
+    s.drags = 0
+    s.lbl = 0
+    s.frozen = 0
+    if os_getenv("AEVG_FREEZE") != null { s.frozen = 1 }
+    return s
+}
+
+// ─── 3D pipeline: rotate around Y then X, perspective-project ────────────────
+rot3(x: float, y: float, z: float, ax: float, ay: float) -> (float, float, float) {
+    x1 = x * math.cos(ay) + z * math.sin(ay)
+    z1 = z * math.cos(ay) - x * math.sin(ay)
+    y1 = y * math.cos(ax) + z1 * math.sin(ax)
+    z2 = z1 * math.cos(ax) - y * math.sin(ax)
+    return x1, y1, z2
+}
+proj(x: float, y: float, z: float, ax: float, ay: float) -> (float, float) {
+    rx, ry, rz = rot3(x, y, z, ax, ay)
+    f = SC() / (DIST() - rz)
+    return CX() + rx * f, CY() + ry * f
+}
+
+// ─── Cube geometry ───────────────────────────────────────────────────────────
+// Vertex index bits: x=bit0, y=bit1, z=bit2 (0 → -1, 1 → +1).
+vx3(i: int) -> float { if (i % 2) == 0 { return 0.0 - 1.0 } return 1.0 }
+vy3(i: int) -> float { if ((i / 2) % 2) == 0 { return 0.0 - 1.0 } return 1.0 }
+vz3(i: int) -> float { if ((i / 4) % 2) == 0 { return 0.0 - 1.0 } return 1.0 }
+
+// face f (0..5) → its 4 corner vertex indices; k = 0..3.
+face_vert(f: int, k: int) -> int {
+    if f == 0 {                                    // +z (the lettered face)
+        if k == 0 { return 4 } if k == 1 { return 5 }
+        if k == 2 { return 7 } return 6
+    }
+    if f == 1 {                                    // -z
+        if k == 0 { return 1 } if k == 1 { return 0 }
+        if k == 2 { return 2 } return 3
+    }
+    if f == 2 {                                    // +x
+        if k == 0 { return 5 } if k == 1 { return 1 }
+        if k == 2 { return 3 } return 7
+    }
+    if f == 3 {                                    // -x
+        if k == 0 { return 0 } if k == 1 { return 4 }
+        if k == 2 { return 6 } return 2
+    }
+    if f == 4 {                                    // +y
+        if k == 0 { return 6 } if k == 1 { return 7 }
+        if k == 2 { return 3 } return 2
+    }
+    if k == 0 { return 0 } if k == 1 { return 1 }   // -y
+    if k == 2 { return 5 } return 4
+}
+// Outward unit normal of face f (identity orientation).
+face_nx(f: int) -> float { if f == 2 { return 1.0 } if f == 3 { return 0.0 - 1.0 } return 0.0 }
+face_ny(f: int) -> float { if f == 4 { return 1.0 } if f == 5 { return 0.0 - 1.0 } return 0.0 }
+face_nz(f: int) -> float { if f == 0 { return 1.0 } if f == 1 { return 0.0 - 1.0 } return 0.0 }
+
+face_color(f: int) -> string {
+    if f == 0 { return "#2f6fae" }    // front — blue, carries the writing
+    if f == 1 { return "#8a8f98" }    // back — slate
+    if f == 2 { return "#c1553f" }    // right — rust
+    if f == 3 { return "#7a9e43" }    // left — olive
+    if f == 4 { return "#d9a13c" }    // bottom (+y is screen-down) — amber
+    return "#6b4fa0"                  // top — violet
+}
+
+// Just the rotated z of a point — all face culling needs.
+rotz(x: float, y: float, z: float, ax: float, ay: float) -> float {
+    z1 = z * math.cos(ay) - x * math.sin(ay)
+    return z1 * math.cos(ax) - y * math.sin(ax)
+}
+
+// A face is visible iff its rotated outward normal points at the camera.
+// Camera sits at (0,0,DIST) and the face centre is the normal itself, so
+// dot(n_rot, cam - n_rot) > 0 reduces to nz_rot·DIST - 1 > 0.
+face_visible(f: int, ax: float, ay: float) -> int {
+    nrz = rotz(face_nx(f), face_ny(f), face_nz(f), ax, ay)
+    if nrz * DIST() > 1.0 { return 1 }
+    return 0
+}
+
+// ─── Rendering ───────────────────────────────────────────────────────────────
+num(v: float) -> string { return string.from_int(lrint(v) as int) }
+
+face_path(f: int, ax: float, ay: float) -> string {
+    s = "M"
+    k = 0
+    while k < 4 {
+        i = face_vert(f, k)
+        sx, sy = proj(vx3(i), vy3(i), vz3(i), ax, ay)
+        if k > 0 { s = string.concat(s, " L") }
+        s = string.concat(s, " ")
+        s = string.concat(s, num(sx)); s = string.concat(s, " "); s = string.concat(s, num(sy))
+        k = k + 1
+    }
+    return string.concat(s, " Z")
+}
+
+draw_scene(rn: ptr, st: *Spin) {
+    bg = vg.rect(rn, 0.0, 0.0, CANVAS(), CANVAS())
+    vg.fill(bg, "#14141c")
+    f = 0
+    while f < 6 {
+        if face_visible(f, st.ax, st.ay) == 1 {
+            p = vg.path(rn, face_path(f, st.ax, st.ay))
+            vg.fill(p, face_color(f))
+            vg.stroke(p, "#14141c", 2.0)
+        }
+        f = f + 1
+    }
+    // The writing rides the front face — draw it whenever that face shows.
+    if face_visible(0, st.ax, st.ay) == 1 { draw_writing(rn, st.ax, st.ay) }
+}
+
+// ─── The writing: "AEVG" as stroke-font segments on the z=+1 face ────────────
+// Letter-local coords are a [0,1]² box, y DOWN (3D +y projects downward on
+// screen, so letter y maps straight onto face y). Each segment is projected
+// through the same rotate+project as the cube — perspective for free.
+lseg(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float,
+     x1: float, y1: float, x2: float, y2: float) {
+    sx1, sy1 = proj(ox + x1 * w, oy + y1 * h, 1.0, ax, ay)
+    sx2, sy2 = proj(ox + x2 * w, oy + y2 * h, 1.0, ax, ay)
+    n = vg.line(rn, sx1, sy1, sx2, sy2)
+    vg.stroke(n, "#f2f5f8", 3.0)
+}
+
+draw_A(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 1.0, 0.5, 0.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.5, 0.0, 1.0, 1.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.25, 0.58, 0.75, 0.58)
+}
+draw_E(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.0, 0.0, 1.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.0, 1.0, 0.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.5, 0.75, 0.5)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 1.0, 1.0, 1.0)
+}
+draw_V(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.0, 0.5, 1.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.5, 1.0, 1.0, 0.0)
+}
+draw_G(rn: ptr, ax: float, ay: float, ox: float, oy: float, w: float, h: float) {
+    lseg(rn, ax, ay, ox, oy, w, h, 1.0, 0.22, 0.62, 0.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.62, 0.0, 0.3, 0.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.3, 0.0, 0.0, 0.3)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.3, 0.0, 0.7)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.0, 0.7, 0.3, 1.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.3, 1.0, 0.62, 1.0)
+    lseg(rn, ax, ay, ox, oy, w, h, 0.62, 1.0, 1.0, 0.78)
+    lseg(rn, ax, ay, ox, oy, w, h, 1.0, 0.78, 1.0, 0.52)
+    lseg(rn, ax, ay, ox, oy, w, h, 1.0, 0.52, 0.55, 0.52)
+}
+
+draw_writing(rn: ptr, ax: float, ay: float) {
+    // 4 letter boxes across the [-1,1] face: width 0.34, gap 0.12.
+    w = 0.34
+    h = 0.56
+    oy = 0.0 - 0.28
+    draw_A(rn, ax, ay, 0.0 - 0.86, oy, w, h)
+    draw_E(rn, ax, ay, 0.0 - 0.40, oy, w, h)
+    draw_V(rn, ax, ay, 0.06, oy, w, h)
+    draw_G(rn, ax, ay, 0.52, oy, w, h)
+}
+
+// ─── Physics: integrate spin each frame; damp toward a lazy idle tumble ──────
+step(st: *Spin, t: float) {
+    if st.last_t < 0.0 { st.last_t = t }
+    dt = t - st.last_t
+    st.last_t = t
+    if dt < 0.0 { dt = 0.0 }
+    if dt > 0.05 { dt = 0.05 }
+    if st.frozen == 1 { return }          // deterministic pose for screenshots
+    if st.dragging == 1 { return }        // pointer owns the orientation
+    st.ax = st.ax + st.vx * dt
+    st.ay = st.ay + st.vy * dt
+    // Exponential decay, floored at an idle tumble so it never goes dead.
+    decay = 1.0 - 0.6 * dt
+    st.vx = st.vx * decay
+    st.vy = st.vy * decay
+    sp = math.abs_float(st.vx) + math.abs_float(st.vy)
+    if sp < 0.3 {
+        if sp < 0.0001 { st.vx = 0.18; st.vy = 0.28 }
+        else { st.vx = st.vx * (0.3 / sp); st.vy = st.vy * (0.3 / sp) }
+    }
+}
+
+// ─── Gesture layer ───────────────────────────────────────────────────────────
+DRAG_K() -> float { return 0.011 }        // viewBox px → radians
+
+on_press(st: *Spin, x: float, y: float) {
+    st.dragging = 1
+    st.lx = x; st.ly = y
+    st.vx = 0.0; st.vy = 0.0                // grabbing stops the spin
+}
+on_drag(st: *Spin, x: float, y: float) {
+    if st.dragging == 0 { return }
+    dx = x - st.lx
+    dy = y - st.ly
+    st.lx = x; st.ly = y
+    st.ay = st.ay + dx * DRAG_K()           // drag right → front face right
+    st.ax = st.ax + dy * DRAG_K()           // drag down  → front face down
+    // Velocity estimate for the throw: blend per-event deltas (~60Hz events).
+    st.vy = st.vy * 0.5 + dx * DRAG_K() * 30.0
+    st.vx = st.vx * 0.5 + dy * DRAG_K() * 30.0
+}
+on_release_pt(st: *Spin, x: float, y: float) {
+    if st.dragging == 0 { return }
+    on_drag(st, x, y)
+    st.dragging = 0
+    // Clamp the throw so a wild swipe stays watchable.
+    if st.vx > 5.0 { st.vx = 5.0 }
+    if st.vx < 0.0 - 5.0 { st.vx = 0.0 - 5.0 }
+    if st.vy > 5.0 { st.vy = 5.0 }
+    if st.vy < 0.0 - 5.0 { st.vy = 0.0 - 5.0 }
+    st.drags = st.drags + 1
+    refresh_label(st)
+}
+
+deg(r: float) -> int {
+    d = lrint(r * 57.29577951) as int
+    d = d % 360
+    if d < 0 { d = d + 360 }
+    return d
+}
+refresh_label(st: *Spin) {
+    if st.lbl == 0 { return }
+    m = "Drags: "
+    m = string.concat(m, string.from_int(st.drags))
+    m = string.concat(m, " · yaw ")
+    m = string.concat(m, string.from_int(deg(st.ay)))
+    m = string.concat(m, "° pitch ")
+    m = string.concat(m, string.from_int(deg(st.ax)))
+    m = string.concat(m, "°")
+    aether_ui_text_set_string(st.lbl, m)
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+main() {
+    st = mk_spin()
+
+    window("AeVG — tumbling cube", 470, 560) {
+        vstack(6) {
+            st.lbl = text("Drags: 0")
+
+            vg(view_box(0, 0, 420, 420), 440, 440) {
+                anchor = rect(0, 0, 0, 0)
+                root_node = vg.vg_root(vg.node_scene(anchor))
+                scene = vg.node_scene(root_node)
+                vg.scene_set_refreshing(scene, 1)
+
+                canvas_region(root_node, 0.0, 0.0, 420.0, 420.0) callback |rn: ptr, t: float| {
+                    step(st, t)
+                    draw_scene(rn, st)
+                }
+                cid = vg.scene_canvas(scene)
+
+                // Canvas events arrive in canvas pixels; our math lives in the
+                // 420 viewBox — unmap first (same as rubiks_cube).
+                canvas_on_click(cid) callback |px: float, py: float| {
+                    on_press(st, vg.scene_px_to_vb_x(scene, px), vg.scene_px_to_vb_y(scene, py))
+                }
+                canvas_on_move(cid) callback |mx: float, my: float| {
+                    on_drag(st, vg.scene_px_to_vb_x(scene, mx), vg.scene_px_to_vb_y(scene, my))
+                }
+                canvas_on_release(cid) callback |rx: float, ry: float| {
+                    on_release_pt(st, vg.scene_px_to_vb_x(scene, rx), vg.scene_px_to_vb_y(scene, ry))
+                }
+            }
+
+            text("Drag the cube to tumble it — release with speed to throw")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
