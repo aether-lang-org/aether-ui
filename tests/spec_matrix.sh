@@ -236,8 +236,14 @@ for row in "${SUITES[@]}"; do
             sleep 0.25
         done
         if [ "$ready" -eq 1 ]; then
-            out="$(UI_SPEC="$spec" tests/run_spec.sh 2>&1)"
+            # Virgin cache for the retry: the first crash may have PINNED a
+            # bad exe under ~/.aether/cache (the poisoned-publish shape) —
+            # rerunning it would fail deterministically. A throwaway
+            # AETHER_CACHE_DIR forces a fresh compile+exec.
+            rcache="$(mktemp -d)"
+            out="$(AETHER_CACHE_DIR="$rcache" UI_SPEC="$spec" tests/run_spec.sh 2>&1)"
             rc=$?
+            rm -rf "$rcache"
             retried=" (retried)"
         fi
         teardown "$pid" "$bin"
@@ -351,8 +357,11 @@ for gp in "${GP_SPECS[@]}"; do
             sleep 0.25
         done
         if [ "$ready" -eq 1 ]; then
-            out="$(AEVG_DIR="$fix_app" GP_FIXTURE="$fix_app" UI_SPEC="grand_perspective/spec_${gp}" \
-                   tests/run_spec.sh 2>&1)"
+            # Virgin cache — see the widget loop's retry for why.
+            rcache="$(mktemp -d)"
+            out="$(AETHER_CACHE_DIR="$rcache" AEVG_DIR="$fix_app" GP_FIXTURE="$fix_app" \
+                   UI_SPEC="grand_perspective/spec_${gp}" tests/run_spec.sh 2>&1)"
+            rm -rf "$rcache"
             retried=" (retried)"
         fi
         teardown "$pid" "$GP_BIN"
