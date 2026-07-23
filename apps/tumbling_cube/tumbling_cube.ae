@@ -9,12 +9,13 @@
 // cube keeps spinning with your throw, decaying to a lazy idle tumble.
 //
 // 3D is 30 lines of plain math: 8 verts at ±1 rotated around Y then X,
-// perspective-projected (f = SC/(DIST-z)). Face culling needs no sorting:
-// a cube is convex, so a face is visible iff its rotated outward normal
-// points at the camera (nz > 1/DIST), and visible faces never overlap.
-// The letters are stroke-font line segments in face-local coords on the
-// z=+1 plane, projected point-by-point — so the writing foreshortens and
-// tumbles WITH the face — no affine-text special case needed in the backend.
+// perspective-projected (f = SC/(DIST-z)). The faces are TRANSLUCENT
+// (vg.opacity), so instead of culling back faces we painter-sort all six
+// far→near by rotated face-normal depth and draw the lot — the far sides
+// (and the writing, mirrored) read through the glass. The letters are
+// stroke-font line segments in face-local coords on the z=+1 plane,
+// projected point-by-point — so the writing foreshortens and tumbles WITH
+// the face — no affine-text special case needed in the backend.
 //
 // Run: DISPLAY=:0 ./target/build/apps/tumbling_cube/bin/tumbling_cube
 //   Drag to tumble. Release with speed to throw.
@@ -129,19 +130,21 @@ face_color(f: int) -> string {
     return "#6b4fa0"                  // top — violet
 }
 
-// Just the rotated z of a point — all face culling needs.
+// Just the rotated z of a point — all depth sorting needs.
 rotz(x: float, y: float, z: float, ax: float, ay: float) -> float {
     z1 = z * math.cos(ay) - x * math.sin(ay)
     return z1 * math.cos(ax) - y * math.sin(ax)
 }
 
-// A face is visible iff its rotated outward normal points at the camera.
-// Camera sits at (0,0,DIST) and the face centre is the normal itself, so
-// dot(n_rot, cam - n_rot) > 0 reduces to nz_rot·DIST - 1 > 0.
-face_visible(f: int, ax: float, ay: float) -> int {
-    nrz = rotz(face_nx(f), face_ny(f), face_nz(f), ax, ay)
-    if nrz * DIST() > 1.0 { return 1 }
-    return 0
+// Depth of face f = rotated z of its centre (which IS its unit normal).
+// Larger = nearer the camera (camera sits at +z).
+face_depth(f: int, ax: float, ay: float) -> float {
+    return rotz(face_nx(f), face_ny(f), face_nz(f), ax, ay)
+}
+
+pow2(f: int) -> int {
+    if f == 0 { return 1 } if f == 1 { return 2 } if f == 2 { return 4 }
+    if f == 3 { return 8 } if f == 4 { return 16 } return 32
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
@@ -161,20 +164,41 @@ face_path(f: int, ax: float, ay: float) -> string {
     return string.concat(s, " Z")
 }
 
+FACE_ALPHA() -> float { return 0.55 }
+
+draw_one_face(rn: ptr, st: *Spin, f: int) {
+    p = vg.path(rn, face_path(f, st.ax, st.ay))
+    vg.fill(p, face_color(f))
+    vg.opacity(p, FACE_ALPHA())
+    vg.stroke(p, "#0c0c12", 2.0)
+    // The writing rides its face: drawn right after it in depth order, so
+    // nearer translucent faces glaze over it — correct through-glass look
+    // (mirrored when the lettered face is at the back).
+    if f == 0 { draw_writing(rn, st.ax, st.ay) }
+}
+
 draw_scene(rn: ptr, st: *Spin) {
     bg = vg.rect(rn, 0.0, 0.0, CANVAS(), CANVAS())
     vg.fill(bg, "#14141c")
-    f = 0
-    while f < 6 {
-        if face_visible(f, st.ax, st.ay) == 1 {
-            p = vg.path(rn, face_path(f, st.ax, st.ay))
-            vg.fill(p, face_color(f))
-            vg.stroke(p, "#14141c", 2.0)
+    // Painter's algorithm over all 6 translucent faces: repeatedly draw the
+    // farthest not-yet-drawn face. `painted` is a 6-bit done-mask.
+    painted = 0
+    pass_i = 0
+    while pass_i < 6 {
+        best = -1
+        bestd = 10.0
+        f = 0
+        while f < 6 {
+            if (painted / pow2(f)) % 2 == 0 {
+                d = face_depth(f, st.ax, st.ay)
+                if d < bestd { bestd = d; best = f }
+            }
+            f = f + 1
         }
-        f = f + 1
+        painted = painted + pow2(best)
+        draw_one_face(rn, st, best)
+        pass_i = pass_i + 1
     }
-    // The writing rides the front face — draw it whenever that face shows.
-    if face_visible(0, st.ax, st.ay) == 1 { draw_writing(rn, st.ax, st.ay) }
 }
 
 // ─── The writing: "AEVG" as stroke-font segments on the z=+1 face ────────────
