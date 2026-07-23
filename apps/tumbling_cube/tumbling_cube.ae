@@ -39,11 +39,14 @@ extern lrint(x: float) -> long
 extern aether_ui_text_set_string(handle: int, text: string)
 
 // ─── Projection constants ────────────────────────────────────────────────────
-CANVAS() -> float { return 420.0 }
-MIDX() -> float { return 210.0 }     // screen centre (viewBox space)
-MIDY() -> float { return 210.0 }
-SC() -> float { return 170.0 }     // projected scale
-DIST() -> float { return 3.0 }     // camera distance (cube half-widths)
+// NB these lower to C #defines, so the names share the preprocessor's global
+// namespace — hence the AEVG_ prefixes on the short ones (a bare SC / DIST /
+// CANVAS is asking for a collision with a system header macro).
+const AEVG_CANVAS: float = 420.0
+const AEVG_MIDX: float = 210.0        // screen centre (viewBox space)
+const AEVG_MIDY: float = 210.0
+const AEVG_SCALE: float = 170.0       // projected scale
+const AEVG_DIST: float = 3.0          // camera distance (cube half-widths)
 
 // ─── Spin state (heap struct — closures share it across events + frames) ─────
 struct Spin {
@@ -86,8 +89,8 @@ rot3(x: float, y: float, z: float, ax: float, ay: float) -> (float, float, float
 }
 proj(x: float, y: float, z: float, ax: float, ay: float) -> (float, float) {
     rx, ry, rz = rot3(x, y, z, ax, ay)
-    f = SC() / (DIST() - rz)
-    return MIDX() + rx * f, MIDY() + ry * f
+    f = AEVG_SCALE / (AEVG_DIST - rz)
+    return AEVG_MIDX + rx * f, AEVG_MIDY + ry * f
 }
 
 // ─── Cube geometry ───────────────────────────────────────────────────────────
@@ -169,12 +172,12 @@ face_path(f: int, ax: float, ay: float) -> string {
     return string.concat(s, " Z")
 }
 
-FACE_ALPHA() -> float { return 0.55 }
+const AEVG_FACE_ALPHA: float = 0.55
 
 draw_one_face(rn: ptr, st: *Spin, f: int) {
     p = vg.path(rn, face_path(f, st.ax, st.ay))
     vg.fill(p, face_color(f))
-    vg.opacity(p, FACE_ALPHA())
+    vg.opacity(p, AEVG_FACE_ALPHA)
     vg.stroke(p, "#0c0c12", 2.0)
     // The writing rides its face: drawn right after it in depth order, so
     // nearer translucent faces glaze over it — correct through-glass look
@@ -183,7 +186,7 @@ draw_one_face(rn: ptr, st: *Spin, f: int) {
 }
 
 draw_scene(rn: ptr, st: *Spin) {
-    bg = vg.rect(rn, 0.0, 0.0, CANVAS(), CANVAS())
+    bg = vg.rect(rn, 0.0, 0.0, AEVG_CANVAS, AEVG_CANVAS)
     vg.fill(bg, "#14141c")
     // Painter's algorithm over all 6 translucent faces: repeatedly draw the
     // farthest not-yet-drawn face. `painted` is a 6-bit done-mask.
@@ -297,7 +300,7 @@ step(st: *Spin, t: float) {
 }
 
 // ─── Gesture layer ───────────────────────────────────────────────────────────
-DRAG_K() -> float { return 0.011 }        // viewBox px → radians
+const AEVG_DRAG_K: float = 0.011          // viewBox px → radians
 
 on_press(st: *Spin, x: float, y: float) {
     st.dragging = 1
@@ -309,11 +312,11 @@ on_drag(st: *Spin, x: float, y: float) {
     dx = x - st.lx
     dy = y - st.ly
     st.lx = x; st.ly = y
-    st.ay = st.ay + dx * DRAG_K()           // drag right → front face right
-    st.ax = st.ax + dy * DRAG_K()           // drag down  → front face down
+    st.ay = st.ay + dx * AEVG_DRAG_K           // drag right → front face right
+    st.ax = st.ax + dy * AEVG_DRAG_K           // drag down  → front face down
     // Velocity estimate for the throw: blend per-event deltas (~60Hz events).
-    st.vy = st.vy * 0.5 + dx * DRAG_K() * 30.0
-    st.vx = st.vx * 0.5 + dy * DRAG_K() * 30.0
+    st.vy = st.vy * 0.5 + dx * AEVG_DRAG_K * 30.0
+    st.vx = st.vx * 0.5 + dy * AEVG_DRAG_K * 30.0
 }
 on_release_pt(st: *Spin, x: float, y: float) {
     if st.dragging == 0 { return }
