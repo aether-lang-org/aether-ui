@@ -217,6 +217,35 @@ for row in "${SUITES[@]}"; do
     fail=$(printf '%s' "$out" | grep -oE '[0-9]+ failing' | grep -oE '[0-9]+' | head -1)
     pass=${pass:-0}; fail=${fail:-0}
 
+    retried=""
+    if [ "$rc" -ne 0 ] && [ "$pass" = "0" ] && [ "$fail" = "0" ]; then
+        # The SPEC PROGRAM died before reporting anything — a launch-layer
+        # failure (`ae run` fresh-exe exec killed under MSYS subprocess
+        # pressure; seen as "Program crashed (signal 1)"), not an assertion
+        # outcome. Retry ONCE with a fresh app. Assertion failures (fail>0)
+        # are never retried — only the nothing-ran class is.
+        sleep 2
+        port_free || { echo "port $PORT still busy; aborting"; exit 1; }
+        # shellcheck disable=SC2086
+        aui_launch AETHER_UI_TEST_PORT=$PORT $extra -- "$bin" >"$log" 2>&1 &
+        pid=$!
+        ready=0
+        for _ in $(seq 1 40); do
+            if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets"; then ready=1; break; fi
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.25
+        done
+        if [ "$ready" -eq 1 ]; then
+            out="$(UI_SPEC="$spec" tests/run_spec.sh 2>&1)"
+            rc=$?
+            retried=" (retried)"
+        fi
+        teardown "$pid" "$bin"
+        pass=$(printf '%s' "$out" | grep -oE '[0-9]+ passing' | grep -oE '[0-9]+' | head -1)
+        fail=$(printf '%s' "$out" | grep -oE '[0-9]+ failing' | grep -oE '[0-9]+' | head -1)
+        pass=${pass:-0}; fail=${fail:-0}
+    fi
+
     if [ "$rc" -ne 0 ] && [ "$pass" = "0" ] && [ "$fail" = "0" ]; then
         printf "%-14s %6s %6s   %s\n" "$name" - - "SPEC ERROR"
         printf '%s\n' "$out" | tail -4 | sed 's/^/                              | /'
@@ -233,7 +262,7 @@ for row in "${SUITES[@]}"; do
         printf '%s\n' "$out" | grep -E '✗|FAIL|not ok' | head -6 \
             | sed 's/^/                              | /'
     else
-        printf "%-14s %6s %6s   %s\n" "$name" "$pass" "$fail" "green"
+        printf "%-14s %6s %6s   %s\n" "$name" "$pass" "$fail" "green$retried"
     fi
     rm -f "$log"
 done
