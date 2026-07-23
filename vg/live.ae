@@ -272,7 +272,7 @@ _render_live_z_ordered(scene: ptr, canvas_id: int, t: float) {
 
 // Render one live region by kind.
 _render_one_region(scene: ptr, canvas_id: int, region: ptr, t: float) {
-    if region.region_kind(region) == region.LIVE_RASTER() {
+    if region.region_kind(region) == region.LIVE_RASTER {
         // Animated source: produce + push this frame before blitting. Static
         // regions (no source) just blit their once-pushed frame.
         src = region.region_src_fn(region)

@@ -12,7 +12,7 @@ import std.math
 
 extern exit(code: int)
 
-EPS() -> float { return 0.0001 }
+const EPS: float = 0.0001
 
 assert_eq_str(label: string, got: string, want: string) {
     if string.equals(got, want) == 1 {
@@ -33,7 +33,7 @@ assert_eq_int(label: string, got: int, want: int) {
 }
 
 assert_near(label: string, got: float, want: float) {
-    if math.abs_float(got - want) < EPS() {
+    if math.abs_float(got - want) < EPS {
         println("  PASS: ${label} (${got})")
     } else {
         println("  FAIL: ${label}: got ${got} want ${want}")

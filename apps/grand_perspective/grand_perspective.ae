@@ -123,7 +123,7 @@ tick(s: *AppState) {
     }
     // Delete-confirm timeout: disarm quietly when the window lapses.
     if s.del_armed_t > 0.0 {
-        if s.frame_t - s.del_armed_t >= DEL_CONFIRM_SECS() { disarm_delete(s) }
+        if s.frame_t - s.del_armed_t >= DEL_CONFIRM_SECS { disarm_delete(s) }
     }
     if s.dirty == 1 {
         if s.cid != 0 {
@@ -312,7 +312,7 @@ main() {
                 if dbg_on() == 1 {
                     println("gp-click: px=(${pcx}, ${pcy}) vb=(${cx}, ${cy}) dt=${dt}s dist=${dist} dbl=${dbl}")
                 }
-                if cx >= gp_model.LEGEND_X() {
+                if cx >= gp_model.LEGEND_X {
                     if dbg_on() == 1 { println("gp-click: -> legend pane") }
                     legend_click(st, cx, cy)
                 }

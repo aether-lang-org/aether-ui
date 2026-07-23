@@ -32,29 +32,29 @@ main() {
     c = mk_cube()
     check_true("fresh cube is solved", is_solved(c))
     check_int("fresh history empty", c.hist_len, 0)
-    check_int("centre of U is U", cell(c, U(), 1, 1), 0)
+    check_int("centre of U is U", cell(c, U, 1, 1), 0)
 
     // ── One face turn unsolves; logs a move ────────────────────
-    rotate_side(c, F(), 1)
+    rotate_side(c, F, 1)
     check_true("one F turn unsolves", is_solved(c) == 0)
     check_int("history logged the turn", c.hist_len, 1)
 
     // ── Four quarter-turns of a face = identity ────────────────
     reset(c)
-    rotate_side(c, R(), 1)
-    rotate_side(c, R(), 1)
-    rotate_side(c, R(), 1)
-    rotate_side(c, R(), 1)
+    rotate_side(c, R, 1)
+    rotate_side(c, R, 1)
+    rotate_side(c, R, 1)
+    rotate_side(c, R, 1)
     check_true("R x4 is solved again", is_solved(c))
 
     // ── A face turn and its inverse cancel ─────────────────────
     reset(c)
-    rotate_side(c, U(), 1)
-    rotate_side(c, U(), 0)
+    rotate_side(c, U, 1)
+    rotate_side(c, U, 0)
     check_true("U cw then U ccw is solved", is_solved(c))
     reset(c)
-    rotate_side(c, B(), 0)
-    rotate_side(c, B(), 1)
+    rotate_side(c, B, 0)
+    rotate_side(c, B, 1)
     check_true("B ccw then B cw is solved", is_solved(c))
 
     // ── Slice moves are self-inverse (cw then ccw) ─────────────
@@ -73,10 +73,10 @@ main() {
 
     // ── A specific sequence really scrambles, and solve undoes it ─
     reset(c)
-    rotate_side(c, F(), 1)
-    rotate_side(c, R(), 0)
+    rotate_side(c, F, 1)
+    rotate_side(c, R, 0)
     do_e_slice(c, 1)
-    rotate_side(c, U(), 1)
+    rotate_side(c, U, 1)
     do_m_slice(c, 0)
     check_true("mixed face+slice scramble is unsolved", is_solved(c) == 0)
     check_int("history has 5 moves", c.hist_len, 5)

@@ -32,13 +32,13 @@ import std.string
 extern malloc(size: int) -> ptr
 
 // Operation selectors (functions, matching the codebase's const idiom).
-OP_CIRCLE()   -> int { return 0 }
-OP_RECT()     -> int { return 1 }
-OP_LINE()     -> int { return 2 }
-OP_PATH()     -> int { return 3 }
-OP_TEXT()     -> int { return 4 }
-OP_RASTER()   -> int { return 5 }
-OP_TAPPABLE() -> int { return 6 }
+const OP_CIRCLE: int = 0
+const OP_RECT: int = 1
+const OP_LINE: int = 2
+const OP_PATH: int = 3
+const OP_TEXT: int = 4
+const OP_RASTER: int = 5
+const OP_TAPPABLE: int = 6
 
 struct Dispatch {
     be: ptr        // concrete backend handle

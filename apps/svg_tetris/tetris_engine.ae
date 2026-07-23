@@ -33,15 +33,15 @@ import std.intarr
 extern malloc(size: int) -> ptr
 
 // ─── Board dimensions ────────────────────────────────────────────────────────
-COLS()  -> int { return 10 }
-ROWS()  -> int { return 20 }
-CELLS() -> int { return 200 }             // COLS * ROWS
+const COLS: int = 10
+const ROWS: int = 20
+const CELLS: int = 200  // COLS * ROWS
 
 // ─── Shape table ─────────────────────────────────────────────────────────────
 // alex fritze's SHAPE_DESCRIPTORS: 7 shapes, 1..4 rotation states each, every
 // state 4 cells as (col,row). Stored flat, padded to 4 orientation slots
 // (unused slots never read — rotation cycles modulo orient_count).
-SHAPE_STRIDE() -> int { return 32 }       // 4 orients * 4 blocks * 2 coords
+const SHAPE_STRIDE: int = 32  // 4 orients * 4 blocks * 2 coords
 
 orient_count(s: int) -> int {
     if s == 0 { return 1 }                // O
@@ -54,7 +54,7 @@ orient_count(s: int) -> int {
 set_rot(arr: ptr, s: int, rot: int,
         a: int, b: int, c: int, d: int,
         e: int, f: int, g: int, h: int) {
-    base = s * SHAPE_STRIDE() + rot * 8
+    base = s * SHAPE_STRIDE + rot * 8
     intarr_set_unchecked(arr, base + 0, a); intarr_set_unchecked(arr, base + 1, b)
     intarr_set_unchecked(arr, base + 2, c); intarr_set_unchecked(arr, base + 3, d)
     intarr_set_unchecked(arr, base + 4, e); intarr_set_unchecked(arr, base + 5, f)
@@ -62,7 +62,7 @@ set_rot(arr: ptr, s: int, rot: int,
 }
 
 build_shapes() -> ptr {
-    arr, _e = intarr.new(7 * SHAPE_STRIDE())
+    arr, _e = intarr.new(7 * SHAPE_STRIDE)
     // 0 O grey (1 orientation)
     set_rot(arr, 0, 0, 0,0, 1,0, 0,1, 1,1)
     // 1 J blue (4)
@@ -94,7 +94,7 @@ build_shapes() -> ptr {
 
 // The (col,row) of block `blk` (0..3) of shape `s` in orientation `rot`.
 get_block(sh: ptr, s: int, rot: int, blk: int) -> (int, int) {
-    base = s * SHAPE_STRIDE() + rot * 8 + blk * 2
+    base = s * SHAPE_STRIDE + rot * 8 + blk * 2
     return intarr_get_unchecked(sh, base), intarr_get_unchecked(sh, base + 1)
 }
 
@@ -130,16 +130,16 @@ struct Game {
 }
 
 board_get(g: *Game, col: int, row: int) -> int {
-    return intarr_get_unchecked(g.board, row * COLS() + col)
+    return intarr_get_unchecked(g.board, row * COLS + col)
 }
 board_set(g: *Game, col: int, row: int, v: int) {
-    intarr_set_unchecked(g.board, row * COLS() + col, v)
+    intarr_set_unchecked(g.board, row * COLS + col, v)
 }
 
 mk_game() -> *Game {
     g = malloc(96) as *Game
     g.shapes = build_shapes()
-    arr, _e = intarr.new_filled(CELLS(), -1)
+    arr, _e = intarr.new_filled(CELLS, -1)
     g.board = arr
     g.cur_shape = -1
     g.cur_orient = 0
@@ -157,7 +157,7 @@ mk_game() -> *Game {
 
 clear_board(g: *Game) {
     i = 0
-    while i < CELLS() {
+    while i < CELLS {
         intarr_set_unchecked(g.board, i, -1)
         i = i + 1
     }
@@ -171,9 +171,9 @@ collides(g: *Game, s: int, rot: int, x: int, y: int) -> int {
         c = x + bc
         r = y + br
         if c < 0 { return 1 }
-        if c >= COLS() { return 1 }
+        if c >= COLS { return 1 }
         if r < 0 { return 1 }
-        if r >= ROWS() { return 1 }
+        if r >= ROWS { return 1 }
         if board_get(g, c, r) >= 0 { return 1 }
         blk = blk + 1
     }
@@ -268,11 +268,11 @@ lock_piece(g: *Game) {
 }
 
 clear_full_rows(g: *Game) {
-    r = ROWS() - 1
+    r = ROWS - 1
     while r >= 0 {
         full = 1
         c = 0
-        while c < COLS() {
+        while c < COLS {
             if board_get(g, c, r) < 0 { full = 0 }
             c = c + 1
         }
@@ -281,14 +281,14 @@ clear_full_rows(g: *Game) {
             rr = r
             while rr > 0 {
                 cc = 0
-                while cc < COLS() {
+                while cc < COLS {
                     board_set(g, cc, rr, board_get(g, cc, rr - 1))
                     cc = cc + 1
                 }
                 rr = rr - 1
             }
             cc = 0
-            while cc < COLS() { board_set(g, cc, 0, -1); cc = cc + 1 }
+            while cc < COLS { board_set(g, cc, 0, -1); cc = cc + 1 }
             g.lines = g.lines + 1
             g.tick_time = g.tick_time * 0.95
             if g.tick_time < 0.1 { g.tick_time = 0.1 }

@@ -187,9 +187,9 @@ refresh_all_elements(ctx: ptr) -> int {
 
 recompute_bounds(ctx: ptr, el: ptr, pos_map: ptr) {
     st = element.element_shape_type(el)
-    if st == element.SHAPE_NONE() { return }
+    if st == element.SHAPE_NONE { return }
 
-    if st == element.SHAPE_CIRCLE() {
+    if st == element.SHAPE_CIRCLE {
         merge_geo(el, pos_map, "cx", 0)
         merge_geo(el, pos_map, "cy", 1)
         merge_geo(el, pos_map, "r",  2)
@@ -205,7 +205,7 @@ recompute_bounds(ctx: ptr, el: ptr, pos_map: ptr) {
         return
     }
 
-    if st == element.SHAPE_RECT() {
+    if st == element.SHAPE_RECT {
         merge_geo(el, pos_map, "x",      0)
         merge_geo(el, pos_map, "y",      1)
         merge_geo(el, pos_map, "width",  2)
@@ -228,7 +228,7 @@ recompute_bounds(ctx: ptr, el: ptr, pos_map: ptr) {
         return
     }
 
-    if st == element.SHAPE_LINE() {
+    if st == element.SHAPE_LINE {
         merge_geo(el, pos_map, "x1", 0)
         merge_geo(el, pos_map, "y1", 1)
         merge_geo(el, pos_map, "x2", 2)

@@ -67,7 +67,7 @@ do_reveal(s: *AppState) {
 // The arm times out (tick disarms) and any navigation clears selection,
 // which also effectively disarms. Only an explicit SELECTION can be
 // deleted — never the hover target.
-DEL_CONFIRM_SECS() -> float { return 6.0 }
+const DEL_CONFIRM_SECS: float = 6.0
 
 disarm_delete(s: *AppState) {
     s.del_armed_t = 0.0 - 1.0
@@ -80,7 +80,7 @@ do_delete(s: *AppState) {
         return
     }
     if s.del_armed_t > 0.0 {
-        if s.frame_t - s.del_armed_t < DEL_CONFIRM_SECS() {
+        if s.frame_t - s.del_armed_t < DEL_CONFIRM_SECS {
             execute_trash(s)
             return
         }

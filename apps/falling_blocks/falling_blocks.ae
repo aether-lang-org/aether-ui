@@ -38,9 +38,9 @@ extern malloc(size: int) -> ptr
 extern aether_ui_text_set_string(handle: int, text: string)
 
 // ─── Render geometry ─────────────────────────────────────────────────────────
-BLOCK()   -> float { return 28.0 }           // px per cell in the vg viewBox
-BOARD_PX_W() -> float { return 280.0 }       // 10 * 28
-BOARD_PX_H() -> float { return 560.0 }       // 20 * 28
+const BLOCK: float = 28.0  // px per cell in the vg viewBox
+const BOARD_PX_W: float = 280.0  // 10 * 28
+const BOARD_PX_H: float = 560.0  // 20 * 28
 
 // ─── App-side view state ─────────────────────────────────────────────────────
 // The UI handles the engine deliberately doesn't know about, held in a heap
@@ -77,27 +77,27 @@ refresh_labels(g: *Game, view: *View) {
 // ─── Rendering ───────────────────────────────────────────────────────────────
 // One bevelled cell: a darker border rect + a lighter inner rect.
 draw_cell(rn: ptr, col: int, row: int, color: string) {
-    draw_cell_px(rn, col * 1.0 * BLOCK(), row * 1.0 * BLOCK(), color)
+    draw_cell_px(rn, col * 1.0 * BLOCK, row * 1.0 * BLOCK, color)
 }
 // Draw a cell at an arbitrary pixel position — lets the falling piece sit at a
 // fractional row so it descends smoothly between grid steps.
 draw_cell_px(rn: ptr, x: float, y: float, color: string) {
-    border = vg.rect(rn, x, y, BLOCK(), BLOCK())
+    border = vg.rect(rn, x, y, BLOCK, BLOCK)
     vg.fill(border, "rgb(51,51,51)")
-    inner = vg.rect(rn, x + 2.0, y + 2.0, BLOCK() - 4.0, BLOCK() - 4.0)
+    inner = vg.rect(rn, x + 2.0, y + 2.0, BLOCK - 4.0, BLOCK - 4.0)
     vg.fill(inner, color)
 }
 
 draw_board(rn: ptr, g: *Game, now: float) {
     // Background.
-    bg = vg.rect(rn, 0.0, 0.0, BOARD_PX_W(), BOARD_PX_H())
+    bg = vg.rect(rn, 0.0, 0.0, BOARD_PX_W, BOARD_PX_H)
     vg.fill(bg, "rgb(28,28,28)")
 
     // Locked cells.
     row = 0
-    while row < BOARD_H() {
+    while row < BOARD_H {
         col = 0
-        while col < BOARD_W() {
+        while col < BOARD_W {
             v = board_get(g, col, row)
             if v >= 0 { draw_cell(rn, col, row, shape_color(v)) }
             col = col + 1
@@ -126,8 +126,8 @@ draw_board(rn: ptr, g: *Game, now: float) {
                 c = g.cur_col + bc
                 r = g.cur_row + br
                 if r >= 0 {
-                    px = c * 1.0 * BLOCK()
-                    py = (r * 1.0 + frac) * BLOCK()
+                    px = c * 1.0 * BLOCK
+                    py = (r * 1.0 + frac) * BLOCK
                     draw_cell_px(rn, px, py, color)
                 }
                 blk = blk + 1
@@ -176,7 +176,7 @@ handle_key(g: *Game, key: string) {
 
 handle_tap(g: *Game, x: float) {
     if g.phase != 1 { start_game(g); return }   // ready/over/paused: (re)start
-    third = BOARD_PX_W() / 3.0
+    third = BOARD_PX_W / 3.0
     if x < third { move_left(g); return }
     if x > third * 2.0 { move_right(g); return }
     rotate(g)

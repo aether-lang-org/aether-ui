@@ -75,7 +75,7 @@ main() {
                    context.has_gradient(ctx1, "g1"), 1)
     assert_eq_int("g1 type = linear",
                    defs.gradient_type(g1),
-                   defs.GRADIENT_LINEAR())
+                   defs.GRADIENT_LINEAR)
     assert_near("g1 x1", defs.gradient_x1(g1), 0.0)
     assert_near("g1 y1", defs.gradient_y1(g1), 0.0)
     assert_near("g1 x2", defs.gradient_x2(g1), 1.0)
@@ -140,7 +140,7 @@ main() {
         parser.node_child_at(parser.node_child_at(root6, 0), 0))
     assert_eq_int("g6 type = radial",
                    defs.gradient_type(g6),
-                   defs.GRADIENT_RADIAL())
+                   defs.GRADIENT_RADIAL)
     assert_near("g6 cx", defs.gradient_cx(g6), 0.5)
     assert_near("g6 cy", defs.gradient_cy(g6), 0.5)
     assert_near("g6 r",  defs.gradient_r(g6),  0.5)
@@ -228,7 +228,7 @@ main() {
     assert_eq_int("cp1 shape count = 1",     defs.clip_path_shape_count(cp1), 1)
     cp1_shape0 = defs.clip_path_shape_at(cp1, 0)
     assert_eq_int("cp1[0] is rect",          defs.clip_shape_kind(cp1_shape0),
-                                              defs.CLIP_SHAPE_RECT())
+                                              defs.CLIP_SHAPE_RECT)
     assert_near("cp1[0].x",                  defs.clip_shape_x(cp1_shape0),      10.0)
     assert_near("cp1[0].y",                  defs.clip_shape_y(cp1_shape0),      20.0)
     assert_near("cp1[0].width",              defs.clip_shape_width(cp1_shape0),  30.0)
@@ -244,13 +244,13 @@ main() {
                    defs.clip_path_shape_count(cp2), 2)
     cp2_s0 = defs.clip_path_shape_at(cp2, 0)
     assert_eq_int("cp2[0] is circle", defs.clip_shape_kind(cp2_s0),
-                                       defs.CLIP_SHAPE_CIRCLE())
+                                       defs.CLIP_SHAPE_CIRCLE)
     assert_near("cp2[0].cx", defs.clip_shape_cx(cp2_s0), 5.0)
     assert_near("cp2[0].cy", defs.clip_shape_cy(cp2_s0), 6.0)
     assert_near("cp2[0].r",  defs.clip_shape_r(cp2_s0),  7.0)
     cp2_s1 = defs.clip_path_shape_at(cp2, 1)
     assert_eq_int("cp2[1] is rect", defs.clip_shape_kind(cp2_s1),
-                                     defs.CLIP_SHAPE_RECT())
+                                     defs.CLIP_SHAPE_RECT)
 
     // Missing id → null returned
     ctx_cp3 = mk_test_ctx()
@@ -305,7 +305,7 @@ main() {
     g_rg = defs.parse_gradient(ctx_href, rg_node)
     assert_not_null("href: radial gradient returned", g_rg)
     assert_eq_int("href: radial is radial",
-                  defs.gradient_type(g_rg), defs.GRADIENT_RADIAL())
+                  defs.gradient_type(g_rg), defs.GRADIENT_RADIAL)
     assert_eq_int("href: inherited 2 stops from base",
                   defs.gradient_stop_count(g_rg), 2)
     rg_stops = defs.gradient_stops(g_rg)

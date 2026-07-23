@@ -33,17 +33,17 @@ extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
 
 // ─── Scene / ball constants (faithful to the original) ───────────────────────
-CW()  -> int { return 640 }       // canvas px
-CH()  -> int { return 480 }
-RAD() -> int { return 48 }        // BALL_RADIUS
-GRID() -> int { return 64 }       // grid line spacing
-SQH() -> float { return 8.0 }     // checker squares around the equator
-SQV() -> float { return 6.0 }     // checker squares pole-to-pole
-SHADOW_DX() -> int { return 8 }   // shadow offset from the ball
-SHADOW_DY() -> int { return 64 }
+const CW: int = 640  // canvas px
+const CH: int = 480
+const RAD: int = 48  // BALL_RADIUS
+const GRID: int = 64  // grid line spacing
+const SQH: float = 8.0  // checker squares around the equator
+const SQV: float = 6.0  // checker squares pole-to-pole
+const SHADOW_DX: int = 8  // shadow offset from the ball
+const SHADOW_DY: int = 64
 
-PI()  -> float { return 3.14159265358979 }
-TAU() -> float { return 6.28318530717959 }
+const PI: float = 3.14159265358979
+const TAU: float = 6.28318530717959
 
 // ─── Physics state ────────────────────────────────────────────────────────────
 // Stepped each frame (gravity, bounce). x/y is the ball CENTRE in canvas px.
@@ -56,8 +56,8 @@ struct Ball {
 
 mk_ball() -> *Ball {
     b = malloc(40) as *Ball
-    b.x = RAD() * 1.0 + 50.0
-    b.y = RAD() * 1.0 + 50.0
+    b.x = RAD * 1.0 + 50.0
+    b.y = RAD * 1.0 + 50.0
     b.vx = 4.0
     b.vy = 0.0
     return b
@@ -66,11 +66,11 @@ mk_ball() -> *Ball {
 // One physics step: gravity, integrate, bounce off all four edges (matching the
 // original's fixed -22 bottom-bounce velocity).
 step(b: *Ball) {
-    r = RAD() * 1.0
+    r = RAD * 1.0
     b.vy = b.vy + 1.0                 // gravity
     b.x = b.x + b.vx
     b.y = b.y + b.vy
-    bottom = CH() * 1.0 - r
+    bottom = CH * 1.0 - r
     if b.y > bottom {
         b.y = bottom
         b.vy = -22.0
@@ -79,8 +79,8 @@ step(b: *Ball) {
         b.x = r
         b.vx = math.abs_float(b.vx)
     } else {
-        if b.x > CW() * 1.0 - r {
-            b.x = CW() * 1.0 - r
+        if b.x > CW * 1.0 - r {
+            b.x = CW * 1.0 - r
             b.vx = -math.abs_float(b.vx)
         }
     }
@@ -94,10 +94,10 @@ step(b: *Ball) {
 // Paints the whole 640×480 frame: background grid, shadow, then the ball. `t` is
 // the frame clock in seconds — the ball's spin is derived from it.
 paint(b: *Ball, buf: ptr, t: float) {
-    w = CW(); h = CH()
+    w = CW; h = CH
     paint_background(buf, w, h)
     bx = round_i(b.x); by = round_i(b.y)
-    paint_shadow(buf, w, h, bx + SHADOW_DX(), by + SHADOW_DY())
+    paint_shadow(buf, w, h, bx + SHADOW_DX, by + SHADOW_DY)
     paint_ball(buf, w, h, bx, by, t)
 }
 
@@ -106,14 +106,14 @@ paint_background(buf: ptr, w: int, h: int) {
     y = 0
     while y < h {
         on_hline = 0
-        if y % GRID() == 0 { on_hline = 1 }
+        if y % GRID == 0 { on_hline = 1 }
         x = 0
         while x < w {
             i = y * w + x
             if on_hline == 1 {
                 region.buf_set_px(buf, i, 100, 100, 100, 255)
             } else {
-                if x % GRID() == 0 {
+                if x % GRID == 0 {
                     region.buf_set_px(buf, i, 100, 100, 100, 255)
                 } else {
                     region.buf_set_px(buf, i, 0, 0, 0, 255)
@@ -128,7 +128,7 @@ paint_background(buf: ptr, w: int, h: int) {
 // Soft flattened ellipse shadow under the ball (half-height, blended toward
 // black). Centre (cx,cy) in canvas px.
 paint_shadow(buf: ptr, w: int, h: int, cx: int, cy: int) {
-    r = RAD()
+    r = RAD
     rx = r * 1.0
     ry = r * 0.5                       // flattened
     dy = 0 - r
@@ -156,10 +156,10 @@ paint_shadow(buf: ptr, w: int, h: int, cx: int, cy: int) {
 // circle, lift it onto the sphere (z), convert to spherical (phi/theta), spin
 // theta by the frame angle, pick the checker square, shade by depth.
 paint_ball(buf: ptr, w: int, h: int, cx: int, cy: int, t: float) {
-    r = RAD()
+    r = RAD
     rf = r * 1.0
     // one full rotation every ~1.6s (12 frames at 30fps in the original)
-    angle = frac(t / 1.6) * TAU()
+    angle = frac(t / 1.6) * TAU
     dy = 0 - r
     while dy <= r {
         dx = 0 - r
@@ -170,9 +170,9 @@ paint_ball(buf: ptr, w: int, h: int, cx: int, cy: int, t: float) {
                 if z > 0.0 {
                     phi = math.acos(dy * 1.0 / rf)
                     theta = math.atan2(dx * 1.0, z) + angle
-                    nt = fmod_pos(theta, TAU())
-                    sqh = floor_i(nt / TAU() * SQH())
-                    sqv = floor_i(phi / PI() * SQV())
+                    nt = fmod_pos(theta, TAU)
+                    sqh = floor_i(nt / TAU * SQH)
+                    sqv = floor_i(phi / PI * SQV)
                     is_white = 0
                     if (sqh + sqv) % 2 == 1 { is_white = 1 }
                     shade = 0.5 + 0.5 * (z / rf)
@@ -212,13 +212,13 @@ main() {
             bg = rect(0, 0, 640, 480) { fill("#000000") }
             // The whole scene is ONE raster region, repainted each frame: step
             // the physics, then paint background+shadow+ball into the buffer.
-            ball_region = video_region(root_of(bg), 0.0, 0.0, 640.0, 480.0, CW(), CH())
+            ball_region = video_region(root_of(bg), 0.0, 0.0, 640.0, 480.0, CW, CH)
             video_source(ball_region) callback |region: ptr, t: float| {
                 step(b)
-                buf = region.new_frame_buffer(CW(), CH())
+                buf = region.new_frame_buffer(CW, CH)
                 paint(b, buf, t)
-                frame = region.frame_finish(buf, CW(), CH())
-                region.region_push(region, frame, CW() * CH() * 4)
+                frame = region.frame_finish(buf, CW, CH)
+                region.region_push(region, frame, CW * CH * 4)
             }
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }

@@ -76,7 +76,7 @@ main() {
     // Initial shape geometry recorded?
     assert_eq_int("shape_type = circle",
                   element.element_shape_type(el),
-                  element.SHAPE_CIRCLE())
+                  element.SHAPE_CIRCLE)
     assert_near("geo0 (cx) = 50", element.element_geo0(el), 50.0)
     assert_near("geo1 (cy) = 50", element.element_geo1(el), 50.0)
     assert_near("geo2 (r) = 25",  element.element_geo2(el), 25.0)

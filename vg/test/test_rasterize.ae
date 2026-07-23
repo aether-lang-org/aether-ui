@@ -142,7 +142,7 @@ main() {
                                   "M 2 2 L 6 2 L 6 6 L 2 6 Z",
                                   0.0, 0.0,
                                   0, 0, 255, 255,
-                                  rasterize.FILL_NONZERO())
+                                  rasterize.FILL_NONZERO)
     // Centre of the rect should be blue.
     assert_eq_int("path-rect inside R", get_ch(buf4, 8, 4, 4, 0), 0)
     assert_eq_int("path-rect inside G", get_ch(buf4, 8, 4, 4, 1), 0)
@@ -162,7 +162,7 @@ main() {
                                   "M 0 0 L 10 0 L 10 10 L 0 10 Z M 3 3 L 3 7 L 7 7 L 7 3 Z",
                                   0.0, 0.0,
                                   0, 255, 0, 255,
-                                  rasterize.FILL_EVENODD())
+                                  rasterize.FILL_EVENODD)
     assert_eq_int("evenodd annulus inside (1,1) G", get_ch(buf5, 10, 1, 1, 1), 255)
     assert_eq_int("evenodd annulus hole (5,5) G",   get_ch(buf5, 10, 5, 5, 1), 0)
     bytes.free(buf5)
@@ -176,7 +176,7 @@ main() {
                                   "M 5 1 C 9 1 9 9 5 9 C 1 9 1 1 5 1 Z",
                                   0.0, 0.0,
                                   0, 0, 0, 255,
-                                  rasterize.FILL_NONZERO())
+                                  rasterize.FILL_NONZERO)
     assert_eq_int("cubic path centre A", get_ch(buf_cubic, 10, 5, 5, 3), 255)
     // Corner (0,0) should be empty.
     assert_eq_int("cubic path corner A", get_ch(buf_cubic, 10, 0, 0, 3), 0)

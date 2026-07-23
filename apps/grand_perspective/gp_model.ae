@@ -33,17 +33,17 @@ extern lrint(x: float) -> long           // round-to-nearest; narrows at an int 
 extern string_retain(s: string)          // keep a heap string alive in a struct field
 
 // ─── Pane geometry (viewBox units; the canvas viewBox is TOTAL_W x CANVAS_H) ──
-MAP_X() -> float    { return 8.0 }       // treemap area origin (list pane is
+const MAP_X: float = 8.0  // treemap area origin (list pane is
                                          // a WIDGET column now — item 4 D3)
-CANVAS_W() -> float { return 760.0 }     // treemap area width (canvas px)
-CANVAS_H() -> float { return 600.0 }
-LEGEND_X() -> float { return 776.0 }     // type-legend pane (right of the map)
-LEGEND_W() -> float { return 300.0 }
-TOTAL_W() -> float  { return 1076.0 }    // full canvas: treemap + legend
-TOP_TYPES() -> int  { return 12 }        // legend rows with their own colour
-LEG_TOP() -> float   { return 52.0 }
-LEG_ROW_H() -> float { return 27.0 }
-CRUMBS() -> int { return 8 }             // visible breadcrumb cap (deeper paths ellipsize)
+const CANVAS_W: float = 760.0  // treemap area width (canvas px)
+const CANVAS_H: float = 600.0
+const LEGEND_X: float = 776.0  // type-legend pane (right of the map)
+const LEGEND_W: float = 300.0
+const TOTAL_W: float = 1076.0  // full canvas: treemap + legend
+const TOP_TYPES: int = 12  // legend rows with their own colour
+const LEG_TOP: float = 52.0
+const LEG_ROW_H: float = 27.0
+const CRUMBS: int = 8  // visible breadcrumb cap (deeper paths ellipsize)
 
 // AETHER_UI_DEBUG=1 (the backend's own debug gate) also traces this app's
 // click routing: raw px → viewBox coords, double-click verdict, pane, hit

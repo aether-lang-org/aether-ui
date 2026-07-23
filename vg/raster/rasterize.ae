@@ -41,8 +41,8 @@ extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
 
 // Fill-rule sentinels (matches the TS string literals).
-FILL_NONZERO() -> int { return 0 }
-FILL_EVENODD() -> int { return 1 }
+const FILL_NONZERO: int = 0
+const FILL_EVENODD: int = 1
 
 // ─── RGBA struct + accessors ─────────────────────────────────────
 
@@ -290,7 +290,7 @@ mk_cell(v: int) -> *IntCell {
     return c
 }
 
-EDGES_CAP() -> int { return 16384 }   // 16k segments — generous for any practical path
+const EDGES_CAP: int = 16384  // 16k segments — generous for any practical path
 
 append_edge(edges: ptr, count: *IntCell, x1: float, y1: float, x2: float, y2: float) {
     i = count.v
@@ -363,7 +363,7 @@ path_to_edges(path_str: string, off_x: float, off_y: float, count_out: *IntCell)
 // Scaled variant: each coord maps v -> v*scale + off. Used by the shadow
 // rasterizer, which fills a path silhouette into a px-scaled buffer.
 path_to_edges_scaled(path_str: string, off_x: float, off_y: float, scale: float, count_out: *IntCell) -> ptr {
-    edges, _ = floatarr.new(EDGES_CAP())
+    edges, _ = floatarr.new(EDGES_CAP)
     count = mk_cell(0)
 
     // Tokenize: command letters [MLCZ] + their numeric args until next letter.
@@ -491,7 +491,7 @@ sort_crossings(cr: ptr, n: int) {
     }
 }
 
-CROSSINGS_CAP() -> int { return 1024 }   // up to 512 crossings per scanline
+const CROSSINGS_CAP: int = 1024  // up to 512 crossings per scanline
 
 // ─── fill_path_in_buffer ─────────────────────────────────────────
 
@@ -547,7 +547,7 @@ fill_path_in_buffer_scaled(buf: ptr, buf_w: int, buf_h: int,
     }
     n_edges = n_floats / 4
 
-    cr, _ = floatarr.new(CROSSINGS_CAP())
+    cr, _ = floatarr.new(CROSSINGS_CAP)
 
     y = 0
     while y < buf_h {
@@ -587,7 +587,7 @@ fill_path_in_buffer_scaled(buf: ptr, buf_w: int, buf_h: int,
         if n_cross == 0 { y = y + 1; continue }
         sort_crossings(cr, n_cross)
 
-        if fill_rule == FILL_EVENODD() {
+        if fill_rule == FILL_EVENODD {
             i = 0
             while i + 1 < n_cross {
                 x0i = math.clamp_int(fround(floatarr.get_unchecked(cr, i * 2)), 0, buf_w)

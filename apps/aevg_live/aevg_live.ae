@@ -23,10 +23,10 @@ import std.math
 import std.os
 import std.os (os_getenv)
 
-CX() -> float { return 50.0 }   // cube centre (viewBox space)
-CY() -> float { return 50.0 }
-SC() -> float { return 22.0 }   // projected scale
-DIST() -> float { return 3.0 }  // perspective camera distance (in cube units)
+const CX: float = 50.0  // cube centre (viewBox space)
+const CY: float = 50.0
+const SC: float = 22.0  // projected scale
+const DIST: float = 3.0  // perspective camera distance (in cube units)
 
 main() {
     window("AeVG — tumbling cube over live raster", 420, 420) {
@@ -107,8 +107,8 @@ proj_x(i: int, ax: float, ay: float) -> float {
     // rotate around X
     z2 = z1 * math.cos(ax) - y * math.sin(ax)
     // perspective
-    f = SC() / (DIST() - z2)
-    return CX() + x1 * f
+    f = SC / (DIST - z2)
+    return CX + x1 * f
 }
 
 proj_y(i: int, ax: float, ay: float) -> float {
@@ -118,8 +118,8 @@ proj_y(i: int, ax: float, ay: float) -> float {
     z1 = z * math.cos(ay) - x * math.sin(ay)
     y1 = y * math.cos(ax) + z1 * math.sin(ax)
     z2 = z1 * math.cos(ax) - y * math.sin(ax)
-    f = SC() / (DIST() - z2)
-    return CY() + y1 * f
+    f = SC / (DIST - z2)
+    return CY + y1 * f
 }
 
 // ─── plasma raster source ────────────────────────────────────────

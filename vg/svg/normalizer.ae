@@ -49,26 +49,26 @@ extern malloc(size: int) -> ptr
 //
 // Used as the `type` field everywhere. Function-constants so they
 // inline; see math.pi() / deg_to_rad() for the same pattern.
-M_CHAR() -> int { return 77 }   // 'M'
-m_CHAR() -> int { return 109 }  // 'm'
-L_CHAR() -> int { return 76 }   // 'L'
-l_CHAR() -> int { return 108 }  // 'l'
-H_CHAR() -> int { return 72 }   // 'H'
-h_CHAR() -> int { return 104 }  // 'h'
-V_CHAR() -> int { return 86 }   // 'V'
-v_CHAR() -> int { return 118 }  // 'v'
-C_CHAR() -> int { return 67 }   // 'C'
-c_CHAR() -> int { return 99 }   // 'c'
-S_CHAR() -> int { return 83 }   // 'S'
-s_CHAR() -> int { return 115 }  // 's'
-Q_CHAR() -> int { return 81 }   // 'Q'
-q_CHAR() -> int { return 113 }  // 'q'
-T_CHAR() -> int { return 84 }   // 'T'
-t_CHAR() -> int { return 116 }  // 't'
-A_CHAR() -> int { return 65 }   // 'A'
-a_CHAR() -> int { return 97 }   // 'a'
-Z_CHAR() -> int { return 90 }   // 'Z'
-z_CHAR() -> int { return 122 }  // 'z'
+const M_CHAR: int = 77  // 'M'
+const m_CHAR: int = 109  // 'm'
+const L_CHAR: int = 76  // 'L'
+const l_CHAR: int = 108  // 'l'
+const H_CHAR: int = 72  // 'H'
+const h_CHAR: int = 104  // 'h'
+const V_CHAR: int = 86  // 'V'
+const v_CHAR: int = 118  // 'v'
+const C_CHAR: int = 67  // 'C'
+const c_CHAR: int = 99  // 'c'
+const S_CHAR: int = 83  // 'S'
+const s_CHAR: int = 115  // 's'
+const Q_CHAR: int = 81  // 'Q'
+const q_CHAR: int = 113  // 'q'
+const T_CHAR: int = 84  // 'T'
+const t_CHAR: int = 116  // 't'
+const A_CHAR: int = 65  // 'A'
+const a_CHAR: int = 97  // 'a'
+const Z_CHAR: int = 90  // 'Z'
+const z_CHAR: int = 122  // 'z'
 
 // Map any command char to its uppercase counterpart.
 to_upper_cmd(c: int) -> int {
@@ -81,31 +81,31 @@ to_upper_cmd(c: int) -> int {
 // Returns 1 if `c` is the lowercase form of a path command (relative),
 // 0 otherwise. Z/z are NOT considered relative (no coords to relate to).
 is_relative(c: int) -> int {
-    if c == m_CHAR() { return 1 }
-    if c == l_CHAR() { return 1 }
-    if c == h_CHAR() { return 1 }
-    if c == v_CHAR() { return 1 }
-    if c == c_CHAR() { return 1 }
-    if c == s_CHAR() { return 1 }
-    if c == q_CHAR() { return 1 }
-    if c == t_CHAR() { return 1 }
-    if c == a_CHAR() { return 1 }
+    if c == m_CHAR { return 1 }
+    if c == l_CHAR { return 1 }
+    if c == h_CHAR { return 1 }
+    if c == v_CHAR { return 1 }
+    if c == c_CHAR { return 1 }
+    if c == s_CHAR { return 1 }
+    if c == q_CHAR { return 1 }
+    if c == t_CHAR { return 1 }
+    if c == a_CHAR { return 1 }
     return 0
 }
 
 // Number of numeric parameters each command consumes. -1 for unknown.
 param_count(c: int) -> int {
     abs = to_upper_cmd(c)
-    if abs == M_CHAR() { return 2 }
-    if abs == L_CHAR() { return 2 }
-    if abs == H_CHAR() { return 1 }
-    if abs == V_CHAR() { return 1 }
-    if abs == C_CHAR() { return 6 }
-    if abs == S_CHAR() { return 4 }
-    if abs == Q_CHAR() { return 4 }
-    if abs == T_CHAR() { return 2 }
-    if abs == A_CHAR() { return 7 }
-    if abs == Z_CHAR() { return 0 }
+    if abs == M_CHAR { return 2 }
+    if abs == L_CHAR { return 2 }
+    if abs == H_CHAR { return 1 }
+    if abs == V_CHAR { return 1 }
+    if abs == C_CHAR { return 6 }
+    if abs == S_CHAR { return 4 }
+    if abs == Q_CHAR { return 4 }
+    if abs == T_CHAR { return 2 }
+    if abs == A_CHAR { return 7 }
+    if abs == Z_CHAR { return 0 }
     return 0 - 1
 }
 
@@ -202,15 +202,15 @@ parse_path(d: string) -> ptr {
             i = i + 1
 
             // Z / z: zero-arg, emit immediately.
-            if current_cmd == Z_CHAR() {
+            if current_cmd == Z_CHAR {
                 empty_args = new_args(0)
-                list.add(out, mk_path_cmd(Z_CHAR(), empty_args))
+                list.add(out, mk_path_cmd(Z_CHAR, empty_args))
                 current_cmd = 0 - 1
                 continue
             }
-            if current_cmd == z_CHAR() {
+            if current_cmd == z_CHAR {
                 empty_args = new_args(0)
-                list.add(out, mk_path_cmd(z_CHAR(), empty_args))
+                list.add(out, mk_path_cmd(z_CHAR, empty_args))
                 current_cmd = 0 - 1
                 continue
             }
@@ -257,8 +257,8 @@ parse_path(d: string) -> ptr {
         list.add(out, mk_path_cmd(current_cmd, args))
 
         // After M/m, implicit subsequent coord pairs are L/l.
-        if current_cmd == M_CHAR() { current_cmd = L_CHAR() }
-        if current_cmd == m_CHAR() { current_cmd = l_CHAR() }
+        if current_cmd == M_CHAR { current_cmd = L_CHAR }
+        if current_cmd == m_CHAR { current_cmd = l_CHAR }
     }
 
     regex.find_all_free(fa)
@@ -333,34 +333,34 @@ normalize_commands(cmds: ptr) -> ptr {
         abs = to_upper_cmd(ty)
         args = cmd.args
 
-        if abs == M_CHAR() {
+        if abs == M_CHAR {
             x = fa_get(args, 0)
             y = fa_get(args, 1)
             if rel == 1 { x = st.cx + x; y = st.cy + y }
-            list.add(out, mk_norm_cmd(M_CHAR(), emit_args2(x, y)))
+            list.add(out, mk_norm_cmd(M_CHAR, emit_args2(x, y)))
             st.cx = x; st.cy = y
             st.sx = x; st.sy = y
         }
-        if abs == L_CHAR() {
+        if abs == L_CHAR {
             x = fa_get(args, 0)
             y = fa_get(args, 1)
             if rel == 1 { x = st.cx + x; y = st.cy + y }
-            list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(x, y)))
+            list.add(out, mk_norm_cmd(L_CHAR, emit_args2(x, y)))
             st.cx = x; st.cy = y
         }
-        if abs == H_CHAR() {
+        if abs == H_CHAR {
             x = fa_get(args, 0)
             if rel == 1 { x = st.cx + x }
-            list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(x, st.cy)))
+            list.add(out, mk_norm_cmd(L_CHAR, emit_args2(x, st.cy)))
             st.cx = x
         }
-        if abs == V_CHAR() {
+        if abs == V_CHAR {
             y = fa_get(args, 0)
             if rel == 1 { y = st.cy + y }
-            list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(st.cx, y)))
+            list.add(out, mk_norm_cmd(L_CHAR, emit_args2(st.cx, y)))
             st.cy = y
         }
-        if abs == C_CHAR() {
+        if abs == C_CHAR {
             ox = 0.0
             oy = 0.0
             if rel == 1 { ox = st.cx; oy = st.cy }
@@ -370,20 +370,20 @@ normalize_commands(cmds: ptr) -> ptr {
             cp2y = oy + fa_get(args, 3)
             x = ox + fa_get(args, 4)
             y = oy + fa_get(args, 5)
-            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            list.add(out, mk_norm_cmd(C_CHAR, emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
             st.last_cp2x = cp2x; st.last_cp2y = cp2y
             st.cx = x; st.cy = y
         }
-        if abs == S_CHAR() {
+        if abs == S_CHAR {
             // Reflect previous cp2 through current point, if previous was C/S.
             cp1x = st.cx
             cp1y = st.cy
             prev = to_upper_cmd(st.last_cmd)
-            if prev == C_CHAR() {
+            if prev == C_CHAR {
                 cp1x = 2.0 * st.cx - st.last_cp2x
                 cp1y = 2.0 * st.cy - st.last_cp2y
             }
-            if prev == S_CHAR() {
+            if prev == S_CHAR {
                 cp1x = 2.0 * st.cx - st.last_cp2x
                 cp1y = 2.0 * st.cy - st.last_cp2y
             }
@@ -394,11 +394,11 @@ normalize_commands(cmds: ptr) -> ptr {
             cp2y = oy + fa_get(args, 1)
             x = ox + fa_get(args, 2)
             y = oy + fa_get(args, 3)
-            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            list.add(out, mk_norm_cmd(C_CHAR, emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
             st.last_cp2x = cp2x; st.last_cp2y = cp2y
             st.cx = x; st.cy = y
         }
-        if abs == Q_CHAR() {
+        if abs == Q_CHAR {
             // Quadratic → cubic: cp1 = current + 2/3 (qcp - current),
             //                    cp2 = end     + 2/3 (qcp - end).
             ox = 0.0
@@ -413,21 +413,21 @@ normalize_commands(cmds: ptr) -> ptr {
             cp1y = st.cy + two_thirds * (qy - st.cy)
             cp2x = x + two_thirds * (qx - x)
             cp2y = y + two_thirds * (qy - y)
-            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            list.add(out, mk_norm_cmd(C_CHAR, emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
             st.last_qx = qx; st.last_qy = qy
             st.last_cp2x = cp2x; st.last_cp2y = cp2y
             st.cx = x; st.cy = y
         }
-        if abs == T_CHAR() {
+        if abs == T_CHAR {
             // Smooth quadratic: reflect previous Q cp through current.
             qx = st.cx
             qy = st.cy
             prev = to_upper_cmd(st.last_cmd)
-            if prev == Q_CHAR() {
+            if prev == Q_CHAR {
                 qx = 2.0 * st.cx - st.last_qx
                 qy = 2.0 * st.cy - st.last_qy
             }
-            if prev == T_CHAR() {
+            if prev == T_CHAR {
                 qx = 2.0 * st.cx - st.last_qx
                 qy = 2.0 * st.cy - st.last_qy
             }
@@ -441,11 +441,11 @@ normalize_commands(cmds: ptr) -> ptr {
             cp1y = st.cy + two_thirds * (qy - st.cy)
             cp2x = x + two_thirds * (qx - x)
             cp2y = y + two_thirds * (qy - y)
-            list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
+            list.add(out, mk_norm_cmd(C_CHAR, emit_args6(cp1x, cp1y, cp2x, cp2y, x, y)))
             st.last_qx = qx; st.last_qy = qy
             st.cx = x; st.cy = y
         }
-        if abs == A_CHAR() {
+        if abs == A_CHAR {
             ox = 0.0
             oy = 0.0
             if rel == 1 { ox = st.cx; oy = st.cy }
@@ -459,11 +459,11 @@ normalize_commands(cmds: ptr) -> ptr {
 
             // Degenerate: zero radius → straight line.
             if rx == 0.0 {
-                list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(ex, ey)))
+                list.add(out, mk_norm_cmd(L_CHAR, emit_args2(ex, ey)))
                 st.cx = ex; st.cy = ey
             } else {
                 if ry == 0.0 {
-                    list.add(out, mk_norm_cmd(L_CHAR(), emit_args2(ex, ey)))
+                    list.add(out, mk_norm_cmd(L_CHAR, emit_args2(ex, ey)))
                     st.cx = ex; st.cy = ey
                 } else {
                     // Zero-length arc: skip entirely.
@@ -480,8 +480,8 @@ normalize_commands(cmds: ptr) -> ptr {
                 }
             }
         }
-        if abs == Z_CHAR() {
-            list.add(out, mk_norm_cmd(Z_CHAR(), new_args(0)))
+        if abs == Z_CHAR {
+            list.add(out, mk_norm_cmd(Z_CHAR, new_args(0)))
             st.cx = st.sx; st.cy = st.sy
         }
 
@@ -545,7 +545,7 @@ arc_segment_emit(out: ptr, cx: float, cy: float,
     cp2x = p2x - alpha * d2x
     cp2y = p2y - alpha * d2y
 
-    list.add(out, mk_norm_cmd(C_CHAR(), emit_args6(cp1x, cp1y, cp2x, cp2y, p2x, p2y)))
+    list.add(out, mk_norm_cmd(C_CHAR, emit_args6(cp1x, cp1y, cp2x, cp2y, p2x, p2y)))
 }
 
 // SVG arc → 1..N cubic Béziers, emitted into `out`.

@@ -33,15 +33,15 @@ import std.intarr
 extern malloc(size: int) -> ptr
 
 // ─── Board / geometry constants ──────────────────────────────────────────────
-BOARD_W() -> int   { return 10 }
-BOARD_H() -> int   { return 20 }
-CELLS()   -> int   { return 200 }            // BOARD_W * BOARD_H
-DROP_SEC() -> float { return 0.6 }           // base gravity interval (seconds)
+const BOARD_W: int = 10
+const BOARD_H: int = 20
+const CELLS: int = 200  // BOARD_W * BOARD_H
+const DROP_SEC: float = 0.6  // base gravity interval (seconds)
 
 // ─── Tetromino tables ────────────────────────────────────────────────────────
 // 7 shapes × 4 rotations × 4 blocks × (col,row), flat in an intarr. shape -1
 // marks "no piece".
-SHAPE_STRIDE() -> int { return 32 }          // 4 rot * 4 blk * 2
+const SHAPE_STRIDE: int = 32  // 4 rot * 4 blk * 2
 
 set_block(arr: ptr, s: int, rot: int, blk: int, col: int, row: int) {
     base = (s * 4 + rot) * 4 * 2 + blk * 2
@@ -56,7 +56,7 @@ set_rot(arr: ptr, s: int, rot: int, c0: int, r0: int, c1: int, r1: int, c2: int,
 }
 
 build_shapes() -> ptr {
-    arr, _err = intarr.new(7 * SHAPE_STRIDE())
+    arr, _err = intarr.new(7 * SHAPE_STRIDE)
     fill_shapes(arr)
     return arr
 }
@@ -136,7 +136,7 @@ struct Game {
 
 mk_game() -> *Game {
     g = malloc(96) as *Game
-    arr, _e = intarr.new_filled(CELLS(), -1)
+    arr, _e = intarr.new_filled(CELLS, -1)
     g.board = arr
     g.shapes = build_shapes()
     g.cur_shape = -1
@@ -153,10 +153,10 @@ mk_game() -> *Game {
 }
 
 board_get(g: *Game, col: int, row: int) -> int {
-    return intarr_get_unchecked(g.board, row * BOARD_W() + col)
+    return intarr_get_unchecked(g.board, row * BOARD_W + col)
 }
 board_set(g: *Game, col: int, row: int, v: int) {
-    intarr_set_unchecked(g.board, row * BOARD_W() + col, v)
+    intarr_set_unchecked(g.board, row * BOARD_W + col, v)
 }
 
 // Does the CURRENT shape in rotation `rot` at (col,row) collide?
@@ -168,8 +168,8 @@ collides(g: *Game, col: int, row: int, rot: int) -> int {
         nc = col + bc
         nr = row + br
         if nc < 0 { return 1 }
-        if nc >= BOARD_W() { return 1 }
-        if nr >= BOARD_H() { return 1 }
+        if nc >= BOARD_W { return 1 }
+        if nr >= BOARD_H { return 1 }
         if nr >= 0 {
             if board_get(g, nc, nr) >= 0 { return 1 }
         }
@@ -238,9 +238,9 @@ lock_piece(g: *Game) {
         col = g.cur_col + bc
         row = g.cur_row + br
         if row >= 0 {
-            if row < BOARD_H() {
+            if row < BOARD_H {
                 if col >= 0 {
-                    if col < BOARD_W() { board_set(g, col, row, g.cur_shape) }
+                    if col < BOARD_W { board_set(g, col, row, g.cur_shape) }
                 }
             }
         }
@@ -253,7 +253,7 @@ lock_piece(g: *Game) {
 // Is board row `row` completely filled?
 row_full(g: *Game, row: int) -> int {
     col = 0
-    while col < BOARD_W() {
+    while col < BOARD_W {
         if board_get(g, col, row) < 0 { return 0 }
         col = col + 1
     }
@@ -261,19 +261,19 @@ row_full(g: *Game, row: int) -> int {
 }
 copy_row(g: *Game, dst: int, src: int) {
     col = 0
-    while col < BOARD_W() {
+    while col < BOARD_W {
         board_set(g, col, dst, board_get(g, col, src))
         col = col + 1
     }
 }
 clear_row_top(g: *Game) {
     col = 0
-    while col < BOARD_W() { board_set(g, col, 0, -1); col = col + 1 }
+    while col < BOARD_W { board_set(g, col, 0, -1); col = col + 1 }
 }
 
 clear_lines(g: *Game) {
     cleared = 0
-    row = BOARD_H() - 1
+    row = BOARD_H - 1
     while row >= 0 {
         if row_full(g, row) == 1 {
             r = row
@@ -317,7 +317,7 @@ toggle_pause(g: *Game) {
 // Gravity interval (seconds) at the current level — shared by tick (when to
 // step) and the renderer (how far through the step we are, for smooth descent).
 current_interval(g: *Game) -> float {
-    interval = DROP_SEC() - (g.level - 1) * 0.06
+    interval = DROP_SEC - (g.level - 1) * 0.06
     if interval < 0.12 { interval = 0.12 }
     return interval
 }

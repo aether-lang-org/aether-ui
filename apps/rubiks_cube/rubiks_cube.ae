@@ -33,10 +33,10 @@ extern lrint(x: float) -> long
 extern aether_ui_text_set_string(handle: int, text: string)
 
 // ─── Isometric projection ─────────────────────────────────────────────────────
-ISO_COS() -> float { return 0.86602540378 }   // cos(30°)
-ISO_SIN() -> float { return 0.5 }              // sin(30°)
-proj_x(x: float, z: float, cx: float) -> float { return cx + (x - z) * ISO_COS() }
-proj_y(x: float, y: float, z: float, cy: float) -> float { return cy - y + (x + z) * ISO_SIN() }
+const ISO_COS: float = 0.86602540378  // cos(30°)
+const ISO_SIN: float = 0.5  // sin(30°)
+proj_x(x: float, z: float, cx: float) -> float { return cx + (x - z) * ISO_COS }
+proj_y(x: float, y: float, z: float, cy: float) -> float { return cy - y + (x + z) * ISO_SIN }
 
 // ─── App-side view state (drag + UI handles the engine doesn't know about) ────
 struct View {
@@ -65,9 +65,9 @@ mk_view() -> *View {
 // ─── Gesture → rotation (faithful to GestureController) ───────────────────────
 // dir: 0=N 1=S 2=E 3=W. Only Front/Up/Right faces are swipeable (the visible 3).
 handle_swipe(c: *Cube, face: int, row: int, col: int, dir: int) {
-    if face == F() { swipe_front(c, row, col, dir); return }
-    if face == U() { swipe_up(c, row, col, dir); return }
-    if face == R() { swipe_right(c, row, col, dir); return }
+    if face == F { swipe_front(c, row, col, dir); return }
+    if face == U { swipe_up(c, row, col, dir); return }
+    if face == R { swipe_right(c, row, col, dir); return }
 }
 inv(x: int) -> int { if x == 1 { return 0 } return 1 }
 
@@ -75,14 +75,14 @@ swipe_front(c: *Cube, row: int, col: int, dir: int) {
     if dir == 2 || dir == 3 {
         cw = 0
         if dir == 3 { cw = 1 }                 // W → cw
-        if row == 0 { rotate_side(c, U(), cw) }
-        else { if row == 2 { rotate_side(c, D(), inv(cw)) }
+        if row == 0 { rotate_side(c, U, cw) }
+        else { if row == 2 { rotate_side(c, D, inv(cw)) }
                else { do_e_slice(c, inv(cw)) } }
     } else {
         cw = 0
         if dir == 1 { cw = 1 }                 // S → cw
-        if col == 0 { rotate_side(c, L(), cw) }
-        else { if col == 2 { rotate_side(c, R(), inv(cw)) }
+        if col == 0 { rotate_side(c, L, cw) }
+        else { if col == 2 { rotate_side(c, R, inv(cw)) }
                else { do_m_slice(c, inv(cw)) } }
     }
 }
@@ -91,14 +91,14 @@ swipe_up(c: *Cube, row: int, col: int, dir: int) {
     if dir == 2 || dir == 3 {
         cw = 0
         if dir == 2 { cw = 1 }                 // E → cw
-        if row == 0 { rotate_side(c, B(), inv(cw)) }
-        else { if row == 2 { rotate_side(c, F(), cw) }
+        if row == 0 { rotate_side(c, B, inv(cw)) }
+        else { if row == 2 { rotate_side(c, F, cw) }
                else { do_s_slice(c, cw) } }
     } else {
         cw = 0
         if dir == 1 { cw = 1 }                 // S → cw
-        if col == 0 { rotate_side(c, L(), cw) }
-        else { if col == 2 { rotate_side(c, R(), inv(cw)) }
+        if col == 0 { rotate_side(c, L, cw) }
+        else { if col == 2 { rotate_side(c, R, inv(cw)) }
                else { do_m_slice(c, inv(cw)) } }
     }
 }
@@ -107,14 +107,14 @@ swipe_right(c: *Cube, row: int, col: int, dir: int) {
     if dir == 2 || dir == 3 {
         cw = 0
         if dir == 3 { cw = 1 }                 // W → cw
-        if row == 0 { rotate_side(c, U(), cw) }
-        else { if row == 2 { rotate_side(c, D(), inv(cw)) }
+        if row == 0 { rotate_side(c, U, cw) }
+        else { if row == 2 { rotate_side(c, D, inv(cw)) }
                else { do_e_slice(c, inv(cw)) } }
     } else {
         cw = 0
         if dir == 1 { cw = 1 }                 // S → cw
-        if col == 0 { rotate_side(c, F(), cw) }
-        else { if col == 2 { rotate_side(c, B(), inv(cw)) }
+        if col == 0 { rotate_side(c, F, cw) }
+        else { if col == 2 { rotate_side(c, B, inv(cw)) }
                else { do_s_slice(c, cw) } }
     }
 }
@@ -150,18 +150,18 @@ swipe_dir_face(face: int, row: int, col: int, dx: float, dy: float) -> int {
 }
 
 // ─── Layout geometry (shared by render + hit-test) ────────────────────────────
-CANVAS() -> float { return 460.0 }
-HALF()   -> float { return CANVAS() / 4.0 }          // 115
+const CANVAS: float = 460.0
+HALF()   -> float { return CANVAS / 4.0 }          // 115
 CELLF()  -> float { return HALF() * 2.0 / 3.0 }      // ~76.7
-CXF()    -> float { return CANVAS() / 2.0 }
-CYF()    -> float { return CANVAS() / 2.0 }
+CXF()    -> float { return CANVAS / 2.0 }
+CYF()    -> float { return CANVAS / 2.0 }
 
 // The four screen corners of cell (face,row,col), written into a floatarr-free
 // 8-slot return is impossible (no float tuples), so callers use quad_pt below.
 // quad_pt(face,row,col, k) -> (sx, sy) for corner k (0..3, CCW from a base).
 quad_pt(face: int, row: int, col: int, k: int) -> (float, float) {
     half = HALF(); cellf = CELLF(); cx = CXF(); cy = CYF()
-    if face == U() {
+    if face == U {
         x0 = col * 1.0 * cellf - half
         z0 = row * 1.0 * cellf - half
         if k == 0 { return proj_x(x0, z0, cx), proj_y(x0, half, z0, cy) }
@@ -169,7 +169,7 @@ quad_pt(face: int, row: int, col: int, k: int) -> (float, float) {
         if k == 2 { return proj_x(x0 + cellf, z0 + cellf, cx), proj_y(x0 + cellf, half, z0 + cellf, cy) }
         return proj_x(x0, z0 + cellf, cx), proj_y(x0, half, z0 + cellf, cy)
     }
-    if face == F() {
+    if face == F {
         x0 = col * 1.0 * cellf - half
         y0 = half - row * 1.0 * cellf
         if k == 0 { return proj_x(x0, half, cx), proj_y(x0, y0, half, cy) }
@@ -211,9 +211,9 @@ round_i(v: float) -> int { return lrint(v) }
 hit_cell(px: float, py: float) -> (int, int, int) {
     face = 0
     while face < 3 {
-        fidx = U()
-        if face == 1 { fidx = F() }
-        if face == 2 { fidx = R() }
+        fidx = U
+        if face == 1 { fidx = F }
+        if face == 2 { fidx = R }
         row = 0
         while row < 3 {
             col = 0
@@ -254,15 +254,15 @@ cross_sign(ax: float, ay: float, bx: float, by: float, px: float, py: float) -> 
 
 // ─── Rendering ────────────────────────────────────────────────────────────
 draw_cube(rn: ptr, c: *Cube, show_legend: int) {
-    bg = vg.rect(rn, 0.0, 0.0, CANVAS(), CANVAS())
+    bg = vg.rect(rn, 0.0, 0.0, CANVAS, CANVAS)
     vg.fill(bg, "#1e1e1e")
-    draw_face(rn, c, U())
-    draw_face(rn, c, F())
-    draw_face(rn, c, R())
+    draw_face(rn, c, U)
+    draw_face(rn, c, F)
+    draw_face(rn, c, R)
     if show_legend == 1 {
-        draw_legend(rn, c, U())
-        draw_legend(rn, c, F())
-        draw_legend(rn, c, R())
+        draw_legend(rn, c, U)
+        draw_legend(rn, c, F)
+        draw_legend(rn, c, R)
     }
 }
 

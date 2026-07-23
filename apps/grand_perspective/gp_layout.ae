@@ -27,10 +27,10 @@ import gp_model (FileEntry, to_float, sort_desc_by_size)
 
 extern malloc(size: int) -> ptr
 
-MIN_TILE_AREA() -> float { return 2.0 }  // px²: tiles projecting smaller are dropped
-MIN_NEST_AREA() -> float { return 120.0 } // px²: dir tiles smaller don't nest deeper
-NEST_INSET() -> float { return 2.0 }     // px ring of parent visible around children
-RECT_BUDGET() -> int { return 4000 }     // global cap on laid rects per view
+const MIN_TILE_AREA: float = 2.0  // px²: tiles projecting smaller are dropped
+const MIN_NEST_AREA: float = 120.0  // px²: dir tiles smaller don't nest deeper
+const NEST_INSET: float = 2.0  // px ring of parent visible around children
+const RECT_BUDGET: int = 4000  // global cap on laid rects per view
 
 // Layout context threaded through the recursive treemap: a global rect
 // budget so a huge tree can't lay an unbounded node count per view.
@@ -83,7 +83,7 @@ layout_treemap(ctx: *LayoutCtx, out: ptr, x: float, y: float, w: float, h: float
     while i < ni {
         it, _ = list.get(items, i)
         e = it as *FileEntry
-        if to_float(e.total_size) * unit0 >= MIN_TILE_AREA() {
+        if to_float(e.total_size) * unit0 >= MIN_TILE_AREA {
             _ = list.add(work, e)
             total = total + e.total_size
         }
@@ -185,10 +185,10 @@ lay_band(ctx: *LayoutCtx, out: ptr, work: ptr, s: int, cnt: int, area_unit: floa
             _ = list.add(out, nr)
             ctx.remaining = ctx.remaining - 1
             if e.is_dir == 1 {
-                ins = NEST_INSET()
+                ins = NEST_INSET
                 iw = tw - 2.0 * ins
                 ih = th - 2.0 * ins
-                if iw * ih >= MIN_NEST_AREA() {
+                if iw * ih >= MIN_NEST_AREA {
                     if list.size(e.children) > 0 { nr.nested = 1 }
                     layout_treemap(ctx, out, cx + ins, cy + ins, iw, ih, e.children, depth + 1)
                 }

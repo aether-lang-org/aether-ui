@@ -23,7 +23,7 @@ extern println(s: string)
 exports ( cover_bytes, DEFAULT_COVER_PATH )
 
 // The bundled cover shown until real extraction lands.
-DEFAULT_COVER_PATH() -> string { return "apps/LisMusic/assets_cover.png" }
+const DEFAULT_COVER_PATH: string = "apps/LisMusic/assets_cover.png"
 
 // Cover art for `audio_path` as (bytes, length) — feed to ui.image_from_bytes.
 // STUB half: returns the bundled cover's bytes, not the song's embedded art
@@ -31,7 +31,7 @@ DEFAULT_COVER_PATH() -> string { return "apps/LisMusic/assets_cover.png" }
 // PNG that image_from_bytes decodes with no temp file.
 cover_bytes(audio_path: string) -> (string, int) {
     _ = audio_path   // ignored until an extractor lands
-    data, n, err = fs.read_binary(DEFAULT_COVER_PATH())
+    data, n, err = fs.read_binary(DEFAULT_COVER_PATH)
     if err != "" {
         println("[lis_cover] cover read failed: ${err}")
         return "", 0

@@ -39,11 +39,11 @@ extern malloc(size: int) -> ptr
 extern aether_ui_text_set_string(handle: int, text: string)
 
 // ─── Layout (viewBox px) ─────────────────────────────────────────────────────
-BLOCK() -> float { return 24.0 }
-BX() -> float { return 2.0 }              // board origin
-BY() -> float { return 2.0 }
-PX() -> float { return 282.0 }            // preview panel left
-PY() -> float { return 2.0 }
+const BLOCK: float = 24.0
+const BX: float = 2.0  // board origin
+const BY: float = 2.0
+const PX: float = 282.0  // preview panel left
+const PY: float = 2.0
 
 // The same-index colour dimmed ~0.35 — the ghost/landing preview.
 ghost_color(s: int) -> string {
@@ -88,30 +88,30 @@ refresh_labels(g: *Game, v: *View) {
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
 draw_cell_px(rn: ptr, x: float, y: float, color: string) {
-    border = vg.rect(rn, x, y, BLOCK(), BLOCK())
+    border = vg.rect(rn, x, y, BLOCK, BLOCK)
     vg.fill(border, "rgb(34,34,34)")
-    inner = vg.rect(rn, x + 1.0, y + 1.0, BLOCK() - 2.0, BLOCK() - 2.0)
+    inner = vg.rect(rn, x + 1.0, y + 1.0, BLOCK - 2.0, BLOCK - 2.0)
     vg.fill(inner, color)
 }
 
 draw_board(rn: ptr, g: *Game) {
-    bw = COLS() * 1.0 * BLOCK()
-    bh = ROWS() * 1.0 * BLOCK()
+    bw = COLS * 1.0 * BLOCK
+    bh = ROWS * 1.0 * BLOCK
 
     // Board border + background.
-    brd = vg.rect(rn, BX() - 2.0, BY() - 2.0, bw + 4.0, bh + 4.0)
+    brd = vg.rect(rn, BX - 2.0, BY - 2.0, bw + 4.0, bh + 4.0)
     vg.fill(brd, "rgb(85,85,85)")
-    bg = vg.rect(rn, BX(), BY(), bw, bh)
+    bg = vg.rect(rn, BX, BY, bw, bh)
     vg.fill(bg, "rgb(17,17,17)")
 
     // Locked cells.
     row = 0
-    while row < ROWS() {
+    while row < ROWS {
         col = 0
-        while col < COLS() {
+        while col < COLS {
             v = board_get(g, col, row)
             if v >= 0 {
-                draw_cell_px(rn, BX() + col * 1.0 * BLOCK(), BY() + row * 1.0 * BLOCK(), shape_color(v))
+                draw_cell_px(rn, BX + col * 1.0 * BLOCK, BY + row * 1.0 * BLOCK, shape_color(v))
             }
             col = col + 1
         }
@@ -129,7 +129,7 @@ draw_board(rn: ptr, g: *Game) {
                 c = g.cur_x + bc
                 r = gy + br
                 if r >= 0 {
-                    draw_cell_px(rn, BX() + c * 1.0 * BLOCK(), BY() + r * 1.0 * BLOCK(), gcol)
+                    draw_cell_px(rn, BX + c * 1.0 * BLOCK, BY + r * 1.0 * BLOCK, gcol)
                 }
                 blk = blk + 1
             }
@@ -142,24 +142,24 @@ draw_board(rn: ptr, g: *Game) {
             c = g.cur_x + bc
             r = g.cur_y + br
             if r >= 0 {
-                draw_cell_px(rn, BX() + c * 1.0 * BLOCK(), BY() + r * 1.0 * BLOCK(), color)
+                draw_cell_px(rn, BX + c * 1.0 * BLOCK, BY + r * 1.0 * BLOCK, color)
             }
             blk = blk + 1
         }
     }
 
     // Preview panel: border + background + the next piece.
-    pw = 4.0 * BLOCK()
-    pbrd = vg.rect(rn, PX() - 2.0, PY() - 2.0, pw + 4.0, pw + 4.0)
+    pw = 4.0 * BLOCK
+    pbrd = vg.rect(rn, PX - 2.0, PY - 2.0, pw + 4.0, pw + 4.0)
     vg.fill(pbrd, "rgb(85,85,85)")
-    pbg = vg.rect(rn, PX(), PY(), pw, pw)
+    pbg = vg.rect(rn, PX, PY, pw, pw)
     vg.fill(pbg, "rgb(17,17,17)")
     if g.next_shape >= 0 {
         ncol = shape_color(g.next_shape)
         blk = 0
         while blk < 4 {
             bc, br = get_block(g.shapes, g.next_shape, g.next_orient, blk)
-            draw_cell_px(rn, PX() + bc * 1.0 * BLOCK(), PY() + br * 1.0 * BLOCK(), ncol)
+            draw_cell_px(rn, PX + bc * 1.0 * BLOCK, PY + br * 1.0 * BLOCK, ncol)
             blk = blk + 1
         }
     }
@@ -203,9 +203,9 @@ handle_key(g: *Game, key: string) {
 // Tap: left / centre / right thirds of the BOARD (x already unmapped px→viewBox).
 handle_tap(g: *Game, x: float) {
     if g.phase != 1 { start_game(g); return }
-    third = COLS() * 1.0 * BLOCK() / 3.0
-    if x < BX() + third { move_left(g); return }
-    if x > BX() + third * 2.0 { move_right(g); return }
+    third = COLS * 1.0 * BLOCK / 3.0
+    if x < BX + third { move_left(g); return }
+    if x > BX + third * 2.0 { move_right(g); return }
     rotate(g)
 }
 

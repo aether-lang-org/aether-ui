@@ -735,10 +735,10 @@ element_last_pos_props(p: ptr) -> ptr {
 //
 // Shape-type constants (functions, since Aether has no top-level
 // const exports in this codebase's idiom).
-SHAPE_NONE()   -> int { return 0 }
-SHAPE_CIRCLE() -> int { return 1 }
-SHAPE_RECT()   -> int { return 2 }
-SHAPE_LINE()   -> int { return 3 }
+const SHAPE_NONE: int = 0
+const SHAPE_CIRCLE: int = 1
+const SHAPE_RECT: int = 2
+const SHAPE_LINE: int = 3
 
 // Shape factories call these at creation to record the SVG-space
 // geometry. geo slots are interpreted per shape type (see struct).

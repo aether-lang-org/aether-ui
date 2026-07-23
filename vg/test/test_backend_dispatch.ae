@@ -116,8 +116,8 @@ main() {
     }
 
     // The op selector constants are stable.
-    assert_eq_int("OP_CIRCLE",   dispatch.OP_CIRCLE(),   0)
-    assert_eq_int("OP_TAPPABLE", dispatch.OP_TAPPABLE(), 6)
+    assert_eq_int("OP_CIRCLE",   dispatch.OP_CIRCLE,   0)
+    assert_eq_int("OP_TAPPABLE", dispatch.OP_TAPPABLE, 6)
 
     println("=== test_backend_dispatch passed ===")
 }

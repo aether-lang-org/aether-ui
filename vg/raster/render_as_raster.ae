@@ -185,7 +185,7 @@ render_as_raster(ctx: ptr, backend: ptr,
             shape = defs.clip_path_shape_at(clip_def, si)
             kind = defs.clip_shape_kind(shape)
             avg_scale = transform.affine_average_scale_p(rendering.current_transform(ctx))
-            if kind == defs.CLIP_SHAPE_RECT() {
+            if kind == defs.CLIP_SHAPE_RECT {
                 rp = rendering.map_point(ctx,
                                                  defs.clip_shape_x(shape),
                                                  defs.clip_shape_y(shape))
@@ -199,7 +199,7 @@ render_as_raster(ctx: ptr, backend: ptr,
                     rw, rh,
                     255, 255, 255, 255)
             }
-            if kind == defs.CLIP_SHAPE_CIRCLE() {
+            if kind == defs.CLIP_SHAPE_CIRCLE {
                 cp = rendering.map_point(ctx,
                                                  defs.clip_shape_cx(shape),
                                                  defs.clip_shape_cy(shape))
@@ -339,7 +339,7 @@ render_shadow_path(ctx: ptr, backend: ptr, kind: int,
             if string.length(path_d) > 0 {
                 rasterize.fill_path_in_buffer_scaled(pixels, buf_w, buf_h,
                     path_d, expand - bx * scale, expand - by * scale, scale,
-                    scr, scg, scb, sca, rasterize.FILL_NONZERO())
+                    scr, scg, scb, sca, rasterize.FILL_NONZERO)
             } else {
                 rasterize.fill_rect_in_buffer(pixels, buf_w, buf_h,
                     expand, expand, px_w, px_h, scr, scg, scb, sca)

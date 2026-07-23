@@ -261,10 +261,10 @@ parse_attributes(s: string, into: ptr) {
 // Tokens stored as small structs; tokenize() returns a std.list of
 // *Token. The build phase walks the list.
 
-TOK_OPEN()      -> int { return 1 }
-TOK_CLOSE()     -> int { return 2 }
-TOK_SELFCLOSE() -> int { return 3 }
-TOK_TEXT()      -> int { return 4 }
+const TOK_OPEN: int = 1
+const TOK_CLOSE: int = 2
+const TOK_SELFCLOSE: int = 3
+const TOK_TEXT: int = 4
 
 struct Token {
     kind: int
@@ -297,7 +297,7 @@ tokenize(s: string) -> ptr {
                 if cdata_end == 0 - 1 { break }
                 text = string.substring(s, pos + 9, cdata_end)
                 if string.length(text) > 0 {
-                    tk = mk_token(TOK_TEXT())
+                    tk = mk_token(TOK_TEXT)
                     tk.text = text
                     list.add(tokens, tk)
                 }
@@ -310,7 +310,7 @@ tokenize(s: string) -> ptr {
                     end = string.index_of_from(s, ">", pos)
                     if end == 0 - 1 { break }
                     tag = string.trim(string.substring(s, pos + 2, end))
-                    tk = mk_token(TOK_CLOSE())
+                    tk = mk_token(TOK_CLOSE)
                     tk.tag = tag
                     list.add(tokens, tk)
                     pos = end + 1
@@ -337,8 +337,8 @@ tokenize(s: string) -> ptr {
                 attr_str = string.substring(content, name_end + 1, string.length(content))
             }
 
-            kind = TOK_OPEN()
-            if is_self_closing == 1 { kind = TOK_SELFCLOSE() }
+            kind = TOK_OPEN
+            if is_self_closing == 1 { kind = TOK_SELFCLOSE }
             tk = mk_token(kind)
             tk.tag = tag_name
             tk.attrs = map.new()
@@ -353,7 +353,7 @@ tokenize(s: string) -> ptr {
         if next_tag >= 0 { text_end = next_tag }
         text = string.trim(string.substring(s, pos, text_end))
         if string.length(text) > 0 {
-            tk = mk_token(TOK_TEXT())
+            tk = mk_token(TOK_TEXT)
             tk.text = text
             list.add(tokens, tk)
         }
@@ -391,7 +391,7 @@ build_tree(tokens: ptr) -> *SvgNode {
     while i < n {
         item, _ = list.get(tokens, i)
         tk = item as *Token
-        if tk.kind == TOK_OPEN() {
+        if tk.kind == TOK_OPEN {
             nd = mk_node(tk.tag)
             nd.attrs = tk.attrs
             // Append to parent (if any) before pushing onto stack.
@@ -404,7 +404,7 @@ build_tree(tokens: ptr) -> *SvgNode {
             list.add(stack, nd)
             if root == null { root = nd }
         }
-        if tk.kind == TOK_SELFCLOSE() {
+        if tk.kind == TOK_SELFCLOSE {
             nd = mk_node(tk.tag)
             nd.attrs = tk.attrs
             d = list.size(stack)
@@ -416,7 +416,7 @@ build_tree(tokens: ptr) -> *SvgNode {
                 if root == null { root = nd }
             }
         }
-        if tk.kind == TOK_CLOSE() {
+        if tk.kind == TOK_CLOSE {
             d = list.size(stack)
             if d > 1 {
                 list.remove(stack, d - 1)
@@ -429,7 +429,7 @@ build_tree(tokens: ptr) -> *SvgNode {
                 }
             }
         }
-        if tk.kind == TOK_TEXT() {
+        if tk.kind == TOK_TEXT {
             d = list.size(stack)
             if d > 0 {
                 parent_item, _ = list.get(stack, d - 1)

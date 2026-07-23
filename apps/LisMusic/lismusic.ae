@@ -41,7 +41,7 @@ main() {
             c.st_author = ui_state_s("Unknown")
             c.st_playing = ui_state_b(0)
             c.st_search = ui_state_s("")
-            c.st_cover = ui_state_s(DEFAULT_COVER_PATH())
+            c.st_cover = ui_state_s(DEFAULT_COVER_PATH)
             c.st_page = ui_state_i(0)
 
             // Top region: sidebar | right page. The original nests LeftPage +

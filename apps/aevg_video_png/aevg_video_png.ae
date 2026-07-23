@@ -24,18 +24,18 @@ extern lrint(x: float) -> long
 extern malloc(size: int) -> ptr
 extern string_retain(s: string)
 
-FW() -> int { return 32 }
-FH() -> int { return 32 }
-NFRAMES() -> int { return 8 }
+const FW: int = 32
+const FH: int = 32
+const NFRAMES: int = 8
 
 // A generated clip: NFRAMES frames of FW×FH RGBA concatenated into one string,
 // each with a vertical orange stripe that moves right per frame over a gradient.
 struct Clip { data: string len: int frames: int }
 
 gen_clip() -> *Clip {
-    w = FW()
-    h = FH()
-    n = NFRAMES()
+    w = FW
+    h = FH
+    n = NFRAMES
     fb = w * h * 4
     total = fb * n
     buf = region.new_frame_buffer(w, h * n)   // tall buffer holding all frames
@@ -70,7 +70,7 @@ gen_clip() -> *Clip {
 }
 
 push_frame(region: ptr, c: *Clip, idx: int) {
-    fb = FW() * FH() * 4
+    fb = FW * FH * 4
     start = idx * fb
     frame = string.substring_n(c.data, c.len, start, start + fb)
     region.region_push(region, frame, fb)
@@ -91,7 +91,7 @@ main() {
     vg.scene_set_deferred(scene, 1)
     root = vg.vg_root(scene)
 
-    vr = video_region(root, 10.0, 10.0, 80.0, 80.0, FW(), FH())
+    vr = video_region(root, 10.0, 10.0, 80.0, 80.0, FW, FH)
     video_source(vr) callback |region: ptr, t: float| {
         idx = lrint(t)
         if idx < 0 { idx = 0 }

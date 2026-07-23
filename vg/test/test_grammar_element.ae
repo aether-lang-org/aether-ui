@@ -50,12 +50,12 @@ assert_null(label: string, p: ptr) {
 // Sample handlers and bindings — bare function names that callers
 // (the test below) pass to ptr-typed setters. The named-fn → ptr
 // coercion fires at the call site.
-my_click_handler() -> int { return 1 }
-my_hover_handler() -> int { return 2 }
-my_drag_handler() -> int { return 3 }
-my_fill_binding() -> string { return "#ff0000" }
-my_opacity_binding() -> float { return 0.5 }
-my_when_predicate() -> int { return 1 }
+const my_click_handler: int = 1
+const my_hover_handler: int = 2
+const my_drag_handler: int = 3
+const my_fill_binding: string = "#ff0000"
+const my_opacity_binding: float = 0.5
+const my_when_predicate: int = 1
 
 main() {
     println("=== test_grammar_element ===")

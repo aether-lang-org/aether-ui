@@ -204,7 +204,7 @@ emit_gradient_for(ctx: ptr, style: ptr, opts: ptr, source_key: string, prefix: s
     if string.length(spread) == 0 { spread = "pad" }
     opt_set_s(opts, string.concat(prefix, "Spread"), spread)
 
-    if gtype == defs.GRADIENT_RADIAL() {
+    if gtype == defs.GRADIENT_RADIAL {
         opt_set_s(opts, string.concat(prefix, "Type"), "radial")
         gcx = defs.gradient_cx(gdef)
         gcy = defs.gradient_cy(gdef)
@@ -741,10 +741,10 @@ shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
                 cp2y = floatarr_get_unchecked(args, 3)
                 ex   = floatarr_get_unchecked(args, 4)
                 ey   = floatarr_get_unchecked(args, 5)
-                steps = PATH_CUBIC_STEPS()
+                steps = PATH_CUBIC_STEPS
                 s = 1
                 while s <= steps {
-                    t = s / steps_f()
+                    t = s / steps_f
                     bx = cubic_at(cur_x, cp1x, cp2x, ex, t)
                     by = cubic_at(cur_y, cp1y, cp2y, ey, t)
                     mp = rendering.map_point(ctx, bx, by)
@@ -827,8 +827,8 @@ shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
 // Number of line segments per cubic Bézier. 16 is plenty for typical
 // on-screen paths; matches the density most SVG renderers use at
 // moderate zoom.
-PATH_CUBIC_STEPS() -> int { return 16 }
-steps_f() -> float { return 16.0 }
+const PATH_CUBIC_STEPS: int = 16
+const steps_f: float = 16.0
 
 // One axis of a cubic Bézier at parameter t (de Casteljau, expanded).
 cubic_at(p0: float, p1: float, p2: float, p3: float, t: float) -> float {

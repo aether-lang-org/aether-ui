@@ -36,8 +36,8 @@ import std.os (os_getenv)
 
 extern aether_ui_text_set_string(handle: int, text: string)
 
-QUOTE() -> string   { return "The quick brown fox jumps over the lazy dog" }
-SHOUTED() -> string { return "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG" }
+const QUOTE: string = "The quick brown fox jumps over the lazy dog"
+const SHOUTED: string = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG"
 
 main() {
     window("Context menu demo", 560, 240) {
@@ -45,7 +45,7 @@ main() {
             text("Right-click the quote or the button below.")
             divider()
 
-            quote = text(QUOTE())
+            quote = text(QUOTE)
             action = btn("A button with its own menu") callback {
                 // Left-click keeps its ordinary behavior; menus are on
                 // right-click only. `status` is set below, before any
@@ -56,15 +56,15 @@ main() {
 
             // Three items on the quote label.
             context_menu_item(quote, "Copy text") callback {
-                clipboard_write(QUOTE())
+                clipboard_write(QUOTE)
                 aether_ui_text_set_string(status, "Copied the quote to the clipboard")
             }
             context_menu_item(quote, "Shout") callback {
-                aether_ui_text_set_string(quote, SHOUTED())
+                aether_ui_text_set_string(quote, SHOUTED)
                 aether_ui_text_set_string(status, "Shouted")
             }
             context_menu_item(quote, "Reset") callback {
-                aether_ui_text_set_string(quote, QUOTE())
+                aether_ui_text_set_string(quote, QUOTE)
                 aether_ui_text_set_string(status, "Reset")
             }
 

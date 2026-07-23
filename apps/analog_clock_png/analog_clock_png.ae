@@ -26,8 +26,8 @@ now_secs() -> float {
     return (t.hour * 3600 + t.minute * 60 + t.second) / 1.0
 }
 
-CENTER() -> float { return 100.0 }
-RADIUS() -> float { return 90.0 }
+const CENTER: float = 100.0
+const RADIUS: float = 90.0
 
 struct Clock { secs: float }
 struct Pt4 { x1: float y1: float x2: float y2: float }
@@ -45,8 +45,8 @@ frac(v: float) -> float { return v - math.floor(v) }
 
 hand_line(rot: float, len: float) -> *Pt4 {
     ang = rot * 2.0 * math.pi() - math.pi() / 2.0
-    return mk4(CENTER(), CENTER(),
-               CENTER() + math.cos(ang) * len, CENTER() + math.sin(ang) * len)
+    return mk4(CENTER, CENTER,
+               CENTER + math.cos(ang) * len, CENTER + math.sin(ang) * len)
 }
 
 hand_pos_map(rot: float, len: float) -> ptr {
@@ -87,7 +87,7 @@ main() {
     root = vg.vg_root(scene)
 
     // Face.
-    fc = vg.circle(root, CENTER(), CENTER(), RADIUS())
+    fc = vg.circle(root, CENTER, CENTER, RADIUS)
     vg.fill(fc, "#f5f5f5")
     vg.stroke(fc, "#333333", 3.0)
 
@@ -95,10 +95,10 @@ main() {
     i = 0
     while i < 12 {
         ang = (i / 12.0) * 2.0 * math.pi() - math.pi() / 2.0
-        r0 = RADIUS() * 0.85
-        r1 = RADIUS() * 0.95
-        ln = vg.line(root, CENTER() + math.cos(ang) * r0, CENTER() + math.sin(ang) * r0,
-                           CENTER() + math.cos(ang) * r1, CENTER() + math.sin(ang) * r1)
+        r0 = RADIUS * 0.85
+        r1 = RADIUS * 0.95
+        ln = vg.line(root, CENTER + math.cos(ang) * r0, CENTER + math.sin(ang) * r0,
+                           CENTER + math.cos(ang) * r1, CENTER + math.sin(ang) * r1)
         w = 1.0
         if (i % 3) == 0 { w = 3.0 }
         vg.stroke(ln, "#333333", w)
@@ -106,17 +106,17 @@ main() {
     }
 
     // Hands (bound).
-    hp = hand_line(hour_rot(clk), RADIUS() * 0.5)
+    hp = hand_line(hour_rot(clk), RADIUS * 0.5)
     hh = vg.line(root, hp.x1, hp.y1, hp.x2, hp.y2); vg.stroke(hh, "#333333", 4.0)
-    vg.bind_pos(hh) callback { return hand_pos_map(hour_rot(clk), RADIUS() * 0.5) }
-    mp = hand_line(min_rot(clk), RADIUS() * 0.75)
+    vg.bind_pos(hh) callback { return hand_pos_map(hour_rot(clk), RADIUS * 0.5) }
+    mp = hand_line(min_rot(clk), RADIUS * 0.75)
     mh = vg.line(root, mp.x1, mp.y1, mp.x2, mp.y2); vg.stroke(mh, "#333333", 3.0)
-    vg.bind_pos(mh) callback { return hand_pos_map(min_rot(clk), RADIUS() * 0.75) }
-    sp = hand_line(sec_rot(clk), RADIUS() * 0.85)
+    vg.bind_pos(mh) callback { return hand_pos_map(min_rot(clk), RADIUS * 0.75) }
+    sp = hand_line(sec_rot(clk), RADIUS * 0.85)
     sh = vg.line(root, sp.x1, sp.y1, sp.x2, sp.y2); vg.stroke(sh, "#e74c3c", 1.0)
-    vg.bind_pos(sh) callback { return hand_pos_map(sec_rot(clk), RADIUS() * 0.85) }
+    vg.bind_pos(sh) callback { return hand_pos_map(sec_rot(clk), RADIUS * 0.85) }
 
-    cd = vg.circle(root, CENTER(), CENTER(), 5.0)
+    cd = vg.circle(root, CENTER, CENTER, 5.0)
     vg.fill(cd, "#333333")
 
     canvas_clear(cid)

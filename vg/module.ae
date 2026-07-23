@@ -939,7 +939,7 @@ scene_render_live_draws(scene: ptr, t: float) {
     i = 0
     while i < n {
         item, _ = list.get(s.live_regions, i)
-        if region.region_kind(item) == region.LIVE_DRAW() {
+        if region.region_kind(item) == region.LIVE_DRAW {
             render_one_draw(scene, item, t)
         }
         i = i + 1
@@ -1153,7 +1153,7 @@ flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
         // bind_pos can merge into it + recompute_bounds. Only when the
         // placeholder has none yet — a bind_pos refresh updates the geometry
         // in place, and re-flush must not overwrite it with the static attrs.
-        if element.element_shape_type(el) == element.SHAPE_NONE() {
+        if element.element_shape_type(el) == element.SHAPE_NONE {
             copy_shape_geo(el, drawn)
         }
         // The dispatched element only exists to carry bounds/geo back to the
@@ -1168,7 +1168,7 @@ flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
 // shape kind, so a bind_pos-moved shape redraws at its new position. Only the
 // geometry attrs change; style stays as apply_cached_style set it.
 sync_attrs_from_geo(a: ptr, el: ptr, kind: int) {
-    if element.element_shape_type(el) == element.SHAPE_NONE() { return }
+    if element.element_shape_type(el) == element.SHAPE_NONE { return }
     g0 = element.element_geo0(el)
     g1 = element.element_geo1(el)
     g2 = element.element_geo2(el)
@@ -1199,13 +1199,13 @@ copy_shape_geo(dst: ptr, src: ptr) {
     g1 = element.element_geo1(src)
     g2 = element.element_geo2(src)
     g3 = element.element_geo3(src)
-    if st == element.SHAPE_CIRCLE() {
+    if st == element.SHAPE_CIRCLE {
         element.element_set_shape_circle(dst, g0, g1, g2)
     }
-    if st == element.SHAPE_RECT() {
+    if st == element.SHAPE_RECT {
         element.element_set_shape_rect(dst, g0, g1, g2, g3)
     }
-    if st == element.SHAPE_LINE() {
+    if st == element.SHAPE_LINE {
         element.element_set_shape_line(dst, g0, g1, g2, g3)
     }
 }

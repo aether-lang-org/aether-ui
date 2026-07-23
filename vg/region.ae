@@ -40,8 +40,8 @@ import std.bytes
 extern malloc(size: int) -> ptr
 extern string_retain(s: string)
 
-LIVE_RASTER() -> int { return 0 }
-LIVE_DRAW()   -> int { return 1 }
+const LIVE_RASTER: int = 0
+const LIVE_DRAW: int = 1
 
 // A live region. For RASTER, `buffer` is an owned w*h*4 RGBA8888 buffer the
 // source writes each frame and the scene blits. For DRAW, `draw_fn` is a boxed

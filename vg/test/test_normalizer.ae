@@ -18,10 +18,10 @@ import std.math
 
 extern exit(code: int)
 
-EPS() -> float { return 0.000001 }
+const EPS: float = 0.000001
 
 near(a: float, b: float) -> int {
-    if math.abs_float(a - b) < EPS() { return 1 }
+    if math.abs_float(a - b) < EPS { return 1 }
     return 0
 }
 
@@ -119,10 +119,10 @@ fa7(a0: float, a1: float, a2: float, a3: float, a4: float, a5: float, a6: float)
     return a
 }
 
-M() -> int { return normalizer.M_CHAR() }
-L() -> int { return normalizer.L_CHAR() }
-C() -> int { return normalizer.C_CHAR() }
-Z() -> int { return normalizer.Z_CHAR() }
+const M: int = normalizer.M_CHAR
+const L: int = normalizer.L_CHAR
+const C: int = normalizer.C_CHAR
+const Z: int = normalizer.Z_CHAR
 
 main() {
     println("=== test_normalizer ===")
@@ -131,15 +131,15 @@ main() {
 
     cmds = normalizer.parse_path("M 10 10 L 20 20 Z")
     assert_eq_int("parse 'M L Z' count", list.size(cmds), 3)
-    check_cmd("M 10 10", cmds, 0, M(), fa2(10.0, 10.0))
-    check_cmd("L 20 20", cmds, 1, L(), fa2(20.0, 20.0))
-    check_cmd("Z",       cmds, 2, Z(), fa0())
+    check_cmd("M 10 10", cmds, 0, M, fa2(10.0, 10.0))
+    check_cmd("L 20 20", cmds, 1, L, fa2(20.0, 20.0))
+    check_cmd("Z",       cmds, 2, Z, fa0())
 
     // Comma + no-whitespace tokenization.
     cmds2 = normalizer.parse_path("M10,10 L20,20")
     assert_eq_int("comma sep count", list.size(cmds2), 2)
-    check_cmd("M comma", cmds2, 0, M(), fa2(10.0, 10.0))
-    check_cmd("L comma", cmds2, 1, L(), fa2(20.0, 20.0))
+    check_cmd("M comma", cmds2, 0, M, fa2(10.0, 10.0))
+    check_cmd("L comma", cmds2, 1, L, fa2(20.0, 20.0))
 
     // Negative-as-separator: "9-22" → 9, -22 (no space, no comma).
     cmds3 = normalizer.parse_path("M50,30c9-22 42-24 48,0")
@@ -153,9 +153,9 @@ main() {
     // Implicit L after M.
     cmds4 = normalizer.parse_path("M 10 10 20 20 30 30")
     assert_eq_int("implicit L count", list.size(cmds4), 3)
-    check_cmd("implicit L[0]", cmds4, 0, M(), fa2(10.0, 10.0))
-    check_cmd("implicit L[1]", cmds4, 1, L(), fa2(20.0, 20.0))
-    check_cmd("implicit L[2]", cmds4, 2, L(), fa2(30.0, 30.0))
+    check_cmd("implicit L[0]", cmds4, 0, M, fa2(10.0, 10.0))
+    check_cmd("implicit L[1]", cmds4, 1, L, fa2(20.0, 20.0))
+    check_cmd("implicit L[2]", cmds4, 2, L, fa2(30.0, 30.0))
 
     // Arc tokenization (7 args).
     cmds5 = normalizer.parse_path("M23,57A27,27 0 1 0 23,44")
@@ -172,7 +172,7 @@ main() {
 
     // Scientific + leading-dot numbers.
     cmds6 = normalizer.parse_path("M -3e1 .5 L 0 0")
-    check_cmd("sci/dot M", cmds6, 0, M(), fa2(0.0 - 30.0, 0.5))
+    check_cmd("sci/dot M", cmds6, 0, M, fa2(0.0 - 30.0, 0.5))
 
     // Empty string returns empty list, not an error.
     cmds7 = normalizer.parse_path("")
@@ -183,13 +183,13 @@ main() {
     // Absolute M/L/Z passes through unchanged (and L type stays L).
     nc1 = normalizer.normalize_path_to_list("M 10 10 L 20 20 Z")
     assert_eq_int("normalize abs count", list.size(nc1), 3)
-    check_cmd("nc abs M", nc1, 0, M(), fa2(10.0, 10.0))
-    check_cmd("nc abs L", nc1, 1, L(), fa2(20.0, 20.0))
-    check_cmd("nc abs Z", nc1, 2, Z(), fa0())
+    check_cmd("nc abs M", nc1, 0, M, fa2(10.0, 10.0))
+    check_cmd("nc abs L", nc1, 1, L, fa2(20.0, 20.0))
+    check_cmd("nc abs Z", nc1, 2, Z, fa0())
 
     // Relative l: 'M 10 10' then 'l 5 5' → 'L 15 15'.
     nc2 = normalizer.normalize_path_to_list("M 10 10 l 5 5")
-    check_cmd("nc rel l→L", nc2, 1, L(), fa2(15.0, 15.0))
+    check_cmd("nc rel l→L", nc2, 1, L, fa2(15.0, 15.0))
 
     // Relative m chained: 'm 10 10' (no prior point, treated as
     // absolute) then 'm 5 5' (relative to (10,10), TS: implicit `l`).
@@ -198,26 +198,26 @@ main() {
     nc3 = normalizer.normalize_path_to_list("m 10 10 5 5 3 3")
     // After normalize: M(10,10), L(15,15), L(18,18).
     assert_eq_int("nc rel m chain count", list.size(nc3), 3)
-    check_cmd("nc rel m[0]", nc3, 0, M(), fa2(10.0, 10.0))
-    check_cmd("nc rel m[1]", nc3, 1, L(), fa2(15.0, 15.0))
-    check_cmd("nc rel m[2]", nc3, 2, L(), fa2(18.0, 18.0))
+    check_cmd("nc rel m[0]", nc3, 0, M, fa2(10.0, 10.0))
+    check_cmd("nc rel m[1]", nc3, 1, L, fa2(15.0, 15.0))
+    check_cmd("nc rel m[2]", nc3, 2, L, fa2(18.0, 18.0))
 
     // H → L (absolute and relative).
     nc4 = normalizer.normalize_path_to_list("M 5 5 H 20")
-    check_cmd("H abs → L", nc4, 1, L(), fa2(20.0, 5.0))
+    check_cmd("H abs → L", nc4, 1, L, fa2(20.0, 5.0))
     nc5 = normalizer.normalize_path_to_list("M 5 5 h 10")
-    check_cmd("h rel → L", nc5, 1, L(), fa2(15.0, 5.0))
+    check_cmd("h rel → L", nc5, 1, L, fa2(15.0, 5.0))
 
     // V → L (absolute and relative).
     nc6 = normalizer.normalize_path_to_list("M 5 5 V 20")
-    check_cmd("V abs → L", nc6, 1, L(), fa2(5.0, 20.0))
+    check_cmd("V abs → L", nc6, 1, L, fa2(5.0, 20.0))
     nc7 = normalizer.normalize_path_to_list("M 5 5 v 10")
-    check_cmd("v rel → L", nc7, 1, L(), fa2(5.0, 15.0))
+    check_cmd("v rel → L", nc7, 1, L, fa2(5.0, 15.0))
 
     // Relative c → absolute C: 'M 10 10 c 5 0 10 0 15 0' →
     // C(15,10, 20,10, 25,10).
     nc8 = normalizer.normalize_path_to_list("M 10 10 c 5 0 10 0 15 0")
-    check_cmd("c rel → C abs", nc8, 1, C(),
+    check_cmd("c rel → C abs", nc8, 1, C,
               fa6(15.0, 10.0, 20.0, 10.0, 25.0, 10.0))
 
     // Q → C (quadratic to cubic): M(0,0) Q 0 10 10 10 →
@@ -226,7 +226,7 @@ main() {
     // end = (10, 10)
     nc9 = normalizer.normalize_path_to_list("M 0 0 Q 0 10 10 10")
     qh = get_cmd(nc9, 1)
-    assert_eq_int("Q → C type", normalizer.cmd_type(qh), C())
+    assert_eq_int("Q → C type", normalizer.cmd_type(qh), C)
     qargs = normalizer.cmd_args(qh)
     assert_near("Q→C cp1.x", floatarr.get_unchecked(qargs, 0), 0.0)
     assert_near("Q→C cp1.y", floatarr.get_unchecked(qargs, 1), 20.0 / 3.0)
@@ -241,7 +241,7 @@ main() {
     nc10 = normalizer.normalize_path_to_list("M 0 0 C 0 5 5 5 10 5 S 15 0 20 0")
     assert_eq_int("S → C count", list.size(nc10), 3)
     sh = get_cmd(nc10, 2)
-    assert_eq_int("S → C type", normalizer.cmd_type(sh), C())
+    assert_eq_int("S → C type", normalizer.cmd_type(sh), C)
     sargs = normalizer.cmd_args(sh)
     assert_near("S→C cp1.x", floatarr.get_unchecked(sargs, 0), 15.0)
     assert_near("S→C cp1.y", floatarr.get_unchecked(sargs, 1), 5.0)
@@ -252,21 +252,21 @@ main() {
 
     // Degenerate arc (rx=0) → L.
     nc11 = normalizer.normalize_path_to_list("M 0 0 A 0 10 0 0 0 10 10")
-    check_cmd("arc rx=0 → L", nc11, 1, L(), fa2(10.0, 10.0))
+    check_cmd("arc rx=0 → L", nc11, 1, L, fa2(10.0, 10.0))
 
     // Real arc: M(0,0) A 10 10 0 0 1 10 10 — a quarter-ish arc.
     // Don't pin exact bezier coords; just verify it emits ≥1 C command
     // and ends at (10,10) (the last C's args[4..5]).
     nc12 = normalizer.normalize_path_to_list("M 0 0 A 10 10 0 0 1 10 10")
     n12 = list.size(nc12)
-    assert_eq_int("arc → cubic[0] is M", normalizer.cmd_type(get_cmd(nc12, 0)), M())
+    assert_eq_int("arc → cubic[0] is M", normalizer.cmd_type(get_cmd(nc12, 0)), M)
     // All subsequent commands should be C.
     j = 1
     while j < n12 {
         cj = get_cmd(nc12, j)
         ct = normalizer.cmd_type(cj)
-        if ct != C() {
-            println("  FAIL: arc → cubic[${j}] type=${ct} want C(${C()})")
+        if ct != C {
+            println("  FAIL: arc → cubic[${j}] type=${ct} want C(${C})")
             exit(1)
         }
         j = j + 1
@@ -284,10 +284,10 @@ main() {
     // is absolute (20,20).
     nc13 = normalizer.normalize_path_to_list("M 5 5 L 15 5 Z L 20 20")
     assert_eq_int("Z-reset count", list.size(nc13), 4)
-    check_cmd("post-Z M", nc13, 0, M(), fa2(5.0, 5.0))
-    check_cmd("post-Z L1", nc13, 1, L(), fa2(15.0, 5.0))
-    check_cmd("post-Z Z", nc13, 2, Z(), fa0())
-    check_cmd("post-Z L2", nc13, 3, L(), fa2(20.0, 20.0))
+    check_cmd("post-Z M", nc13, 0, M, fa2(5.0, 5.0))
+    check_cmd("post-Z L1", nc13, 1, L, fa2(15.0, 5.0))
+    check_cmd("post-Z Z", nc13, 2, Z, fa0())
+    check_cmd("post-Z L2", nc13, 3, L, fa2(20.0, 20.0))
 
     println("=== test_normalizer passed ===")
 }

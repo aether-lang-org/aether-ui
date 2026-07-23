@@ -60,7 +60,7 @@ main() {
     // ─── RASTER region: push a generated frame ──────────────────
     // extent (viewBox) 25×15 at (10,20); frame buffer 40×30 px (independent).
     rr = region.live_raster_new(10.0, 20.0, 25.0, 15.0, 40, 30)
-    assert_eq_int("raster kind", region.region_kind(rr), region.LIVE_RASTER())
+    assert_eq_int("raster kind", region.region_kind(rr), region.LIVE_RASTER)
     assert_near("raster x", region.region_x(rr), 10.0)
     assert_near("raster y", region.region_y(rr), 20.0)
     assert_near("raster extent w", region.region_w(rr), 25.0)

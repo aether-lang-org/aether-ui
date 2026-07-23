@@ -81,7 +81,7 @@ type_is_ranked(r: *Rect, s: *AppState) -> int {
 }
 
 // ─── 3D-bevelled rect render ──────────────────────────────────────
-BEVEL() -> float { return 3.0 }
+const BEVEL: float = 3.0
 
 render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float) {
     // Small tiles: one flat rect — with thousands of nested leaves per view,
@@ -94,7 +94,7 @@ render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float) {
         mn1 = vg.rect(root, r.x, r.y, r.w, r.h); vg.fill(mn1, hsl_rgb(h, s, l))
         return
     }
-    bv = BEVEL()
+    bv = BEVEL
     if r.w < 30.0 { bv = 1.0 }
     base = hsl_rgb(h, s, l)
     dark = hsl_rgb(h, s, math.max_float(0.0, l - 0.15))
@@ -118,7 +118,7 @@ render_shaded(root: ptr, r: *Rect, h: float, s: float, l: float) {
 //   3. selection — a GrandPerspective-style double outline (white + blue),
 //      drawn last so no later tile overpaints it
 draw_treemap(root: ptr, s: *AppState) {
-    bg = vg.rect(root, gp_model.MAP_X(), 0.0, gp_model.CANVAS_W(), gp_model.CANVAS_H())
+    bg = vg.rect(root, gp_model.MAP_X, 0.0, gp_model.CANVAS_W, gp_model.CANVAS_H)
     vg.fill(bg, "#f5f5f5"); vg.stroke(bg, "#cccccc", 1.0)
 
     rects = s.rects
@@ -135,7 +135,7 @@ draw_treemap(root: ptr, s: *AppState) {
                         // Children overlay the interior — paint only the
                         // visible RING (4 strips), not the full area, so the
                         // per-level overdraw is gone.
-                        ins = NEST_INSET()
+                        ins = NEST_INSET
                         rim = hsl_rgb(h, 0.35, 0.40)
                         t1 = vg.rect(root, r.x, r.y, r.w, ins); vg.fill(t1, rim)
                         t2 = vg.rect(root, r.x, r.y + r.h - ins, r.w, ins); vg.fill(t2, rim)
@@ -219,14 +219,14 @@ row_baseline(size: float, row_h: float) -> float {
 // row (if any) carries a blue outline. Click handling mirrors this
 // geometry (gp_nav.legend_click).
 draw_legend(root: ptr, s: *AppState) {
-    bg = vg.rect(root, gp_model.LEGEND_X(), 0.0, gp_model.LEGEND_W(), gp_model.CANVAS_H())
+    bg = vg.rect(root, gp_model.LEGEND_X, 0.0, gp_model.LEGEND_W, gp_model.CANVAS_H)
     vg.fill(bg, "#fafafa"); vg.stroke(bg, "#cccccc", 1.0)
-    ti = vg.text_sized(root, gp_model.LEGEND_X() + 12.0, 8.0 + vg.font_ascent(17.0), 17.0, "File types (click to highlight)")
+    ti = vg.text_sized(root, gp_model.LEGEND_X + 12.0, 8.0 + vg.font_ascent(17.0), 17.0, "File types (click to highlight)")
     vg.fill(ti, "#000000")
 
     n = list.size(s.tstats)
     shown = n
-    if shown > gp_model.TOP_TYPES() { shown = gp_model.TOP_TYPES() }
+    if shown > gp_model.TOP_TYPES { shown = gp_model.TOP_TYPES }
     long other_bytes = 0
     other_files = 0
     i = 0
@@ -244,36 +244,36 @@ draw_legend(root: ptr, s: *AppState) {
     while i < shown {
         it, _ = list.get(s.tstats, i)
         t = it as *TypeStat
-        ry = gp_model.LEG_TOP() + gp_model.LEG_ROW_H() * (i / 1.0)
-        chip = vg.rect(root, gp_model.LEGEND_X() + 12.0, ry, 16.0, 16.0)
+        ry = gp_model.LEG_TOP + gp_model.LEG_ROW_H * (i / 1.0)
+        chip = vg.rect(root, gp_model.LEGEND_X + 12.0, ry, 16.0, 16.0)
         vg.fill(chip, hsl_rgb(t.hue, 0.70, 0.55)); vg.stroke(chip, "#888888", 1.0)
         // Baselines centred against the 16px chip via real metrics, so the
         // row text sits beside its chip (not a line above it).
         lb14 = ry + row_baseline(14.0, 16.0)
-        lb = vg.text_sized(root, gp_model.LEGEND_X() + 38.0, lb14, 14.0, ext_label(t.ext))
+        lb = vg.text_sized(root, gp_model.LEGEND_X + 38.0, lb14, 14.0, ext_label(t.ext))
         vg.fill(lb, "#000000")
-        sz = vg.text_sized(root, gp_model.LEGEND_X() + 150.0, lb14, 14.0, fmt_size(t.bytes))
+        sz = vg.text_sized(root, gp_model.LEGEND_X + 150.0, lb14, 14.0, fmt_size(t.bytes))
         vg.fill(sz, "#000000")
-        fc = vg.text_sized(root, gp_model.LEGEND_X() + 232.0, ry + row_baseline(12.0, 16.0), 12.0, "${t.files} files")
+        fc = vg.text_sized(root, gp_model.LEGEND_X + 232.0, ry + row_baseline(12.0, 16.0), 12.0, "${t.files} files")
         vg.fill(fc, "#666666")
         if s.hl_on == 1 {
             if string.equals(s.hl_ext, t.ext) == 1 {
-                hl = vg.rect(root, gp_model.LEGEND_X() + 6.0, ry - 4.0, gp_model.LEGEND_W() - 12.0, gp_model.LEG_ROW_H() - 3.0)
+                hl = vg.rect(root, gp_model.LEGEND_X + 6.0, ry - 4.0, gp_model.LEGEND_W - 12.0, gp_model.LEG_ROW_H - 3.0)
                 vg.fill(hl, "none"); vg.stroke(hl, "#3399ff", 1.5)
             }
         }
         i = i + 1
     }
     if n > shown {
-        ry2 = gp_model.LEG_TOP() + gp_model.LEG_ROW_H() * (shown / 1.0)
-        chip2 = vg.rect(root, gp_model.LEGEND_X() + 12.0, ry2, 16.0, 16.0)
+        ry2 = gp_model.LEG_TOP + gp_model.LEG_ROW_H * (shown / 1.0)
+        chip2 = vg.rect(root, gp_model.LEGEND_X + 12.0, ry2, 16.0, 16.0)
         vg.fill(chip2, "#bbbbbb"); vg.stroke(chip2, "#888888", 1.0)
         lb2_14 = ry2 + row_baseline(14.0, 16.0)
-        lb2 = vg.text_sized(root, gp_model.LEGEND_X() + 38.0, lb2_14, 14.0, "other")
+        lb2 = vg.text_sized(root, gp_model.LEGEND_X + 38.0, lb2_14, 14.0, "other")
         vg.fill(lb2, "#000000")
-        sz2 = vg.text_sized(root, gp_model.LEGEND_X() + 150.0, lb2_14, 14.0, fmt_size(other_bytes))
+        sz2 = vg.text_sized(root, gp_model.LEGEND_X + 150.0, lb2_14, 14.0, fmt_size(other_bytes))
         vg.fill(sz2, "#000000")
-        fc2 = vg.text_sized(root, gp_model.LEGEND_X() + 232.0, ry2 + row_baseline(12.0, 16.0), 12.0, "${other_files} files")
+        fc2 = vg.text_sized(root, gp_model.LEGEND_X + 232.0, ry2 + row_baseline(12.0, 16.0), 12.0, "${other_files} files")
         vg.fill(fc2, "#666666")
     }
 }

@@ -60,8 +60,8 @@ import vg.geom.transform
 
 extern malloc(size: int) -> ptr
 
-GRADIENT_LINEAR() -> int { return 0 }
-GRADIENT_RADIAL() -> int { return 1 }
+const GRADIENT_LINEAR: int = 0
+const GRADIENT_RADIAL: int = 1
 
 // ─── GradientStop struct ─────────────────────────────────────────
 
@@ -105,7 +105,7 @@ struct GradientDef {
 mk_gradient_def() -> *GradientDef {
     // 1 int + 1 ptr + 9 float + 2 string ≈ 12 + 8 + 72 + 16 = 108 → 128 safe.
     g = malloc(128) as *GradientDef
-    g.type_code = GRADIENT_LINEAR()
+    g.type_code = GRADIENT_LINEAR
     g.stops = list.new()
     g.x1 = 0.0
     g.y1 = 0.0
@@ -246,7 +246,7 @@ parse_gradient(ctx: ptr, node: ptr) -> ptr {
     // Type
     tag = parser.node_tag(node)
     if string.equals(tag, "radialGradient") == 1 {
-        g.type_code = GRADIENT_RADIAL()
+        g.type_code = GRADIENT_RADIAL
     }
 
     // Stops. A gradient with xlink:href/href and no own <stop>s inherits the
@@ -275,7 +275,7 @@ parse_gradient(ctx: ptr, node: ptr) -> ptr {
     }
 
     // Coords + optional gradientTransform.
-    if g.type_code == GRADIENT_RADIAL() {
+    if g.type_code == GRADIENT_RADIAL {
         g.cx = parse_coord(attr_or(node, "cx", "0.5"), 0.5)
         g.cy = parse_coord(attr_or(node, "cy", "0.5"), 0.5)
         g.r  = parse_coord(attr_or(node, "r",  "0.5"), 0.5)
@@ -435,8 +435,8 @@ parse_filter(ctx: ptr, node: ptr) -> ptr {
 // shapes (path, polygon, ellipse) are silently skipped — same
 // behaviour as the TS source.
 
-CLIP_SHAPE_RECT()   -> int { return 0 }
-CLIP_SHAPE_CIRCLE() -> int { return 1 }
+const CLIP_SHAPE_RECT: int = 0
+const CLIP_SHAPE_CIRCLE: int = 1
 
 struct ClipPathShape {
     kind: int       // CLIP_SHAPE_RECT or CLIP_SHAPE_CIRCLE
@@ -509,7 +509,7 @@ parse_clip_path(ctx: ptr, node: ptr) -> ptr {
         tag = parser.node_tag(child)
         if string.equals(tag, "rect") == 1 {
             s = mk_clip_shape()
-            s.kind = CLIP_SHAPE_RECT()
+            s.kind = CLIP_SHAPE_RECT
             s.x = attr_num(child, "x", 0.0)
             s.y = attr_num(child, "y", 0.0)
             s.w = attr_num(child, "width", 0.0)
@@ -518,7 +518,7 @@ parse_clip_path(ctx: ptr, node: ptr) -> ptr {
         }
         if string.equals(tag, "circle") == 1 {
             s = mk_clip_shape()
-            s.kind = CLIP_SHAPE_CIRCLE()
+            s.kind = CLIP_SHAPE_CIRCLE
             s.cx = attr_num(child, "cx", 0.0)
             s.cy = attr_num(child, "cy", 0.0)
             s.r  = attr_num(child, "r",  0.0)

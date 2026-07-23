@@ -33,9 +33,9 @@ import std.json
 import std.http.client
 import aeocha
 
-BASE() -> string { return "http://127.0.0.1:9222" }
+const BASE: string = "http://127.0.0.1:9222"
 
-url_of(path: string) -> string { return string.concat(BASE(), path) }
+url_of(path: string) -> string { return string.concat(BASE, path) }
 
 // ─── HTTP primitives ─────────────────────────────────────────────
 

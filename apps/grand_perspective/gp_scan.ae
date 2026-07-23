@@ -144,7 +144,7 @@ rebuild_type_stats(s: *AppState) {
     while i < n {
         it, _ = list.get(s.tstats, i)
         t = it as *TypeStat
-        if i < gp_model.TOP_TYPES() {
+        if i < gp_model.TOP_TYPES {
             t.ranked = 1
             t.hue = palette_hue(i)
         } else {

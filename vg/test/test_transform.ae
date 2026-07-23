@@ -13,10 +13,10 @@ import std.math
 
 extern exit(code: int)
 
-EPS() -> float { return 0.000001 }
+const EPS: float = 0.000001
 
 near(a: float, b: float) -> int {
-    if math.abs_float(a - b) < EPS() { return 1 }
+    if math.abs_float(a - b) < EPS { return 1 }
     return 0
 }
 
