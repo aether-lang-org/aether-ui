@@ -30,6 +30,15 @@ OUTPUT_NAME="$(basename "${2:-$(basename "$SOURCE" .ae)}")"
 OUTPUT="build/${OUTPUT_NAME}"
 C_FILE="${OUTPUT}.c"
 
+# Contrib archives: `ae cflags --libs` can't emit these (ae doesn't see the
+# program's import graph — upstream ask aether#1201), and aeb knows via the
+# app's .build.ae — but build.sh must detect them itself. Grep the app's dir
+# for contrib imports and link the matching installed archives.
+CONTRIB_LIBS=""
+if grep -rqs "import contrib.sqlite" "$(dirname "$SOURCE")"; then
+    CONTRIB_LIBS="$CONTRIB_LIBS -laether_sqlite"
+fi
+
 mkdir -p "$(dirname "$C_FILE")"
 echo "Compiling $SOURCE -> $C_FILE"
 # An app moved under aevg/apps/<name>/ imports sibling modules (vg, vg_live,
@@ -60,7 +69,7 @@ case "$OS" in
             -o "$OUTPUT" \
             -framework AppKit -framework Foundation -framework QuartzCore \
             -framework CoreText -framework ImageIO -pthread -lm \
-            $AETHER_LIBS
+            $AETHER_LIBS $CONTRIB_LIBS
         ;;
     Linux|FreeBSD)
         if ! pkg-config --exists gtk4 2>/dev/null; then
@@ -101,7 +110,7 @@ case "$OS" in
             "$SCRIPT_DIR/backend/aether_ui_sni.c" \
             -L"$AETHER_LIB_PATH" -laether \
             -o "$OUTPUT" \
-            -pthread -lm $(pkg-config --libs gtk4) $LIBNOTIFY_LIBS $AETHER_LIBS
+            -pthread -lm $(pkg-config --libs gtk4) $LIBNOTIFY_LIBS $AETHER_LIBS $CONTRIB_LIBS
         ;;
     MINGW*|MSYS*|CYGWIN*)
         echo "Platform: Windows (native Win32)"
@@ -123,7 +132,7 @@ case "$OS" in
             -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
             -lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi -luxtheme \
             -lws2_32 -lbcrypt -lpcre2-8 -lssl -lcrypto -pthread -lm \
-            $AETHER_LIBS
+            $AETHER_LIBS $CONTRIB_LIBS
         OUTPUT="$ACTUAL_OUT"
         ;;
     *)
