@@ -107,6 +107,12 @@ case "$OS" in
         echo "Platform: Windows (native Win32)"
         OUT_EXE="${OUTPUT}.exe"
         [[ "$OUTPUT" != *.exe ]] && ACTUAL_OUT="$OUT_EXE" || ACTUAL_OUT="$OUTPUT"
+        # AETHER_LIBS mirrors the Linux/mac branches: `ae cflags --libs`
+        # emits libaether's transitive deps AND any installed contrib
+        # archives (-laether_sqlite for LisMusic, ssl/pcre2/...). The
+        # explicit -lssl/-lcrypto/-lpcre2-8 stay as a fallback for boxes
+        # where `ae cflags` predates --libs.
+        AETHER_LIBS="$(ae cflags --libs 2>/dev/null || true)"
         gcc -O2 -g -pipe \
             $AETHER_INCLUDES \
             "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_win32.c" \
@@ -116,7 +122,8 @@ case "$OS" in
             -o "$ACTUAL_OUT" \
             -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
             -lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi -luxtheme \
-            -lws2_32 -lbcrypt -lpcre2-8 -lssl -lcrypto -pthread -lm
+            -lws2_32 -lbcrypt -lpcre2-8 -lssl -lcrypto -pthread -lm \
+            $AETHER_LIBS
         OUTPUT="$ACTUAL_OUT"
         ;;
     *)
