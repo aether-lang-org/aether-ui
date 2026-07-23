@@ -1,45 +1,54 @@
 // tumbling_cube.ae — a solid 3D cube with writing on one face, tumbling in
 // perspective; grab it with the mouse to throw it around.
 //
-// The AeVG showcase for INTERACTIVE 3D: where aevg_live's cube is a
-// wireframe on autopilot, this one has solid painter-culled faces, vector
-// lettering ("AEVG") projected onto the front face through the same 3D
-// pipeline as the geometry, and a drag-to-tumble gesture layer
-// (canvas_on_click/move/release) with momentum — release mid-drag and the
-// cube keeps spinning with your throw, decaying to a lazy idle tumble.
+// The AeVG showcase for INTERACTIVE 3D, in the house declarative style
+// (see examples/calculator): selective imports so every verb reads bare,
+// the cube itself as const DATA TABLES (vertices / faces / normals /
+// colours — no lookup if-chains), reactive labels (ui_state_s + bind_text;
+// nothing pokes a widget imperatively), and string interpolation over
+// concat chains. The imperative core that REMAINS is the physics + gesture
+// state (Spin): it is shared by four closures nested two builder levels
+// deep, which is exactly the shape that wants the heap-struct idiom rather
+// than calculator-style flat captures.
 //
 // 3D is 30 lines of plain math: 8 verts at ±1 rotated around Y then X,
-// perspective-projected (f = SC/(DIST-z)). The faces are TRANSLUCENT
-// (vg.opacity), so instead of culling back faces we painter-sort all six
-// far→near by rotated face-normal depth and draw the lot — the far sides
-// (and the writing, mirrored) read through the glass. The writing is a real
+// perspective-projected (f = SCALE/(DIST-z)). The faces are TRANSLUCENT,
+// so instead of culling back faces we painter-sort all six far→near by
+// rotated face-normal depth and draw the lot — the far sides (and the
+// writing, mirrored) read through the glass. The writing is a real
 // typeface extracted IN PURE AETHER: vg.font parses the vendored TrueType
 // file (fonts/DejaVuSans-Bold.ttf) at startup, and the word's flattened
 // glyph outlines are projected point-by-point on the z=+1 plane — so the
-// writing foreshortens and tumbles WITH the face; no platform text API, no
-// offline generator, no backend special case.
+// writing foreshortens and tumbles WITH the face; no platform text API,
+// no offline generator, no backend special case.
 //
 // Run: DISPLAY=:0 ./target/build/apps/tumbling_cube/bin/tumbling_cube
 //   Drag to tumble. Release with speed to throw.
 
-import ui
-import ui (window, vstack, text, enable_test_server,
-    canvas_on_click, canvas_on_move, canvas_on_release)
+import ui (
+    window, vstack, text, enable_test_server,
+    canvas_on_click, canvas_on_move, canvas_on_release,
+    ui_state_s, ui_set_s, bind_text
+)
 import vg.live (vg, canvas_region)
-import vg
-import vg (view_box, rect, fill)
+import vg (
+    view_box, rect, path, fill, stroke, opacity,
+    vg_root, node_scene, scene_canvas, scene_set_refreshing,
+    scene_px_to_vb_x, scene_px_to_vb_y
+)
+import vg.font (
+    font_load, font_ok, font_text_outlines_norm,
+    outl_ok, outl_nctrs, outl_ctr_end, outl_px, outl_py
+)
 import std.math
 import std.string
-import std.os
 import std.os (os_getenv)
-import vg.font
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
-extern aether_ui_text_set_string(handle: int, text: string)
 
 // ─── Projection constants ────────────────────────────────────────────────────
-// NB these lower to C #defines, so the names share the preprocessor's global
+// NB consts lower to C #defines, so the names share the preprocessor's global
 // namespace — hence the AEVG_ prefixes on the short ones (a bare SC / DIST /
 // CANVAS is asking for a collision with a system header macro).
 const AEVG_CANVAS: float = 420.0
@@ -47,8 +56,40 @@ const AEVG_MIDX: float = 210.0        // screen centre (viewBox space)
 const AEVG_MIDY: float = 210.0
 const AEVG_SCALE: float = 170.0       // projected scale
 const AEVG_DIST: float = 3.0          // camera distance (cube half-widths)
+const AEVG_FACE_ALPHA: float = 0.55
+const AEVG_DRAG_K: float = 0.011      // viewBox px → radians
 
-// ─── Spin state (heap struct — closures share it across events + frames) ─────
+// ─── The cube as data ────────────────────────────────────────────────────────
+// 8 vertices at ±1, xyz-interleaved (index bits: x=bit0, y=bit1, z=bit2).
+const VERTS: float[24] = [
+    -1.0, -1.0, -1.0,   1.0, -1.0, -1.0,  -1.0, 1.0, -1.0,   1.0, 1.0, -1.0,
+    -1.0, -1.0,  1.0,   1.0, -1.0,  1.0,  -1.0, 1.0,  1.0,   1.0, 1.0,  1.0]
+// 6 faces × 4 corner vertex indices. Face 0 (+z) carries the writing.
+const FACE_VERTS: int[24] = [
+    4, 5, 7, 6,    // 0: +z front
+    1, 0, 2, 3,    // 1: -z back
+    5, 1, 3, 7,    // 2: +x right
+    0, 4, 6, 2,    // 3: -x left
+    6, 7, 3, 2,    // 4: +y bottom (+y is screen-down)
+    0, 1, 5, 4]    // 5: -y top
+// Outward unit normals (identity orientation), per face.
+const FACE_NX: float[6] = [0.0, 0.0, 1.0, -1.0, 0.0, 0.0]
+const FACE_NY: float[6] = [0.0, 0.0, 0.0, 0.0, 1.0, -1.0]
+const FACE_NZ: float[6] = [1.0, -1.0, 0.0, 0.0, 0.0, 0.0]
+const FACE_COLORS: string[6] = [
+    "#2f6fae",     // front — blue, carries the writing
+    "#8a8f98",     // back — slate
+    "#c1553f",     // right — rust
+    "#7a9e43",     // left — olive
+    "#d9a13c",     // bottom — amber
+    "#6b4fa0"]     // top — violet
+const FACE_BIT: int[6] = [1, 2, 4, 8, 16, 32]   // painter's done-mask bits
+
+// ─── Spin state ──────────────────────────────────────────────────────────────
+// Heap struct, not flat captures: the frame callback + three pointer
+// callbacks all mutate this, nested inside window{vg{…}} — the shape where
+// captured locals are unreliable (see the closure-capture history) and a
+// shared heap cell is the established idiom.
 struct Spin {
     ax: float          // pitch (rotation around X)
     ay: float          // yaw   (rotation around Y)
@@ -59,7 +100,7 @@ struct Spin {
     lx: float          // last pointer position (viewBox coords)
     ly: float
     drags: int         // completed drags (drives the status label + spec)
-    lbl: int
+    lbl: int           // ui_state_s handle the status label is bound to
     frozen: int        // AEVG_FREEZE=1 — hold the pose (screenshots / goldens)
     word: ptr          // the writing's Outl (vg.font), null if no font found
 }
@@ -92,93 +133,49 @@ proj(x: float, y: float, z: float, ax: float, ay: float) -> (float, float) {
     f = AEVG_SCALE / (AEVG_DIST - rz)
     return AEVG_MIDX + rx * f, AEVG_MIDY + ry * f
 }
-
-// ─── Cube geometry ───────────────────────────────────────────────────────────
-// Vertex index bits: x=bit0, y=bit1, z=bit2 (0 → -1, 1 → +1).
-vx3(i: int) -> float { if (i % 2) == 0 { return 0.0 - 1.0 } return 1.0 }
-vy3(i: int) -> float { if ((i / 2) % 2) == 0 { return 0.0 - 1.0 } return 1.0 }
-vz3(i: int) -> float { if ((i / 4) % 2) == 0 { return 0.0 - 1.0 } return 1.0 }
-
-// face f (0..5) → its 4 corner vertex indices; k = 0..3.
-face_vert(f: int, k: int) -> int {
-    if f == 0 {                                    // +z (the lettered face)
-        if k == 0 { return 4 } if k == 1 { return 5 }
-        if k == 2 { return 7 } return 6
-    }
-    if f == 1 {                                    // -z
-        if k == 0 { return 1 } if k == 1 { return 0 }
-        if k == 2 { return 2 } return 3
-    }
-    if f == 2 {                                    // +x
-        if k == 0 { return 5 } if k == 1 { return 1 }
-        if k == 2 { return 3 } return 7
-    }
-    if f == 3 {                                    // -x
-        if k == 0 { return 0 } if k == 1 { return 4 }
-        if k == 2 { return 6 } return 2
-    }
-    if f == 4 {                                    // +y
-        if k == 0 { return 6 } if k == 1 { return 7 }
-        if k == 2 { return 3 } return 2
-    }
-    if k == 0 { return 0 } if k == 1 { return 1 }   // -y
-    if k == 2 { return 5 } return 4
-}
-// Outward unit normal of face f (identity orientation).
-face_nx(f: int) -> float { if f == 2 { return 1.0 } if f == 3 { return 0.0 - 1.0 } return 0.0 }
-face_ny(f: int) -> float { if f == 4 { return 1.0 } if f == 5 { return 0.0 - 1.0 } return 0.0 }
-face_nz(f: int) -> float { if f == 0 { return 1.0 } if f == 1 { return 0.0 - 1.0 } return 0.0 }
-
-face_color(f: int) -> string {
-    if f == 0 { return "#2f6fae" }    // front — blue, carries the writing
-    if f == 1 { return "#8a8f98" }    // back — slate
-    if f == 2 { return "#c1553f" }    // right — rust
-    if f == 3 { return "#7a9e43" }    // left — olive
-    if f == 4 { return "#d9a13c" }    // bottom (+y is screen-down) — amber
-    return "#6b4fa0"                  // top — violet
-}
-
 // Just the rotated z of a point — all depth sorting needs.
 rotz(x: float, y: float, z: float, ax: float, ay: float) -> float {
     z1 = z * math.cos(ay) - x * math.sin(ay)
     return z1 * math.cos(ax) - y * math.sin(ax)
 }
-
 // Depth of face f = rotated z of its centre (which IS its unit normal).
 // Larger = nearer the camera (camera sits at +z).
 face_depth(f: int, ax: float, ay: float) -> float {
-    return rotz(face_nx(f), face_ny(f), face_nz(f), ax, ay)
-}
-
-pow2(f: int) -> int {
-    if f == 0 { return 1 } if f == 1 { return 2 } if f == 2 { return 4 }
-    if f == 3 { return 8 } if f == 4 { return 16 } return 32
+    nx = FACE_NX[f]
+    ny = FACE_NY[f]
+    nz = FACE_NZ[f]
+    return rotz(nx, ny, nz, ax, ay)
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
-num(v: float) -> string { return string.from_int(lrint(v) as int) }
+num(v: float) -> string {
+    n = lrint(v) as int
+    return "${n}"
+}
 
 face_path(f: int, ax: float, ay: float) -> string {
     s = "M"
     k = 0
     while k < 4 {
-        i = face_vert(f, k)
-        sx, sy = proj(vx3(i), vy3(i), vz3(i), ax, ay)
-        if k > 0 { s = string.concat(s, " L") }
-        s = string.concat(s, " ")
-        s = string.concat(s, num(sx)); s = string.concat(s, " "); s = string.concat(s, num(sy))
+        vi = FACE_VERTS[f * 4 + k]
+        x = VERTS[vi * 3]
+        y = VERTS[vi * 3 + 1]
+        z = VERTS[vi * 3 + 2]
+        sx, sy = proj(x, y, z, ax, ay)
+        xs = num(sx)
+        ys = num(sy)
+        if k > 0 { s = "${s} L ${xs} ${ys}" }
+        else     { s = "${s} ${xs} ${ys}" }
         k = k + 1
     }
-    return string.concat(s, " Z")
+    return "${s} Z"
 }
 
-const AEVG_FACE_ALPHA: float = 0.55
-
 draw_one_face(rn: ptr, st: *Spin, f: int) {
-    p = vg.path(rn, face_path(f, st.ax, st.ay))
-    vg.fill(p, face_color(f))
-    vg.opacity(p, AEVG_FACE_ALPHA)
-    vg.stroke(p, "#0c0c12", 2.0)
+    p = path(rn, face_path(f, st.ax, st.ay))
+    fill(p, FACE_COLORS[f])
+    opacity(p, AEVG_FACE_ALPHA)
+    stroke(p, "#0c0c12", 2.0)
     // The writing rides its face: drawn right after it in depth order, so
     // nearer translucent faces glaze over it — correct through-glass look
     // (mirrored when the lettered face is at the back).
@@ -186,8 +183,8 @@ draw_one_face(rn: ptr, st: *Spin, f: int) {
 }
 
 draw_scene(rn: ptr, st: *Spin) {
-    bg = vg.rect(rn, 0.0, 0.0, AEVG_CANVAS, AEVG_CANVAS)
-    vg.fill(bg, "#14141c")
+    bg = rect(rn, 0.0, 0.0, AEVG_CANVAS, AEVG_CANVAS)
+    fill(bg, "#14141c")
     // Painter's algorithm over all 6 translucent faces: repeatedly draw the
     // farthest not-yet-drawn face. `painted` is a 6-bit done-mask.
     painted = 0
@@ -197,13 +194,13 @@ draw_scene(rn: ptr, st: *Spin) {
         bestd = 10.0
         f = 0
         while f < 6 {
-            if (painted / pow2(f)) % 2 == 0 {
+            if (painted / FACE_BIT[f]) % 2 == 0 {
                 d = face_depth(f, st.ax, st.ay)
                 if d < bestd { bestd = d; best = f }
             }
             f = f + 1
         }
-        painted = painted + pow2(best)
+        painted = painted + FACE_BIT[best]
         draw_one_face(rn, st, best)
         pass_i = pass_i + 1
     }
@@ -221,14 +218,14 @@ draw_scene(rn: ptr, st: *Spin) {
 load_word_font() -> ptr {
     envp = os_getenv("AEVG_FONT")
     if envp != null {
-        f = font.font_load(envp)
-        if font.font_ok(f) == 1 { return f }
+        f = font_load(envp)
+        if font_ok(f) == 1 { return f }
     }
-    f = font.font_load("fonts/DejaVuSans-Bold.ttf")
-    if font.font_ok(f) == 1 { return f }
-    f = font.font_load("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
-    if font.font_ok(f) == 1 { return f }
-    f = font.font_load("/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf")
+    f = font_load("fonts/DejaVuSans-Bold.ttf")
+    if font_ok(f) == 1 { return f }
+    f = font_load("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+    if font_ok(f) == 1 { return f }
+    f = font_load("/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf")
     return f
 }
 
@@ -238,43 +235,40 @@ f1(v: float) -> string {
     whole = n / 10
     frac = n % 10
     if frac < 0 { frac = 0 - frac }
-    if n < 0 && whole == 0 {
-        return string.concat("-0.", string.from_int(frac))
-    }
-    return string.concat(string.concat(string.from_int(whole), "."),
-                         string.from_int(frac))
+    if n < 0 && whole == 0 { return "-0.${frac}" }
+    return "${whole}.${frac}"
 }
 
 // "<cmd> x y" for face-local (u, v) projected at the cube's orientation.
 wseg(cmd: string, u: float, v: float, ax: float, ay: float) -> string {
     sx, sy = proj(u, v, 1.0, ax, ay)
-    a = string.concat(cmd, " ")
-    a = string.concat(a, f1(sx))
-    a = string.concat(a, " ")
-    return string.concat(a, f1(sy))
+    xs = f1(sx)
+    ys = f1(sy)
+    return "${cmd} ${xs} ${ys}"
 }
 
 draw_writing(rn: ptr, ax: float, ay: float, ow: ptr) {
     if ow == null { return }
-    if font.outl_ok(ow) == 0 { return }
+    if outl_ok(ow) == 0 { return }
     s = ""
     start = 0
     ci = 0
-    while ci < font.outl_nctrs(ow) {
-        last = font.outl_ctr_end(ow, ci)
+    while ci < outl_nctrs(ow) {
+        last = outl_ctr_end(ow, ci)
         j = start
         while j <= last {
             cmd = " L"
             if j == start { cmd = "M" }
-            s = string.concat(s, wseg(cmd, font.outl_px(ow, j), font.outl_py(ow, j), ax, ay))
+            seg = wseg(cmd, outl_px(ow, j), outl_py(ow, j), ax, ay)
+            s = "${s}${seg}"
             j = j + 1
         }
-        s = string.concat(s, " Z ")
+        s = "${s} Z "
         start = last + 1
         ci = ci + 1
     }
-    p = vg.path(rn, s)
-    vg.fill(p, "#f2f5f8")
+    p = path(rn, s)
+    fill(p, "#f2f5f8")
 }
 
 // ─── Physics: integrate spin each frame; damp toward a lazy idle tumble ──────
@@ -300,8 +294,6 @@ step(st: *Spin, t: float) {
 }
 
 // ─── Gesture layer ───────────────────────────────────────────────────────────
-const AEVG_DRAG_K: float = 0.011          // viewBox px → radians
-
 on_press(st: *Spin, x: float, y: float) {
     st.dragging = 1
     st.lx = x; st.ly = y
@@ -337,59 +329,61 @@ deg(r: float) -> int {
     if d < 0 { d = d + 360 }
     return d
 }
+// The status label is BOUND to this state — setting it is all the UI work.
 refresh_label(st: *Spin) {
     if st.lbl == 0 { return }
-    m = "Drags: "
-    m = string.concat(m, string.from_int(st.drags))
-    m = string.concat(m, " · yaw ")
-    m = string.concat(m, string.from_int(deg(st.ay)))
-    m = string.concat(m, "° pitch ")
-    m = string.concat(m, string.from_int(deg(st.ax)))
-    m = string.concat(m, "°")
-    aether_ui_text_set_string(st.lbl, m)
+    yv = deg(st.ay)
+    pv = deg(st.ax)
+    rc = ui_set_s(st.lbl, "Drags: ${st.drags} · yaw ${yv}° pitch ${pv}°")
+    if rc < 0 { return }
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 main() {
     st = mk_spin()
+    status = ui_state_s("Drags: 0")
+    st.lbl = status
+    word_type = ui_state_s("type: unavailable")
+
     wf = load_word_font()
     type_desc = "type: unavailable"
-    if font.font_ok(wf) == 1 {
-        st.word = font.font_text_outlines_norm(wf, "AeVG", 4, 1.76)
-        nctrs = font.outl_nctrs(st.word)
+    if font_ok(wf) == 1 {
+        st.word = font_text_outlines_norm(wf, "AeVG", 4, 1.76)
+        nctrs = outl_nctrs(st.word)
         type_desc = "type: ${nctrs} contours"
     }
 
     window("AeVG — tumbling cube", 470, 560) {
         vstack(6) {
-            st.lbl = text("Drags: 0")
-            // Bare text(var) doesn't codegen in a builder block (the same
-            // quirk as `_ =` discards) — bind the handle, then set the text.
-            tlbl = text("type: pending")
-            aether_ui_text_set_string(tlbl, type_desc)
+            t1 = text("Drags: 0")
+            bind_text(t1, status)
+            t2 = text("type: pending")
+            bind_text(t2, word_type)
+            tset = ui_set_s(word_type, type_desc)
+            if tset < 0 { println("state set failed") }
 
             vg(view_box(0, 0, 420, 420), 440, 440) {
                 anchor = rect(0, 0, 0, 0)
-                root_node = vg.vg_root(vg.node_scene(anchor))
-                scene = vg.node_scene(root_node)
-                vg.scene_set_refreshing(scene, 1)
+                root_node = vg_root(node_scene(anchor))
+                scene = node_scene(root_node)
+                scene_set_refreshing(scene, 1)
 
                 canvas_region(root_node, 0.0, 0.0, 420.0, 420.0) callback |rn: ptr, t: float| {
                     step(st, t)
                     draw_scene(rn, st)
                 }
-                cid = vg.scene_canvas(scene)
+                cid = scene_canvas(scene)
 
                 // Canvas events arrive in canvas pixels; our math lives in the
                 // 420 viewBox — unmap first (same as rubiks_cube).
                 canvas_on_click(cid) callback |px: float, py: float| {
-                    on_press(st, vg.scene_px_to_vb_x(scene, px), vg.scene_px_to_vb_y(scene, py))
+                    on_press(st, scene_px_to_vb_x(scene, px), scene_px_to_vb_y(scene, py))
                 }
                 canvas_on_move(cid) callback |mx: float, my: float| {
-                    on_drag(st, vg.scene_px_to_vb_x(scene, mx), vg.scene_px_to_vb_y(scene, my))
+                    on_drag(st, scene_px_to_vb_x(scene, mx), scene_px_to_vb_y(scene, my))
                 }
                 canvas_on_release(cid) callback |rx: float, ry: float| {
-                    on_release_pt(st, vg.scene_px_to_vb_x(scene, rx), vg.scene_px_to_vb_y(scene, ry))
+                    on_release_pt(st, scene_px_to_vb_x(scene, rx), scene_px_to_vb_y(scene, ry))
                 }
             }
 
