@@ -36,8 +36,8 @@ extern aether_ui_text_set_string(handle: int, text: string)
 
 // ─── Projection constants ────────────────────────────────────────────────────
 CANVAS() -> float { return 420.0 }
-CX() -> float { return 210.0 }     // screen centre (viewBox space)
-CY() -> float { return 210.0 }
+MIDX() -> float { return 210.0 }     // screen centre (viewBox space)
+MIDY() -> float { return 210.0 }
 SC() -> float { return 170.0 }     // projected scale
 DIST() -> float { return 3.0 }     // camera distance (cube half-widths)
 
@@ -81,7 +81,7 @@ rot3(x: float, y: float, z: float, ax: float, ay: float) -> (float, float, float
 proj(x: float, y: float, z: float, ax: float, ay: float) -> (float, float) {
     rx, ry, rz = rot3(x, y, z, ax, ay)
     f = SC() / (DIST() - rz)
-    return CX() + rx * f, CY() + ry * f
+    return MIDX() + rx * f, MIDY() + ry * f
 }
 
 // ─── Cube geometry ───────────────────────────────────────────────────────────
