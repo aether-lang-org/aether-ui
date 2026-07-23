@@ -36,7 +36,8 @@ C_FILE="${OUTPUT}.c"
 # for contrib imports and link the matching installed archives.
 CONTRIB_LIBS=""
 if grep -rqs "import contrib.sqlite" "$(dirname "$SOURCE")"; then
-    CONTRIB_LIBS="$CONTRIB_LIBS -laether_sqlite"
+    # The aether archive wraps the real sqlite3 — link both.
+    CONTRIB_LIBS="$CONTRIB_LIBS -laether_sqlite -lsqlite3"
 fi
 
 mkdir -p "$(dirname "$C_FILE")"
